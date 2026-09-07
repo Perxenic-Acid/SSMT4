@@ -501,6 +501,71 @@ textarea {
   user-select: text;
 }
 
+/* Re-enable selection inside popups, dialogs, drawers, popovers, context
+   menus, floating cards and other overlay-style cards. The app shell itself
+   stays non-selectable for native window-drag / button interactions. */
+.el-overlay,
+.el-overlay-dialog,
+.el-dialog,
+.el-drawer,
+.el-message-box,
+.el-message,
+.el-notification,
+.el-popper,
+.el-select-dropdown,
+.el-dropdown-menu,
+.settings-dropdown,
+.settings-dropdown-inner,
+.submenu-card,
+.game-switcher-card,
+.shell-flyout,
+.games-drawer-panel,
+.first-run-overlay,
+.first-run-dialog,
+.app-update-dialog-overlay,
+.app-update-dialog,
+.settings-overlay,
+.settings-window,
+.preset-overlay,
+.preset-popover,
+.key-floater,
+.mod-3d-floating-overlay,
+.mod-3d-floating-page,
+.preview-settings-overlay,
+.preview-settings-floating-page,
+.preview-zoom-overlay,
+.channel-preview-overlay,
+.channel-preview-modal,
+.xz-plan-pop,
+.xz-tool-card,
+.xz-usage-popover,
+.xz-log-drawer,
+.xz-settings-dialog,
+.xz-lightbox,
+.context-menu-root,
+.context-menu-surface,
+.custom-context-menu,
+.group-context-menu,
+.version-info-popper,
+.glass-dialog,
+[class*="popover"],
+[class*="popup"],
+[class*="popper"],
+[class*="dialog"],
+[class*="dropdown"],
+[class*="flyout"],
+[class*="floater"],
+[class*="floating"],
+[class*="modal"],
+[class*="overlay"],
+[class*="context-menu"],
+[class*="menu-root"],
+[class*="pop"] {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+}
+
 #app {
   position: fixed;
   inset: 0;

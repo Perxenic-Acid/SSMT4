@@ -7,7 +7,7 @@ import { MigotoManager } from "../store/MigotoManager";
 import { GlobalConfig } from "../store/GlobalConfig";
 import { PathHelper } from "../helper/PathHelper";
 import { i18n } from "../i18n";
-import type { GameConfig, LaunchProgramConfig } from "../store/GameConfig";
+import { getEffectiveUseUpx, type GameConfig, type LaunchProgramConfig } from "../store/GameConfig";
 import type { AppSettings } from "../store/AppSettings";
 import { debugLog, debugWarn } from "../utils/debugLog";
 
@@ -382,8 +382,8 @@ export class LaunchGame {
         }
 
         // Initialize Migoto environment and apply the selected d3d11 mode before launch.
-        // UPX: respect per-game config.
-        const useUpx = migotoCfg.useUpx ?? false;
+        // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
+        const useUpx = getEffectiveUseUpx(migotoCfg);
         await this.prepareGameEnvironment(
             gameName,
             migotoDir,
@@ -430,7 +430,7 @@ export class LaunchGame {
             if (!preflight) return;
 
             const { migotoDir, config, targetExe } = preflight;
-            await this.ensureSSMTRuntimeFiles(migotoDir);
+            await this.ensureSSMTRuntimeFiles(migotoDir, config.gamePreset);
             const launchTargetProgram = config.launchTargetProgram !== false;
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
@@ -576,22 +576,57 @@ export class LaunchGame {
 
     private static async ensureSSMTRuntimeFiles(
         migotoDir: string,
+        gamePreset?: string,
     ): Promise<void> {
         const resourcesDir = await GlobalConfig.SSMTResourcesFolder();
 
-        const files = ["Run.exe", "SSMT-Player-Tweaks.dll"];
+        // Run.exe is the base injector/launcher used by the default flow.
+        const runSourcePath = await join(resourcesDir, "Run.exe");
+        const runTargetPath = await join(migotoDir, "Run.exe");
 
-        for (const fileName of files) {
-            const sourcePath = await join(resourcesDir, fileName);
-
-            const targetPath = await join(migotoDir, fileName);
-
-            if (!(await exists(sourcePath))) {
-                throw new Error(`Missing SSMT runtime file: ${sourcePath}`);
-            }
-
-            await copyFile(sourcePath, targetPath);
+        if (!(await exists(runSourcePath))) {
+            throw new Error(`Missing SSMT runtime file: ${runSourcePath}`);
         }
+
+        await copyFile(runSourcePath, runTargetPath);
+
+        // SSMT-Player-Tweaks.dll is only meaningful for GIMI (Genshin).
+        // For other presets do not require/copy it; if a stale copy exists in
+        // this game directory, remove it so Run.exe does not inject it.
+        const isGimi = (gamePreset || "").trim().toUpperCase() === "GIMI";
+        const dllSourcePath = await join(
+            resourcesDir,
+            "SSMT-Player-Tweaks.dll",
+        );
+        const dllTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.dll");
+
+        const removeStaleDll = async () => {
+            try {
+                if (await exists(dllTargetPath)) {
+                    await remove(dllTargetPath);
+                }
+            } catch (e) {
+                console.warn(
+                    "Failed to remove stale SSMT-Player-Tweaks.dll:",
+                    e,
+                );
+            }
+        };
+
+        if (!isGimi) {
+            await removeStaleDll();
+            return;
+        }
+
+        if (!(await exists(dllSourcePath))) {
+            await removeStaleDll();
+            ElMessage.warning(
+                t("launchGame.messages.missingPlayerTweaksSkipped"),
+            );
+            return;
+        }
+
+        await copyFile(dllSourcePath, dllTargetPath);
     }
 
     private static async prepareGameEnvironment(

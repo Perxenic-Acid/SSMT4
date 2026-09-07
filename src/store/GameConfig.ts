@@ -124,6 +124,11 @@ export type GameConfig = {
     huntingMode?: HuntingMode;
     useShell?: boolean;
     useUpx?: boolean;
+    /**
+     * Whether the user has explicitly chosen a DLL packing option.
+     * When false/undefined, GIMI defaults to UPX and preset changes may auto-select UPX.
+     */
+    useUpxManuallySet?: boolean;
     d3d11Mode?: D3d11Mode;
     delay?: number;
     autoExitSeconds?: number;
@@ -144,6 +149,35 @@ export type GameConfig = {
     [key: string]: unknown;
 };
 
+const DEFAULT_UPX_GAME_PRESETS: ReadonlySet<string> = new Set(['GIMI'])
+
+export const getDefaultUseUpxForGamePreset = (gamePreset: unknown): boolean => {
+    const normalizedPreset = typeof gamePreset === 'string' ? gamePreset.trim().toUpperCase() : ''
+    return DEFAULT_UPX_GAME_PRESETS.has(normalizedPreset)
+}
+
+/**
+ * Resolves the actual DLL packing setting for a config.
+ *
+ * GIMI defaults to UPX unless the user has explicitly picked another option.
+ * For other presets we keep the stored value (falling back to no packing).
+ */
+export const getEffectiveUseUpx = (
+    config: Pick<GameConfig, 'useUpx' | 'useUpxManuallySet' | 'gamePreset'> | null | undefined,
+): boolean => {
+    if (!config) return false
+
+    if (config.useUpxManuallySet === true) {
+        return config.useUpx === true
+    }
+
+    if (getDefaultUseUpxForGamePreset(config.gamePreset)) {
+        return true
+    }
+
+    return config.useUpx === true
+}
+
 export const useGameConfigStore = defineStore('gameConfig', () => {
     async function getConfigPath(gameName: string): Promise<string> {
         const gamesRoot = await GlobalConfig.GlobalGamesFolder();
@@ -162,6 +196,8 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
     function normalizeConfig(config: GameConfig): GameConfig {
         const extraDlls = normalizeExtraDlls(config.extraDlls, config.extraDll)
         const extraDll = extraDlls[0] || ''
+        const useUpxManuallySet = config.useUpxManuallySet === true
+        const useUpx = getEffectiveUseUpx(config)
 
         return {
             ...config,
@@ -169,6 +205,8 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             d3d11Mode: normalizeD3d11Mode(config.d3d11Mode, config.gamePreset),
             allowDllUpdates: config.allowDllUpdates !== false,
             launchTargetProgram: config.launchTargetProgram !== false,
+            useUpx,
+            useUpxManuallySet,
             extraDll,
             extraDlls,
             useShell: extraDlls.length > 0 ? false : !!config.useShell,
@@ -215,6 +253,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             d3d11Mode: 'dev',
             useShell: false,
             useUpx: false,
+            useUpxManuallySet: false,
             delay: 100,
             autoExitSeconds: 5,
             extraDll: '',

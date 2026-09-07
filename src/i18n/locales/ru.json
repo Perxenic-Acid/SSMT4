@@ -1329,6 +1329,7 @@
       "missingDllPackageTitle": "Отсутствует базовый пакет DLL",
       "missingDllPackageStillMissing": "После обновления всё ещё отсутствуют необходимые файлы: {files}. Запуск отменён.",
       "runExeMissing": "В каталоге 3Dmigoto отсутствует Run.exe. Сначала обновите или восстановите 3Dmigoto.",
+      "missingPlayerTweaksSkipped": "SSMT-Player-Tweaks.dll не найден. Пропущены улучшения GIMI.",
       "missingCoreComponentConfirmContent": "В текущем каталоге 3Dmigoto отсутствует d3dx.ini.\n\nИз-за этого Mod могут не работать.\nПроверить и установить обновления 3Dmigoto сейчас?",
       "missingCoreComponentTitle": "Отсутствует основной компонент",
       "customProgramPathMissing": "В элементе {index} группы {group} не указан путь к исполняемому файлу. Проверьте и повторите попытку.",

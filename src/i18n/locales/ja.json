@@ -1336,6 +1336,7 @@
       "missingDllPackageTitle": "DLL 基本パッケージがありません",
       "missingDllPackageStillMissing": "更新後も必要なファイルが不足しています: {files}。起動をキャンセルしました。",
       "runExeMissing": "3Dmigoto ディレクトリに Run.exe がありません。先に 3Dmigoto を更新または修復してください",
+      "missingPlayerTweaksSkipped": "SSMT-Player-Tweaks.dll が見つかりません。GIMI のランタイム拡張をスキップしました。",
       "missingCoreComponentConfirmContent": "現在の 3Dmigoto ディレクトリに d3dx.ini がありません。\n\nMod が機能しない可能性があります。\n3Dmigoto の更新を今すぐ確認してインストールしますか？",
       "missingCoreComponentTitle": "コアコンポーネントがありません",
       "customProgramPathMissing": "{group} の項目 {index} に実行ファイルのパスが入力されていません。確認して再試行してください",

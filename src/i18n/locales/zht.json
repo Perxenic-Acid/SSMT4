@@ -1342,6 +1342,7 @@
       "missingDllPackageTitle": "缺少 DLL 基礎包",
       "missingDllPackageStillMissing": "更新後仍缺少必要檔案：{files}。啟動已取消。",
       "runExeMissing": "3Dmigoto 目錄缺少 Run.exe，請先更新或修復 3Dmigoto",
+      "missingPlayerTweaksSkipped": "找不到 SSMT-Player-Tweaks.dll，已跳過 GIMI 執行階段增強。",
       "missingCoreComponentConfirmContent": "目前 3Dmigoto 目錄下缺少 d3dx.ini。\n\n這可能導致 Mod 無法生效。\n是否現在檢查並安裝 3Dmigoto 更新？",
       "missingCoreComponentTitle": "缺少核心組件",
       "customProgramPathMissing": "{group} 第 {index} 項未填寫可執行檔案路徑，請檢查後重試",

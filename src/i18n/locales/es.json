@@ -1329,6 +1329,7 @@
       "missingDllPackageTitle": "Falta el paquete base de DLL",
       "missingDllPackageStillMissing": "Siguen faltando archivos necesarios después de la actualización: {files}. Se canceló el inicio.",
       "runExeMissing": "Falta Run.exe en el directorio de 3Dmigoto. Actualiza o repara 3Dmigoto primero.",
+      "missingPlayerTweaksSkipped": "No se encontró SSMT-Player-Tweaks.dll. Se omitieron las mejoras de GIMI.",
       "missingCoreComponentConfirmContent": "Falta d3dx.ini en el directorio actual de 3Dmigoto.\n\nEsto puede hacer que los Mods no funcionen.\n¿Comprobar e instalar ahora las actualizaciones de 3Dmigoto?",
       "missingCoreComponentTitle": "Falta un componente esencial",
       "customProgramPathMissing": "La entrada {index} de {group} no tiene una ruta de ejecutable. Revísala e inténtalo de nuevo.",

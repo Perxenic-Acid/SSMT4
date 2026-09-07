@@ -9,7 +9,7 @@ import { ResourceManager, type UpdateInfo } from '../store/ResourceManager';
 import { PathHelper } from '../helper/PathHelper';
 import { GlobalConfig } from '../store/GlobalConfig';
 import { AUTO_UPDATE_SUPPORTED_PRESET_SET, getGamePresetDisplayName, getGamePresetOptions, getGithubRepoByGamePreset } from '../store/GamePreset';
-import { GameConfig, GameConfigManager, type D3d11Mode, type LaunchProgramConfig } from '../store/GameConfig';
+import { GameConfig, GameConfigManager, getDefaultUseUpxForGamePreset, type D3d11Mode, type LaunchProgramConfig } from '../store/GameConfig';
 import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { exists, mkdir } from '@tauri-apps/plugin-fs';
 import { useI18n } from 'vue-i18n';
@@ -229,6 +229,11 @@ const saveConfig = async () => {
   } catch (e) {
     console.error('Failed to save current config:', e);
   }
+};
+
+const handleDllPackingChange = async () => {
+  config.useUpxManuallySet = true;
+  await saveConfig();
 };
 
 const syncShowTopLeftWarningsToIni = async (): Promise<void> => {
@@ -991,6 +996,11 @@ watch(
       config.d3d11Mode = normalizedMode;
     }
 
+    // GIMI defaults to UPX until the user has explicitly picked a DLL packing option.
+    if (getDefaultUseUpxForGamePreset(_newPreset) && !config.useUpxManuallySet) {
+      config.useUpx = true;
+    }
+
     if (oldPreset !== undefined) {
       resetDllReleaseListState();
       resetPackageReleaseListState();
@@ -1497,7 +1507,7 @@ defineExpose({
                   <div class="settings-toggle-row-info">
                     <span class="settings-toggle-row-title">{{ t('gameSettingsModal.fields.dllPacking') }}</span>
                   </div>
-                  <el-select v-model="config.useUpx" class="custom-select" @change="saveConfig" style="width:130px">
+                  <el-select v-model="config.useUpx" class="custom-select" @change="handleDllPackingChange" style="width:130px">
                     <el-option :value="false" :label="t('gameSettingsModal.options.dllPacking.none')" />
                     <el-option :value="true" :label="t('gameSettingsModal.options.dllPacking.upx')" />
                   </el-select>
