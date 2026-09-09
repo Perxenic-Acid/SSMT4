@@ -139,7 +139,7 @@ onMounted(async () => {
 });
 
 const openReleasePage = async () => {
-  await openUrl('https://github.com/StarBobis/SSMT4-Alpha/releases');
+  await openUrl('https://github.com/Perxenic-Acid/SSMT4/releases');
 };
 
 const handleCheckAndInstallAppUpdate = async () => {
@@ -147,7 +147,7 @@ const handleCheckAndInstallAppUpdate = async () => {
 };
 
 const openUsageDocs = async () => {
-  await openUrl('https://starbobis.github.io/SSMT4-Documents/');
+  await openUrl('https://perxenic-acid.github.io/SSMT4-Documents/');
 };
 
 /* ═══════════════════════ Games management ═══════════════════════ */

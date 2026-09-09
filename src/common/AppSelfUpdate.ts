@@ -24,7 +24,7 @@ type AppUpdateOutcome =
       hasResolvedReleaseNotes: boolean
     }
 
-const APP_RELEASE_NOTES_REPO = 'StarBobis/SSMT4-Alpha'
+const APP_RELEASE_NOTES_REPO = 'Perxenic-Acid/SSMT4'
 // The updater endpoint is intended for packaged release builds only. Vite's
 // production flag is compiled into the bundle, so `bun tauri dev` cannot
 // accidentally contact GitHub while release artifacts retain the updater.

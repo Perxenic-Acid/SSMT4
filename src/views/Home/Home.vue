@@ -166,7 +166,7 @@ const currentDllModeText = computed(() => {
 
 const openAppReleasePage = async () => {
   try {
-    await openUrl('https://github.com/StarBobis/SSMT4-Alpha/releases')
+    await openUrl('https://github.com/Perxenic-Acid/SSMT4/releases')
   } catch (error) {
     ElMessage.error(t('home.messages.operationFailed', { error: String(error) }))
   }

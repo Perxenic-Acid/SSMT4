@@ -820,7 +820,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         includePrerelease = false,
     ): Promise<UpdateInfo> {
         return getLatestGithubRelease(
-            'StarBobis/SSMT4-Alpha',
+            'Perxenic-Acid/SSMT4',
             githubToken,
             includePrerelease,
         );

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$Repo = "StarBobis/SSMT4-Alpha",
+    [string]$Repo = "Perxenic-Acid/SSMT4",
 
     [Parameter(Mandatory = $false)]
     [string]$Tag,

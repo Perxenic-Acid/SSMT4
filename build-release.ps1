@@ -17,13 +17,13 @@
 .PARAMETER Notes
   可选。更新说明，写入 latest.json。
 .PARAMETER Repo
-  可选。发布仓库（用于生成下载 URL），默认 StarBobis/SSMT4-Alpha。
+  可选。发布仓库（用于生成下载 URL），默认 Perxenic-Acid/SSMT4。
 #>
 [CmdletBinding()]
 param(
     [string]$Version,
     [string]$Notes = "Manual release",
-    [string]$Repo = "StarBobis/SSMT4-Alpha"
+    [string]$Repo = "Perxenic-Acid/SSMT4"
 )
 
 Set-StrictMode -Version Latest

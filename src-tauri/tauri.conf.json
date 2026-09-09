@@ -51,7 +51,7 @@
         "updater": {
             "active": true,
             "endpoints": [
-                "https://github.com/StarBobis/SSMT4-Alpha/releases/latest/download/latest.json"
+                "https://github.com/Perxenic-Acid/SSMT4/releases/latest/download/latest.json"
             ],
             "dialog": false,
             "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIxNDc5NzE3MjVCQ0M3MkEKUldRcXg3d2xGNWRIc1JKZU5pb1N0K1pMbE9DQU8rdDJYa0xhU1hBanpHOUF4Y1FHQkQvZGZ4M2wK"
