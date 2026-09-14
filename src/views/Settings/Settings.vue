@@ -649,21 +649,21 @@ const confirmCreateGame = async () => {
 
             <div class="about-section">
               <h3>{{ t('settings.sections.community') }}</h3>
-              <button type="button" class="link-row" @click="openUrl('https://discord.gg/hgzbSSXXz2')">
+              <button type="button" class="link-row" @click="openUrl('https://discord.gg/cnVx8cF2wd')">
                 <el-icon><ChatDotRound /></el-icon>
                 <span>{{ t('settings.about.discord') }}</span>
                 <el-icon class="link-arrow"><ArrowRight /></el-icon>
               </button>
             </div>
 
-            <div class="about-section">
+            <!--<div class="about-section">
               <h3>{{ t('settings.about.sponsor') }}</h3>
               <button type="button" class="link-row" @click="openUrl('https://ifdian.net/a/NicoMico666')">
                 <el-icon><Coffee /></el-icon>
                 <span>{{ t('settings.about.afdian') }}</span>
                 <el-icon class="link-arrow"><ArrowRight /></el-icon>
               </button>
-            </div>
+            </div>-->
           </div>
         </aside>
       </div>

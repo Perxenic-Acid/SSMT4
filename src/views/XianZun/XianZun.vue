@@ -4249,7 +4249,7 @@ onUnmounted(() => {
     <header class="xz-header">
       <div class="xz-brand">
         <div class="xz-avatar" aria-hidden="true">
-          <img src="/icon.png" class="xz-avatar-img" alt="芝士猫" />
+          <img src="/cheese_cat_icon.png" class="xz-avatar-img" alt="芝士猫" />
           <span class="xz-avatar-glow"></span>
         </div>
         <div class="xz-brand-text">
@@ -4474,7 +4474,7 @@ onUnmounted(() => {
       <!-- Empty state -->
       <div v-if="messages.length === 0" class="xz-empty">
         <div class="xz-empty-orb" aria-hidden="true">
-          <img src="/icon.png" class="xz-empty-img" alt="芝士猫" />
+          <img src="/cheese_cat_icon.png" class="xz-empty-img" alt="芝士猫" />
           <span class="xz-empty-glow"></span>
         </div>
         <h2 class="xz-empty-title">{{ t('xianzun.welcomeTitle') }}</h2>
@@ -4524,7 +4524,7 @@ onUnmounted(() => {
           :class="[msg.role, { streaming: msg.streaming }]"
         >
           <div v-if="msg.role !== 'user'" class="xz-mini-avatar" aria-hidden="true">
-            <img src="/icon.png" class="xz-mini-avatar-img" alt="芝士猫" />
+            <img src="/cheese_cat_icon.png" class="xz-mini-avatar-img" alt="芝士猫" />
           </div>
 
           <div class="xz-msg-main">
@@ -4625,7 +4625,7 @@ onUnmounted(() => {
         <!-- Waiting for first token -->
         <div v-if="waitingFirstToken" class="xz-msg assistant">
           <div class="xz-mini-avatar" aria-hidden="true">
-            <img src="/icon.png" class="xz-mini-avatar-img" alt="芝士猫" />
+            <img src="/cheese_cat_icon.png" class="xz-mini-avatar-img" alt="芝士猫" />
           </div>
           <div class="xz-msg-main">
             <div class="xz-bubble">
