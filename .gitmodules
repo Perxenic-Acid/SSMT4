@@ -1,3 +1,7 @@
 [submodule "native"]
 	path = native
 	url = https://github.com/Perxenic-Acid/SSMT-Native.git
+
+[submodule "runtime"]
+	path = runtime
+	url = https://github.com/Perxenic-Acid/SSMT-3DMigoto-Runtime.git
