@@ -26,7 +26,7 @@ https://github.com/StarBobis/MIMITools
 
 大本营在discord，技术讨论可以去里面，为满足合规需求，暂时不开国内聊天群
 
-Server Invite Link: https://discord.gg/hgzbSSXXz2
+Server Invite Link: https://discord.gg/aVKXuUrrM
 
 # 特别感谢
 - [Starbobis/Nicomico](https://github.com/Starbobis) 作为项目原拥有者对 SSMT 弥足轻重的贡献;
