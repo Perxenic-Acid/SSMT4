@@ -1,4 +1,26 @@
 {
+  "fileLocks": {
+    "explorer": "Close the preview pane and related folder windows first. Ending Explorer briefly closes the desktop and taskbar; the app will then try to restart Explorer.",
+    "code": "Save your files and close the related editor windows. If the lock remains, exit VS Code.",
+    "qq": "Finish file transfers and exit QQ from the system tray.",
+    "generic": "Save your work and exit this program normally first.",
+    "unknownPath": "Unable to read executable path",
+    "willTerminate": "This process will be ended after confirmation.",
+    "cannotTerminate": "Cannot end automatically. Exit the program normally or retry diagnosis as administrator.",
+    "holders": "These processes use the listed paths, but may not all block renaming or deletion. You can exit them normally and retry first.",
+    "none": "No owners detected. If the operation still fails, close related programs or retry diagnosis as administrator. Permissions and read-only attributes may also cause failures.",
+    "lossWarning": "Ending processes may lose unsaved work. Only the listed eligible processes will be ended; new owners require another confirmation.",
+    "diagnosis": "File lock diagnosis",
+    "ok": "OK",
+    "confirmTitle": "Confirm ending file owners",
+    "confirm": "End listed processes and continue",
+    "cancel": "Cancel",
+    "cancelled": "Operation cancelled; no processes ended",
+    "after": "DLL owners after release",
+    "configure": "Select a game and configure its 3Dmigoto folder first",
+    "checking": "Checking DLL owners…",
+    "menu": "Check / release DLL locks"
+  },
   "gameNames": {
     "GIMI": "Genshin Impact", "HIMI": "Honkai Impact 3rd", "SRMI": "Honkai: Star Rail",
     "ZZMI": "Zenless Zone Zero", "ZZMIDX12": "Zenless Zone Zero (DirectX 12)", "WWMI": "Wuthering Waves",

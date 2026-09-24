@@ -2484,8 +2484,9 @@ const toggleMod = async (mod: ModInfo) => {
             }
 
             suppressFsRefresh(3500);
-            enabledParentGroups = await ModManager.enableParentGroupsForMod(selectedGame.value, mod.relativePath);
-            for (const group of enabledParentGroups) {
+            for (const group of disabledParentGroups) {
+                await ModManager.toggleGroup(selectedGame.value, group.disabledPath, true);
+                enabledParentGroups.push(group);
                 await ModTagStore.remapPrefix(selectedGame.value, group.disabledPath, group.enabledPath);
                 await ModTagStore.remapGroupPrefix(selectedGame.value, group.disabledPath, group.enabledPath);
                 await ModStateStore.remapPrefix(selectedGame.value, group.disabledPath, group.enabledPath);

@@ -1,3 +1,4 @@
+import { renameModWithLockRecovery } from '../utils/FileLocks'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { exists, mkdir, remove, copyFile, rename, writeFile, readDir } from '@tauri-apps/plugin-fs'
@@ -473,7 +474,7 @@ export const useModManagerStore = defineStore('modManager', () => {
       throw new Error(t('modManager.messages.groupWithTargetNameAlreadyExists'))
     }
 
-    await rename(currentFullPath, newFullPath)
+    await renameModWithLockRecovery(currentFullPath, newFullPath, modsDir)
     invalidateGameCache(gameName)
     return newFullPath.replace(`${modsDir.replace(/\\/g, '/')}/`, '')
   }
@@ -659,7 +660,7 @@ export const useModManagerStore = defineStore('modManager', () => {
     if (await exists(newFullPath)) {
       throw new Error(t('modManager.messages.modWithSameNameAlreadyExists'))
     }
-    await rename(currentFullPath, newFullPath)
+    await renameModWithLockRecovery(currentFullPath, newFullPath, modsDir)
     invalidateGameCache(gameName)
     return newFullPath.replace(`${modsDir.replace(/\\/g, '/')}/`, '')
   }

@@ -261,8 +261,9 @@ export const useModsManagementModActions = (opts: UseModsManagementModActionsOpt
                     );
                 } catch { return; }
                 opts.suppressFsRefresh(3500);
-                enabledParentGroups = await ModManager.enableParentGroupsForMod(opts.selectedGame.value, mod.relativePath);
-                for (const group of enabledParentGroups) {
+                for (const group of disabledParentGroups) {
+                    await ModManager.toggleGroup(opts.selectedGame.value, group.disabledPath, true);
+                    enabledParentGroups.push(group);
                     await ModTagStore.remapPrefix(opts.selectedGame.value, group.disabledPath, group.enabledPath);
                     await ModTagStore.remapGroupPrefix(opts.selectedGame.value, group.disabledPath, group.enabledPath);
                     await ModStateStore.remapPrefix(opts.selectedGame.value, group.disabledPath, group.enabledPath);

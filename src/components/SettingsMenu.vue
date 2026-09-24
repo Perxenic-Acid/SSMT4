@@ -2,6 +2,8 @@
 import { onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage } from 'element-plus';
+import { diagnoseDllLocks } from '../utils/FileLocks';
+import { PathHelper } from '../helper/PathHelper';
 import { MigotoManager } from '../store/MigotoManager';
 import { AppStateManager } from '../store/AppStateManager';
 import type { D3d11Mode } from '../store/GameConfig';
@@ -73,6 +75,22 @@ const onDropdownLeave = () => {
   hideDropdown();
 };
 
+const diagnosingLocks = ref(false);
+const checkDllLocks = async () => {
+  if (diagnosingLocks.value) return;
+  diagnosingLocks.value = true;
+  isDropdownVisible.value = false;
+  try {
+    const directory = await PathHelper.GetCurrentGame3DmigotoFolderPath();
+    if (!directory) throw new Error(t('fileLocks.configure'));
+    await diagnoseDllLocks(directory);
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(String(error));
+  } finally {
+    diagnosingLocks.value = false;
+  }
+};
+
 const toggleSymlink = async (enable: boolean) => {
   const gameName = appSettings.CurrentGameName?.trim();
   if (!gameName || gameName === 'Default') return;
@@ -125,6 +143,10 @@ onUnmounted(() => { clearHideTimer() })
         <!-- Open 3Dmigoto Folder -->
         <div class="menu-item" @click="emit('open3dmigotoFolder')">
           {{ t('home.actions.open3dmigotoFolder') }}
+        </div>
+
+        <div class="menu-item" :aria-disabled="diagnosingLocks" @click="checkDllLocks">
+          {{ diagnosingLocks ? t('fileLocks.checking') : t('fileLocks.menu') }}
         </div>
 
         <!-- Open d3dx.ini -->
