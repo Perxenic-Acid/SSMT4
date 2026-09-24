@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { fetch } from '@tauri-apps/plugin-http';
+import { gameBananaApiGet } from './gameBananaApi';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -204,7 +205,6 @@ const GAMEBANANA_ID_BY_PRESET: Record<string, number> = {
 };
 const DEFAULT_GAMEBANANA_ID = GAMEBANANA_ID_BY_PRESET.GIMI;
 const DEFAULT_GAMEBANANA_INSTALL_GAME = 'DefaultGame';
-const API_BASE = 'https://gamebanana.com/apiv11';
 const PAGE_SIZE_OPTIONS = [12, 24, 36, 48];
 const GAMEBANANA_ICON_CACHE_FOLDER = 'gamebanana-category-icons';
 const GAMEBANANA_BLOCKLIST_STORAGE = 'gamebanana:blocklist:v1';
@@ -253,6 +253,8 @@ const commentsHasMore = ref(false);
 const loadingCategories = ref(false);
 const loadingMods = ref(false);
 const loadingDetail = ref(false);
+const detailLoadFailed = ref(false);
+const commentsError = ref('');
 const loadingComments = ref(false);
 const loadingMoreComments = ref(false);
 const installingFileId = ref<number | null>(null);
@@ -838,17 +840,9 @@ const formatFileSize = (bytes: number | undefined): string => {
   return `${(size / (1024 ** index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 };
 
-const apiGet = async <T>(path: string, params: Record<string, string> = {}): Promise<T> => {
-  const search = new URLSearchParams(params);
-  const response = await fetch(`${API_BASE}${path}?${search.toString()}`, { method: 'GET' });
-  if (!response.ok) {
-    throw new Error(`GameBanana HTTP ${response.status}`);
-  }
-  const data = await response.json() as T & { _sErrorMessage?: string; error?: string };
-  const apiError = asString(data._sErrorMessage) || asString(data.error);
-  if (apiError) throw new Error(apiError);
-  return data;
-};
+let pageDisposed = false;
+const apiGet = <T>(path: string, params: Record<string, string> = {}, isCurrent: () => boolean = () => true): Promise<T> =>
+  gameBananaApiGet<T>(path, params, () => !pageDisposed && isCurrent());
 
 const categoryIdFromUrl = (url: string): number | null => {
   const match = url.match(/\/cats\/(\d+)(?:[/?#]|$)/i);
@@ -982,18 +976,21 @@ const loadMods = async (requestedPage = 1) => {
 
 const loadComments = async (modId: number, requestedPage = 1, append = false) => {
   const requestId = ++commentsRequestId;
+  commentsError.value = '';
   if (append) loadingMoreComments.value = true;
   else {
     loadingComments.value = true;
     comments.value = [];
     commentsPage.value = 0;
+    commentsHasMore.value = false;
+    loadingMoreComments.value = false;
   }
 
   try {
     const payload = await apiGet<GbPostPayload>(`/Mod/${modId}/Posts`, {
       _nPage: String(requestedPage),
       _nPerpage: '15',
-    });
+    }, () => requestId === commentsRequestId && selectedModId.value === modId);
     if (requestId !== commentsRequestId || selectedModId.value !== modId) return;
     const next = (payload._aRecords || []).map((post) => postToComment(post));
     comments.value = append ? [...comments.value, ...next] : next;
@@ -1004,7 +1001,7 @@ const loadComments = async (modId: number, requestedPage = 1, append = false) =>
       : !payload._aMetadata?._bIsComplete;
   } catch (error) {
     if (requestId === commentsRequestId && selectedModId.value === modId) {
-      errorMessage.value = t('gameBanana.errors.loadComments', { error: String(error) });
+      commentsError.value = t('gameBanana.errors.loadComments', { error: String(error) });
     }
   } finally {
     if (requestId === commentsRequestId) {
@@ -1017,24 +1014,34 @@ const loadComments = async (modId: number, requestedPage = 1, append = false) =>
 const loadReplies = async (comment: GbComment) => {
   if (comment.loadingReplies || comment.repliesLoaded || comment.replyCount <= 0) return;
   comment.loadingReplies = true;
+  const modId = selectedModId.value;
+  const requestId = commentsRequestId;
   try {
     const payload = await apiGet<GbPostPayload>(`/Post/${comment.id}/Posts`, {
       _nPage: '1',
       _nPerpage: '50',
-    });
-    if (selectedModId.value === null) return;
+    }, () => requestId === commentsRequestId && selectedModId.value === modId);
+    if (requestId !== commentsRequestId || selectedModId.value !== modId) return;
     const replies = (payload._aRecords || []).map((post) => postToComment(post, comment.depth + 1));
     const index = comments.value.findIndex((item) => item.id === comment.id);
     if (index >= 0) comments.value.splice(index + 1, 0, ...replies);
     comment.repliesLoaded = true;
   } catch (error) {
-    errorMessage.value = t('gameBanana.errors.loadReplies', { error: String(error) });
+    if (requestId === commentsRequestId && selectedModId.value === modId) {
+      commentsError.value = t('gameBanana.errors.loadReplies', { error: String(error) });
+    }
   } finally {
     comment.loadingReplies = false;
   }
 };
 
 const selectMod = async (mod: GbModCard) => {
+  detailLoadFailed.value = false;
+  errorMessage.value = '';
+  commentsError.value = '';
+  ++commentsRequestId;
+  loadingComments.value = false;
+  loadingMoreComments.value = false;
   clearTranslations();
   clearHoveredText();
   downloadedFileIds.value = new Set();
@@ -1047,13 +1054,14 @@ const selectMod = async (mod: GbModCard) => {
   const requestId = ++detailRequestId;
   loadingDetail.value = true;
   try {
-    const profile = await apiGet<GbProfile>(`/Mod/${mod.id}/ProfilePage`);
+    const profile = await apiGet<GbProfile>(`/Mod/${mod.id}/ProfilePage`, {}, () => requestId === detailRequestId && selectedModId.value === mod.id);
     if (requestId !== detailRequestId) return;
     detail.value = profileToDetail(profile, mod);
     void loadComments(mod.id);
     void refreshDownloadedFileState(detail.value);
   } catch (error) {
-    if (requestId === detailRequestId) {
+    if (requestId === detailRequestId && selectedModId.value === mod.id) {
+      detailLoadFailed.value = true;
       detail.value = { ...mod, descriptionHtml: '', createdAt: 0, downloads: 0, views: 0, likes: 0, screenshots: [], contentRatings: [], files: [] };
       errorMessage.value = t('gameBanana.errors.loadDetail', { error: String(error) });
       void refreshDownloadedFileState(detail.value);
@@ -1065,7 +1073,7 @@ const selectMod = async (mod: GbModCard) => {
 
 async function loadRequestedMod(modId: number) {
   try {
-    const profile = await apiGet<GbProfile>(`/Mod/${modId}/ProfilePage`);
+    const profile = await apiGet<GbProfile>(`/Mod/${modId}/ProfilePage`, {}, () => requestedModId.value === modId);
     if (requestedModId.value !== modId) return;
     const targetKey = requestedModTargetKey();
     if (!targetKey || targetKey === resolvedRequestedModTargetKey) return;
@@ -1090,7 +1098,9 @@ async function loadRequestedMod(modId: number) {
     resolvedRequestedModTargetKey = targetKey;
     await selectMod(card);
   } catch (error) {
-    errorMessage.value = t('gameBanana.errors.loadDetail', { error: String(error) });
+    if (!pageDisposed && requestedModId.value === modId) {
+      errorMessage.value = t('gameBanana.errors.loadDetail', { error: String(error) });
+    }
   }
 }
 
@@ -2332,6 +2342,11 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  pageDisposed = true;
+  ++detailRequestId;
+  ++commentsRequestId;
+  ++modsRequestId;
+  ++categoriesRequestId;
   window.removeEventListener('keydown', onGlobalKeydown);
   window.removeEventListener('keyup', onGlobalKeyup);
   window.removeEventListener('blur', onGlobalBlur);
@@ -2695,6 +2710,7 @@ onBeforeUnmount(() => {
       <aside class="gb-panel gb-detail glass-panel">
         <div v-if="loadingDetail" class="gb-empty">{{ t('gameBanana.loading') }}</div>
         <template v-else-if="detail">
+          <button v-if="detailLoadFailed" type="button" class="gb-button" @click="selectMod(detail)">{{ t('gameBanana.refresh') }}</button>
           <div class="gb-detail-head">
             <div>
               <h2 data-gb-translate>{{ detail.title }}</h2>
@@ -2797,6 +2813,7 @@ onBeforeUnmount(() => {
               <h3>{{ t('gameBanana.comments') }}</h3>
               <button type="button" class="gb-link-button" :disabled="loadingComments" @click="loadComments(detail.id)">{{ t('gameBanana.refresh') }}</button>
             </div>
+            <p v-if="commentsError" class="gb-error">{{ commentsError }}</p>
             <p v-if="loadingComments" class="gb-comments-empty">{{ t('gameBanana.loading') }}</p>
             <div v-else-if="comments.length" class="gb-comment-list">
               <article v-for="comment in comments" :key="comment.id" class="gb-comment" :class="{ reply: comment.depth > 0 }" :style="{ '--comment-depth': String(Math.min(comment.depth, 3)) }">
@@ -2812,7 +2829,7 @@ onBeforeUnmount(() => {
                 </button>
               </article>
             </div>
-            <p v-else class="gb-comments-empty">{{ t('gameBanana.noComments') }}</p>
+            <p v-else-if="!commentsError" class="gb-comments-empty">{{ t('gameBanana.noComments') }}</p>
             <button v-if="commentsHasMore" type="button" class="gb-button gb-comments-more" :disabled="loadingMoreComments" @click="loadComments(detail.id, commentsPage + 1, true)">
               {{ loadingMoreComments ? t('gameBanana.loading') : t('gameBanana.loadMoreComments') }}
             </button>
