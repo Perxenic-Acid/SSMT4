@@ -120,3 +120,35 @@ test('live supplied examples expose updates and individual file descriptions', {
   assert.ok(profile._aFiles.length > 0);
   assert.ok(profile._aFiles.some(file => typeof file._sDescription === 'string' && file._sDescription.length > 0));
 });
+
+test('live sorting aliases match official config and sort the full filtered result set', { skip: !process.argv.includes('--live') }, async () => {
+  const sortSource = readFileSync(new URL('../src/views/GameBanana/gameBananaSort.ts', import.meta.url), 'utf8');
+  const sortCode = ts.transpileModule(sortSource, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+  const sorts = {};
+  vm.runInNewContext(sortCode, { exports: sorts });
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports, URLSearchParams, AbortController, DOMException, setTimeout, clearTimeout,
+    require: () => ({ fetch: globalThis.fetch }),
+  });
+  const config = await exports.gameBananaApiGet('/Mod/ListFilterConfig');
+  assert.deepEqual([...sorts.GAMEBANANA_SORTS].sort(), Array.from(config._aSorts, sort => sort._sAlias).sort());
+  const fields = {
+    Generic_Newest: ['_tsDateAdded', -1], Generic_Oldest: ['_tsDateAdded', 1],
+    Generic_MostLiked: ['_nLikeCount', -1], Generic_MostViewed: ['_nViewCount', -1],
+    Generic_MostDownloaded: ['_nDownloadCount', -1], Generic_MostCommented: ['_nPostCount', -1],
+  };
+  for (const sort of sorts.GAMEBANANA_SORTS) {
+    const data = await exports.gameBananaApiGet('/Mod/Index', {
+      _sSort: sort, _nPage: '1', _nPerpage: '3', '_aFilters[Generic_Game]': '8552',
+    });
+    assert.equal(data._aRecords.length, 3, sort);
+    assert.ok(data._aRecords.every(row => row._aGame._idRow === 8552), sort);
+    if (fields[sort]) {
+      const [field, direction] = fields[sort];
+      const values = data._aRecords.map(row => Number(row[field]));
+      assert.ok(values.every(Number.isFinite), `${sort}: missing ${field}`);
+      assert.ok(values.slice(1).every((value, i) => direction * (value - values[i]) >= 0), sort);
+    }
+  }
+});

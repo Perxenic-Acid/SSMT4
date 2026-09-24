@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { GAMEBANANA_SORTS, readGameBananaSort, saveGameBananaSort } from './gameBananaSort';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { fetch } from '@tauri-apps/plugin-http';
@@ -219,6 +220,12 @@ const loadAuthor = async () => {
   }
 };
 
+const sortMode = ref(readGameBananaSort());
+const changeSort = () => {
+  saveGameBananaSort(sortMode.value);
+  void loadMods(1);
+};
+
 const loadMods = async (requestedPage = 1) => {
   const id = authorId.value;
   if (!id) return;
@@ -229,7 +236,7 @@ const loadMods = async (requestedPage = 1) => {
     const payload = await apiGet<GbIndexPayload>('/Mod/Index', {
       _nPage: String(page.value),
       _nPerpage: '24',
-      _sOrderBy: '_tsDateUpdated,DESC',
+      _sSort: sortMode.value,
       '_aFilters[Generic_Submitter]': String(id),
     });
     if (currentRequest !== modsRequestId) return;
@@ -283,6 +290,12 @@ onMounted(() => { void refresh(); });
     </nav>
     <section class="gb-author-toolbar glass-panel">
       <span class="gb-author-toolbar-title">{{ t('gameBanana.authorPage') }}</span>
+      <label class="gb-author-sort-field">
+        <span>{{ t('gameBanana.sort') }}</span>
+        <el-select v-model="sortMode" class="gb-select" popper-class="gamebanana-select-popper" :aria-label="t('gameBanana.sort')" @change="changeSort">
+          <el-option v-for="sort in GAMEBANANA_SORTS" :key="sort" :label="t(`gameBanana.sortOptions.${sort}`)" :value="sort" />
+        </el-select>
+      </label>
       <label class="gb-author-nsfw-field" :title="t('gameBanana.nsfwShown')">
         <span>{{ t('gameBanana.nsfwShown') }}</span>
         <el-radio-group v-model="gameBananaBlurMode" class="gb-author-nsfw-mode">
@@ -346,9 +359,11 @@ onMounted(() => { void refresh(); });
 </template>
 
 <style scoped>
+.gb-author-sort-field { display: grid; gap: 4px; width: 172px; flex-shrink: 0; }
+.gb-author-sort-field > span { font-size: 10px; color: rgba(var(--theme-text-secondary-rgb),.64); }
 .gb-author-page { position:relative; height: 100%; min-height: 0; box-sizing:border-box; display: flex; flex-direction: column; gap: var(--t-page-gap); overflow:hidden; padding: var(--t-page-padding); color: var(--t-page-text); }
 .glass-panel { background:var(--t-page-panel-bg); border:var(--t-page-panel-border); box-shadow:var(--t-page-panel-shadow); backdrop-filter:var(--t-page-panel-blur); -webkit-backdrop-filter:var(--t-page-panel-blur); }
-.gb-author-toolbar { display: flex; align-items: end; gap: 9px; padding: 9px 12px; border-radius: 12px; }.gb-author-toolbar-title { align-self:center; flex: 1; color: rgba(var(--theme-text-primary-rgb),.9); font-size: 14px; font-weight: 700; }.gb-author-nsfw-field { display:grid; min-width:188px; gap:4px; }.gb-author-nsfw-field>span { color:rgba(var(--theme-text-secondary-rgb),.64); font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }.gb-author-nsfw-mode { display:flex; min-height:30px; }.gb-author-nsfw-mode :deep(.el-radio-button) { flex:1 1 0; }.gb-author-nsfw-mode :deep(.el-radio-button__inner) { display:flex; align-items:center; justify-content:center; width:100%; min-height:30px; padding:0 10px; border-color:rgba(255,255,255,.13); background:rgba(255,255,255,.055); color:rgba(var(--theme-text-primary-rgb),.86); font:inherit; font-size:12px; line-height:1; box-shadow:none; transition:background .16s ease,border-color .16s ease,color .16s ease; }.gb-author-nsfw-mode :deep(.el-radio-button:first-child .el-radio-button__inner) { border-radius:7px 0 0 7px; }.gb-author-nsfw-mode :deep(.el-radio-button:last-child .el-radio-button__inner) { border-radius:0 7px 7px 0; }.gb-author-nsfw-mode :deep(.el-radio-button__inner:hover) { background:rgba(var(--theme-surface-tint-rgb),.16); border-color:rgba(var(--theme-surface-tint-rgb),.38); color:rgba(var(--theme-text-primary-rgb),.96); }.gb-author-nsfw-mode :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) { background:rgba(var(--theme-surface-tint-rgb),.20); border-color:rgba(var(--theme-surface-tint-rgb),.42); color:rgba(var(--theme-text-primary-rgb),.98); box-shadow:-1px 0 0 0 rgba(var(--theme-surface-tint-rgb),.42); }
+.gb-author-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 9px; padding: 9px 12px; border-radius: 12px; }.gb-author-toolbar-title { align-self:center; flex: 1; color: rgba(var(--theme-text-primary-rgb),.9); font-size: 14px; font-weight: 700; }.gb-author-nsfw-field { display:grid; min-width:188px; gap:4px; }.gb-author-nsfw-field>span { color:rgba(var(--theme-text-secondary-rgb),.64); font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }.gb-author-nsfw-mode { display:flex; min-height:30px; }.gb-author-nsfw-mode :deep(.el-radio-button) { flex:1 1 0; }.gb-author-nsfw-mode :deep(.el-radio-button__inner) { display:flex; align-items:center; justify-content:center; width:100%; min-height:30px; padding:0 10px; border-color:rgba(255,255,255,.13); background:rgba(255,255,255,.055); color:rgba(var(--theme-text-primary-rgb),.86); font:inherit; font-size:12px; line-height:1; box-shadow:none; transition:background .16s ease,border-color .16s ease,color .16s ease; }.gb-author-nsfw-mode :deep(.el-radio-button:first-child .el-radio-button__inner) { border-radius:7px 0 0 7px; }.gb-author-nsfw-mode :deep(.el-radio-button:last-child .el-radio-button__inner) { border-radius:0 7px 7px 0; }.gb-author-nsfw-mode :deep(.el-radio-button__inner:hover) { background:rgba(var(--theme-surface-tint-rgb),.16); border-color:rgba(var(--theme-surface-tint-rgb),.38); color:rgba(var(--theme-text-primary-rgb),.96); }.gb-author-nsfw-mode :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) { background:rgba(var(--theme-surface-tint-rgb),.20); border-color:rgba(var(--theme-surface-tint-rgb),.42); color:rgba(var(--theme-text-primary-rgb),.98); box-shadow:-1px 0 0 0 rgba(var(--theme-surface-tint-rgb),.42); }
 .gb-author-show-field { display:grid; min-width:116px; gap:4px; }.gb-author-show-field>span { color:rgba(var(--theme-text-secondary-rgb),.64); font-size:10px; font-weight:700; text-transform:uppercase; }.gb-author-visibility { display:flex; min-height:30px; }.gb-author-visibility :deep(.el-radio-button) { flex:1 1 0; }.gb-author-visibility :deep(.el-radio-button__inner) { display:flex; align-items:center; justify-content:center; width:100%; min-height:30px; padding:0 10px; border-color:rgba(255,255,255,.13); background:rgba(255,255,255,.055); color:rgba(var(--theme-text-primary-rgb),.86); font-size:12px; box-shadow:none; }.gb-author-visibility :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) { background:rgba(var(--theme-surface-tint-rgb),.20); border-color:rgba(var(--theme-surface-tint-rgb),.42); color:rgba(var(--theme-text-primary-rgb),.98); }.gb-author-nsfw-mode :deep(.el-radio-button.is-disabled .el-radio-button__inner) { opacity:.35; cursor:not-allowed; }
 .gb-button { min-height: 30px; padding: 0 11px; border: 1px solid rgba(255,255,255,.13); border-radius: 7px; background: rgba(255,255,255,.055); color: rgba(var(--theme-text-primary-rgb),.86); font: inherit; font-size: 12px; cursor: pointer; }.gb-button:hover:not(:disabled) { background: rgba(var(--theme-surface-tint-rgb),.16); border-color: rgba(var(--theme-surface-tint-rgb),.38); }.gb-button:disabled { opacity: .45; cursor: default; }.gb-button--primary { background: rgba(var(--theme-surface-tint-rgb),.2); border-color: rgba(var(--theme-surface-tint-rgb),.42); }.gb-history-nav { position:absolute; top:8px; right:24px; left:24px; z-index:2; display:flex; align-items:center; gap:6px; min-width:0; }.gb-history-trail { display:flex; flex:1 1 auto; align-items:center; min-width:0; height:32px; overflow-x:auto; scrollbar-width:none; white-space:nowrap; border:1px solid rgba(255,255,255,.1); border-radius:7px; background:rgba(15,18,31,.32); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }.gb-history-trail::-webkit-scrollbar { display:none; }.gb-history-entry { display:block; flex:0 1 auto; max-width:220px; overflow:hidden; padding:0 8px; border:0; background:transparent; color:rgba(var(--theme-text-secondary-rgb),.72); font:inherit; font-size:11px; line-height:30px; text-align:left; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }.gb-history-entry:hover { color:rgba(var(--theme-text-primary-rgb),.96); }.gb-history-entry.is-current { color:rgba(var(--theme-surface-tint-rgb),.96); font-weight:700; }.gb-history-separator { flex:0 0 auto; color:rgba(var(--theme-text-secondary-rgb),.38); font-size:12px; }.gb-history-button { display:grid; flex:0 0 auto; width:32px; height:32px; place-items:center; padding:0; border:1px solid rgba(255,255,255,.13); border-radius:7px; background:rgba(15,18,31,.42); color:rgba(var(--theme-text-primary-rgb),.88); cursor:pointer; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }.gb-history-button:hover:not(:disabled) { border-color:rgba(var(--theme-surface-tint-rgb),.42); background:rgba(var(--theme-surface-tint-rgb),.18); }.gb-history-button:disabled { opacity:.4; cursor:default; }.gb-history-button svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; stroke-width:2; }
 .gb-author-error { margin: -4px 1px 0; color:#ffabab; font-size:12px; }.gb-author-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(245px,.85fr) minmax(0,2fr); gap:12px; overflow:hidden; }.gb-author-profile,.gb-author-mods { min-height:0; border-radius:12px; overflow:auto; }.gb-author-profile { display:flex; align-items:flex-start; gap:14px; padding:18px; }.gb-author-avatar { width:76px; height:76px; flex:0 0 auto; border-radius:50%; object-fit:cover; border:1px solid rgba(var(--theme-surface-tint-rgb),.35); }.gb-author-profile-copy { display:grid; gap:7px; min-width:0; }.gb-author-profile-copy h1,.gb-author-profile-copy p { margin:0; }.gb-author-profile-copy h1 { font-size:19px; }.gb-author-profile-copy p { color:rgba(var(--theme-text-secondary-rgb),.65); font-size:12px; line-height:1.4; }.gb-author-stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }.gb-author-stats span { display:grid; gap:2px; padding:6px; border-radius:6px; background:rgba(255,255,255,.045); color:rgba(var(--theme-text-secondary-rgb),.58); font-size:10px; }.gb-author-stats strong { color:rgba(var(--theme-text-primary-rgb),.88); font-size:12px; }

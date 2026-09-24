@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { GAMEBANANA_SORTS, readGameBananaSort, saveGameBananaSort } from './gameBananaSort';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { fetch } from '@tauri-apps/plugin-http';
 import { gameBananaApiGet } from './gameBananaApi';
@@ -950,6 +951,12 @@ const loadCategories = async () => {
   }
 };
 
+const sortMode = ref(readGameBananaSort());
+const changeSort = () => {
+  saveGameBananaSort(sortMode.value);
+  void loadMods(1);
+};
+
 const loadMods = async (requestedPage = 1) => {
   if (!gameId.value || gameId.value <= 0) return;
   const requestId = ++modsRequestId;
@@ -960,13 +967,13 @@ const loadMods = async (requestedPage = 1) => {
     const params: Record<string, string> = {
       _nPage: String(currentPage.value),
       _nPerpage: String(pageSize.value),
-      _sOrderBy: '_tsDateUpdated,DESC',
+      _sSort: sortMode.value,
       '_aFilters[Generic_Game]': String(gameId.value),
     };
     if (selectedCategoryId.value !== null) params['_aFilters[Generic_Category]'] = String(selectedCategoryId.value);
     if (searchQuery.value.trim()) params['_aFilters[Generic_Name]'] = `contains,${searchQuery.value.trim()}`;
 
-    const payload = await apiGet<GbIndexPayload>('/Mod/Index', params);
+    const payload = await apiGet<GbIndexPayload>('/Mod/Index', params, () => requestId === modsRequestId);
     if (requestId !== modsRequestId) return;
 
     mods.value = (payload._aRecords || []).map(recordToCard);
@@ -2459,6 +2466,12 @@ onBeforeUnmount(() => {
         <span>{{ t('gameBanana.gameId') }}</span>
         <input v-model.number="gameId" type="number" min="1" :placeholder="t('gameBanana.gameId')" @keyup.enter="applyTarget" />
       </label>
+      <label class="gb-field gb-sort-field">
+        <span>{{ t('gameBanana.sort') }}</span>
+        <el-select v-model="sortMode" class="gb-select" popper-class="gamebanana-select-popper" :aria-label="t('gameBanana.sort')" @change="changeSort">
+          <el-option v-for="sort in GAMEBANANA_SORTS" :key="sort" :label="t(`gameBanana.sortOptions.${sort}`)" :value="sort" />
+        </el-select>
+      </label>
       <label class="gb-field gb-size-field">
         <span>{{ t('gameBanana.perPage') }}</span>
         <el-select v-model="pageSize" class="gb-select" popper-class="gamebanana-select-popper" @change="loadMods(1)">
@@ -2986,6 +2999,7 @@ onBeforeUnmount(() => {
 
 .gb-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 10px;
   padding: 10px 12px;
@@ -2999,6 +3013,7 @@ onBeforeUnmount(() => {
 .gb-field span { color: rgba(var(--theme-text-secondary-rgb), 0.64); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
 .gb-search-field { flex: 1 1 260px; }
 .gb-id-field { width: 104px; }
+.gb-sort-field { width: 172px; flex-shrink: 0; }
 .gb-size-field { width: 78px; }
 .gb-field input,
 .gb-field select,

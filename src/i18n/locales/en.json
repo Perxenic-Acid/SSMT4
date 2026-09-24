@@ -1495,6 +1495,8 @@
     }
   },
   "gameBanana": {
+    "sort": "Sort by",
+    "sortOptions": {"Generic_Newest": "Newest", "Generic_Oldest": "Oldest", "Generic_LatestModified": "Latest Modified", "Generic_NewAndUpdated": "New & Updated", "Generic_LatestUpdated": "Latest Updated", "Generic_Alphabetically": "Name A–Z", "Generic_ReverseAlphabetically": "Name Z–A", "Generic_MostLiked": "Most Liked", "Generic_MostViewed": "Most Viewed", "Generic_MostCommented": "Most Commented", "Generic_LatestComment": "Latest Comment", "Generic_MostDownloaded": "Most Downloaded"},
     "updates": "Updates",
     "noUpdates": "No updates yet",
     "moreUpdates": "Load more updates",
