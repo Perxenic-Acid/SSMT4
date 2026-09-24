@@ -1,5 +1,16 @@
 {
   "fileLocks": {
+    "terminal": "The terminal may be using this directory. Move to a directory unaffected by the rename or close the related tab first. Ending the shell does not update the terminal’s saved starting directory.",
+    "renameFrom": "Current directory: {path}",
+    "renameTo": "Directory after rename: {path}",
+    "terminalRenameWarning": "Enabling/disabling changes the directory name. After ending a terminal process, pressing Enter in the old tab may restart it with the old path and fail to access its starting directory.",
+    "terminalMoveFirst": "Move the locking terminal to a stable parent directory, or close its tab, then click “Retry after release”. In PowerShell, run:",
+    "terminalOtherShell": "For other shells, use their cd command to enter the Mods root shown above. Click × or press Escape to cancel this toggle.",
+    "terminalTitle": "A terminal is using the directory being renamed",
+    "retryAfterMove": "Retry after release",
+    "chooseTerminate": "End processes instead…",
+    "terminalRenamed": "The directory was renamed. Close the exited terminal tab and open a new terminal from the path below; do not press Enter to restart the old tab. If a parent directory was renamed, preserve your original subdirectory suffix.",
+    "afterRename": "Directory renamed: reopen the terminal",
     "explorer": "Close the preview pane and related folder windows first. Ending Explorer briefly closes the desktop and taskbar; the app will then try to restart Explorer.",
     "code": "Save your files and close the related editor windows. If the lock remains, exit VS Code.",
     "qq": "Finish file transfers and exit QQ from the system tray.",

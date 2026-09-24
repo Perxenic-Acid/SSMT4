@@ -1,5 +1,16 @@
 {
   "fileLocks": {
+    "terminal": "终端可能正在使用此目录。建议先切换到不受改名影响的目录，或关闭相关标签页；结束 shell 不会更新终端保存的启动目录。",
+    "renameFrom": "原目录：{path}",
+    "renameTo": "改名后目录：{path}",
+    "terminalRenameWarning": "启用/禁用会改变目录名。结束终端进程后，旧标签页按 Enter 重启可能仍使用原目录并报“无法访问启动目录”。",
+    "terminalMoveFirst": "请先在占用终端中切换到上级稳定目录，或关闭相关标签页，再点击“已处理，重试”。PowerShell 可执行以下命令：",
+    "terminalOtherShell": "其他 shell 请使用对应的 cd 命令进入上述 Mods 根目录。点击右上角 × 或按 Esc 可取消此次启用/禁用。",
+    "terminalTitle": "终端正在占用待改名目录",
+    "retryAfterMove": "已处理，重试",
+    "chooseTerminate": "仍要结束进程…",
+    "terminalRenamed": "目录已改名。请关闭退出的旧终端标签页，从下面的新目录重新打开终端，不要在旧标签页按 Enter 重启。如果改名的是父目录，请保留原来的子目录层级。",
+    "afterRename": "目录已改名：重新打开终端",
     "explorer": "建议先关闭预览窗格及相关文件夹窗口。结束此进程会短暂关闭桌面和任务栏，随后尝试重启资源管理器。",
     "code": "建议保存文件，关闭相关编辑器窗口；仍占用时退出 VS Code。",
     "qq": "建议完成传输并从托盘退出 QQ。",
