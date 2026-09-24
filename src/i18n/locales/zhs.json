@@ -1495,6 +1495,10 @@
     }
   },
   "gameBanana": {
+    "updates": "更新记录",
+    "noUpdates": "暂无更新记录",
+    "moreUpdates": "加载更多更新",
+    "loadUpdatesError": "无法加载更新记录：{error}",
     "description": "独立浏览社区 Mod，不与本地模组管理页混用结构。",
     "currentTarget": "当前目标",
     "noGameSelected": "未选择游戏配置",

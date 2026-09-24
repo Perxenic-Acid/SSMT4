@@ -97,3 +97,26 @@ test('live GameBanana comments and profile parse through the production client',
   assert.ok(Array.isArray(posts._aRecords));
   assert.equal(profile._idRow, 503336);
 });
+
+test('update lists retry incomplete data and preserve update text', async () => {
+  const record = { _idRow: 458111, _sName: 'File replacement', _sText: '<p>Correct file uploaded.</p>' };
+  const h = harness([response('{}'), response(warning + JSON.stringify({ _aRecords: [record] }))]);
+  const result = await h.api.gameBananaApiGet('/Mod/719997/Updates');
+  assert.equal(result._aRecords[0]._sText, record._sText);
+  assert.equal(h.calls, 2);
+});
+
+test('live supplied examples expose updates and individual file descriptions', { skip: !process.argv.includes('--live') }, async () => {
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports, URLSearchParams, AbortController, DOMException, setTimeout, clearTimeout,
+    require: () => ({ fetch: globalThis.fetch }),
+  });
+  const [updates, profile] = await Promise.all([
+    exports.gameBananaApiGet('/Mod/719997/Updates', { _nPage: '1', _nPerpage: '10' }),
+    exports.gameBananaApiGet('/Mod/720026/ProfilePage'),
+  ]);
+  assert.ok(updates._aRecords.some(update => update._sName && update._sText));
+  assert.ok(profile._aFiles.length > 0);
+  assert.ok(profile._aFiles.some(file => typeof file._sDescription === 'string' && file._sDescription.length > 0));
+});

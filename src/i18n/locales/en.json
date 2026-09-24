@@ -1495,6 +1495,10 @@
     }
   },
   "gameBanana": {
+    "updates": "Updates",
+    "noUpdates": "No updates yet",
+    "moreUpdates": "Load more updates",
+    "loadUpdatesError": "Unable to load updates: {error}",
     "description": "Browse community mods independently from the local mod manager.",
     "currentTarget": "Current target",
     "noGameSelected": "No game configuration selected",

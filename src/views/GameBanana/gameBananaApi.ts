@@ -27,8 +27,8 @@ function validatePayload(path: string, data: unknown): void {
   const record = data as Record<string, unknown>;
   const error = record._sErrorMessage || record.error;
   if (typeof error === 'string' && error) throw new ApiFailure(error, false);
-  if (/\/Posts$/.test(path) && !Array.isArray(record._aRecords)) {
-    throw new ApiFailure('GameBanana returned incomplete comments');
+  if (/\/(Posts|Updates)$/.test(path) && !Array.isArray(record._aRecords)) {
+    throw new ApiFailure('GameBanana returned an incomplete record list');
   }
   if (/\/ProfilePage$/.test(path) && !(typeof record._idRow === 'number' && record._idRow > 0)) {
     throw new ApiFailure('GameBanana returned an incomplete profile');

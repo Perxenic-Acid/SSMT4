@@ -85,6 +85,7 @@ interface GbCategoryRow {
 }
 
 interface GbFile {
+  _sDescription?: string;
   _idRow?: number;
   _sFile?: string;
   _nFilesize?: number;
@@ -123,7 +124,23 @@ interface GbComment {
   repliesLoaded?: boolean;
 }
 
+interface GbUpdateRecord {
+  _idRow: number;
+  _sName?: string;
+  _sText?: string;
+  _sVersion?: string;
+  _tsDateAdded?: number;
+  _sProfileUrl?: string;
+}
+
+interface GbUpdatePayload {
+  _aMetadata?: { _nRecordCount?: number; _bIsComplete?: boolean };
+  _aRecords: GbUpdateRecord[];
+}
+
 interface GbProfile extends GbRecord {
+  _bHasUpdates?: boolean;
+  _nUpdatesCount?: number;
   _sText?: string;
   _tsDateAdded?: number;
   _nDownloadCount?: number;
@@ -255,6 +272,12 @@ const loadingMods = ref(false);
 const loadingDetail = ref(false);
 const detailLoadFailed = ref(false);
 const commentsError = ref('');
+const updates = ref<(GbUpdateRecord & { bodyHtml: string })[]>([]);
+const updatesVisible = ref(false);
+const loadingUpdates = ref(false);
+const updatesError = ref('');
+const updatesPage = ref(0);
+const updatesHasMore = ref(false);
 const loadingComments = ref(false);
 const loadingMoreComments = ref(false);
 const installingFileId = ref<number | null>(null);
@@ -279,6 +302,7 @@ const revealedImages = ref(new Set<string>());
 let modsRequestId = 0;
 let detailRequestId = 0;
 let commentsRequestId = 0;
+let updatesRequestId = 0;
 let categoriesRequestId = 0;
 let downloadedStateRequestId = 0;
 let syncingGameTarget = false;
@@ -974,6 +998,37 @@ const loadMods = async (requestedPage = 1) => {
   }
 };
 
+const loadUpdates = async (modId: number, page = 1, append = false) => {
+  const requestId = ++updatesRequestId;
+  loadingUpdates.value = true;
+  updatesError.value = '';
+  if (!append) {
+    updates.value = [];
+    updatesPage.value = 0;
+    updatesHasMore.value = false;
+  }
+  try {
+    const payload = await apiGet<GbUpdatePayload>(`/Mod/${modId}/Updates`, {
+      _nPage: String(page), _nPerpage: '10',
+    }, () => requestId === updatesRequestId && selectedModId.value === modId);
+    if (requestId !== updatesRequestId || selectedModId.value !== modId) return;
+    const next = payload._aRecords.map(update => ({ ...update, bodyHtml: sanitizeRichText(update._sText) }));
+    const existing = new Set(append ? updates.value.map(update => update._idRow) : []);
+    updates.value = [...(append ? updates.value : []), ...next.filter(update => !existing.has(update._idRow))];
+    updatesPage.value = page;
+    const total = asNumber(payload._aMetadata?._nRecordCount);
+    updatesHasMore.value = next.length > 0 && (total > 0
+      ? page * 10 < total
+      : payload._aMetadata?._bIsComplete === false);
+  } catch (error) {
+    if (requestId === updatesRequestId && selectedModId.value === modId) {
+      updatesError.value = t('gameBanana.loadUpdatesError', { error: String(error) });
+    }
+  } finally {
+    if (requestId === updatesRequestId) loadingUpdates.value = false;
+  }
+};
+
 const loadComments = async (modId: number, requestedPage = 1, append = false) => {
   const requestId = ++commentsRequestId;
   commentsError.value = '';
@@ -1036,6 +1091,13 @@ const loadReplies = async (comment: GbComment) => {
 };
 
 const selectMod = async (mod: GbModCard) => {
+  ++updatesRequestId;
+  updates.value = [];
+  updatesVisible.value = false;
+  loadingUpdates.value = false;
+  updatesError.value = '';
+  updatesPage.value = 0;
+  updatesHasMore.value = false;
   detailLoadFailed.value = false;
   errorMessage.value = '';
   commentsError.value = '';
@@ -1057,6 +1119,8 @@ const selectMod = async (mod: GbModCard) => {
     const profile = await apiGet<GbProfile>(`/Mod/${mod.id}/ProfilePage`, {}, () => requestId === detailRequestId && selectedModId.value === mod.id);
     if (requestId !== detailRequestId) return;
     detail.value = profileToDetail(profile, mod);
+    updatesVisible.value = profile._bHasUpdates === true || asNumber(profile._nUpdatesCount) > 0;
+    if (updatesVisible.value) void loadUpdates(mod.id);
     void loadComments(mod.id);
     void refreshDownloadedFileState(detail.value);
   } catch (error) {
@@ -2112,7 +2176,7 @@ watch([() => appSettings.gamebananaBlurMode, () => appSettings.revealBlurredImag
   void nextTick(syncRichTextImageBlur);
 });
 
-watch([detail, () => comments.value.length], () => {
+watch([detail, () => comments.value.length, () => updates.value], () => {
   void nextTick(syncRichTextImageBlur);
 });
 
@@ -2343,6 +2407,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   pageDisposed = true;
+  ++updatesRequestId;
   ++detailRequestId;
   ++commentsRequestId;
   ++modsRequestId;
@@ -2748,6 +2813,25 @@ onBeforeUnmount(() => {
             <span>{{ t('gameBanana.likes') }}<strong>{{ formatNumber(detail.likes) }}</strong></span>
           </div>
 
+          <section v-if="updatesVisible" class="gb-updates">
+            <div class="gb-comments-head">
+              <h3>{{ t('gameBanana.updates') }}</h3>
+              <button type="button" class="gb-link-button" :disabled="loadingUpdates" @click="loadUpdates(detail.id)">{{ t('gameBanana.refresh') }}</button>
+            </div>
+            <p v-if="updatesError" class="gb-error">{{ updatesError }}</p>
+            <article v-for="update in updates" :key="update._idRow" class="gb-update">
+              <header>
+                <button type="button" class="gb-link-button" data-gb-translate @click="openExternal(`https://gamebanana.com/updates/${update._idRow}`)">{{ update._sName || t('gameBanana.updates') }}</button>
+                <span v-if="update._sVersion">{{ update._sVersion }}</span>
+                <time>{{ formatDate(asNumber(update._tsDateAdded)) }}</time>
+              </header>
+              <div class="gb-rich-text" @click="richTextClick" v-html="update.bodyHtml" />
+            </article>
+            <p v-if="loadingUpdates" class="gb-comments-empty">{{ t('gameBanana.loading') }}</p>
+            <p v-else-if="!updates.length && !updatesError" class="gb-comments-empty">{{ t('gameBanana.noUpdates') }}</p>
+            <button v-if="updatesHasMore" type="button" class="gb-button" :disabled="loadingUpdates" @click="loadUpdates(detail.id, updatesPage + 1, true)">{{ t('gameBanana.moreUpdates') }}</button>
+          </section>
+
           <div v-if="detail.files.length" class="gb-files">
             <h3>{{ t('gameBanana.files') }}</h3>
             <div class="gb-install-target">
@@ -2781,6 +2865,7 @@ onBeforeUnmount(() => {
             <div v-for="file in detail.files" :key="file._idRow || file._sFile" class="gb-file">
               <span>
                 <strong data-gb-translate>{{ file._sFile || t('gameBanana.download') }}</strong>
+                <span v-if="file._sDescription" class="gb-file-description" data-gb-translate>{{ file._sDescription }}</span>
                 <small>{{ formatFileSize(file._nFilesize) }} · {{ formatDate(asNumber(file._tsDateAdded)) }}</small>
               </span>
               <span class="gb-file-actions">
@@ -3217,6 +3302,13 @@ onBeforeUnmount(() => {
 .gb-files { display: grid; gap: 6px; }
 .gb-files h3 { color: rgba(var(--theme-text-primary-rgb), 0.8); font-size: 12px; }
 .gb-install-target { display:grid; gap:6px; padding:7px; border:1px solid rgba(255,255,255,.08); border-radius:7px; background:rgba(255,255,255,.025); }.gb-install-target-label { color:rgba(var(--theme-text-secondary-rgb),.66); font-size:10px; }.gb-install-group-modes { display:flex; min-height:27px; overflow:hidden; border-radius:6px; }.gb-install-group-modes :deep(.el-radio-button) { flex:1 1 0; min-width:0; }.gb-install-group-modes :deep(.el-radio-button__inner) { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:100%; min-height:27px; padding:0 7px; border:none!important; outline:none!important; background:rgba(255,255,255,.055); color:rgba(var(--theme-text-primary-rgb),.78); font:inherit; font-size:10px; line-height:1; box-shadow:none!important; transition:background .16s ease,color .16s ease; }.gb-install-group-modes :deep(.el-radio-button__inner:hover) { background:rgba(var(--theme-surface-tint-rgb),.16); color:rgba(var(--theme-text-primary-rgb),.96); }.gb-install-group-modes :deep(.el-radio-button.is-active .el-radio-button__inner) { background:rgba(var(--theme-surface-tint-rgb),.22); color:rgba(var(--theme-text-primary-rgb),.98); box-shadow:none!important; }.gb-install-group { display:flex; align-items:center; gap:6px; color:rgba(var(--theme-text-secondary-rgb),.66); font-size:10px; }.gb-install-group input { min-width:0; flex:1; height:27px; box-sizing:border-box; padding:0 8px; border:1px solid rgba(var(--theme-surface-tint-rgb),.14); border-radius:5px; outline:none; background:rgba(var(--theme-surface-tint-rgb),.055); color:rgba(var(--theme-text-primary-rgb),.86); font:inherit; }.gb-install-group input[readonly] { color:rgba(var(--theme-text-secondary-rgb),.72); cursor:default; }.gb-install-path-select { min-width:0; flex:1; }.gb-install-path-select :deep(.el-select__wrapper) { min-height:27px; padding:0 8px; border:1px solid rgba(var(--theme-surface-tint-rgb),.14); border-radius:5px; background:rgba(var(--theme-surface-tint-rgb),.055); box-shadow:none!important; }.gb-install-path-select :deep(.el-select__selected-item),.gb-install-path-select :deep(.el-select__placeholder) { color:rgba(var(--theme-text-primary-rgb),.86); font-size:10px; }.gb-install-path-select :deep(.el-select__wrapper.is-focused) { border-color:rgba(var(--theme-surface-tint-rgb),.48); box-shadow:0 0 0 2px rgba(var(--theme-surface-tint-rgb),.10)!important; }.gb-install-path-refresh { width:27px; height:27px; border:1px solid rgba(var(--theme-surface-tint-rgb),.14); border-radius:5px; background:rgba(var(--theme-surface-tint-rgb),.07); color:rgba(var(--theme-text-primary-rgb),.82); cursor:pointer; }.gb-install-path-refresh:hover:not(:disabled) { background:rgba(var(--theme-surface-tint-rgb),.16); }.gb-install-path-refresh:disabled { opacity:.45; cursor:default; }
+.gb-updates { display: grid; gap: 8px; }
+.gb-updates h3 { margin: 0; font-size: 13px; }
+.gb-update { padding: 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 7px; background: rgba(255,255,255,.025); overflow-wrap: anywhere; }
+.gb-update header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.gb-update header button { text-align: left; }
+.gb-update time { margin-left: auto; font-size: 10px; color: rgba(var(--theme-text-secondary-rgb),.56); }
+.gb-file-description { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; color: rgba(var(--theme-text-primary-rgb),.75); }
 .gb-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; background: rgba(255,255,255,0.035); color: inherit; text-align: left; }
 .gb-file:hover { background: rgba(var(--theme-surface-tint-rgb), 0.1); border-color: rgba(var(--theme-surface-tint-rgb), 0.25); }
 .gb-file > span:first-child { display: grid; min-width: 0; gap: 2px; }
