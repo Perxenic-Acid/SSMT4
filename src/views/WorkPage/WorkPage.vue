@@ -10,7 +10,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import { exists, readDir, readTextFile, writeTextFile, mkdir, stat } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
 import { debugError, debugLog, debugWarn } from '../../utils/debugLog';
-import { AppStateManager } from '../../store/AppStateManager';
+import { AppStateManager, BGType } from '../../store/AppStateManager';
 import { setPendingXianZunPrompt } from '../../store/XianZunPendingPrompt';
 import { PathHelper } from '../../helper/PathHelper';
 import { ResourceManager } from '../../store/ResourceManager';
@@ -413,6 +413,14 @@ const removeSkipRow = (index: number) => {
   ensureTrailingSkipRow();
 };
 
+const moveSkipRow = (index: number, direction: 'up' | 'down') => {
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || targetIndex < 0 || targetIndex >= skipRows.value.length) return;
+  const current = skipRows.value[index];
+  skipRows.value[index] = skipRows.value[targetIndex];
+  skipRows.value[targetIndex] = current;
+};
+
 const ensureTrailingVSRow = () => {
   const rows = vsRows.value;
   if (rows.length === 0) {
@@ -445,6 +453,14 @@ const removeVSCheckRow = (index: number) => {
 
   vsRows.value.splice(index, 1);
   ensureTrailingVSRow();
+};
+
+const moveVSCheckRow = (index: number, direction: 'up' | 'down') => {
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || targetIndex < 0 || targetIndex >= vsRows.value.length) return;
+  const current = vsRows.value[index];
+  vsRows.value[index] = vsRows.value[targetIndex];
+  vsRows.value[targetIndex] = current;
 };
 
 const getWorkspaceBaseDir = async (gameKey?: string) => {
@@ -3542,7 +3558,7 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 </script>
 
 <template>
-  <div class="work-page-container">
+  <div class="work-page-container" :class="{ 'is-video-background': appSettings.bgType === BGType.Video }">
     <div class="work-layout">
       <div class="main-column">
         <div class="panel-stack glass-scrollbar">
@@ -3606,8 +3622,10 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
                 v-model:skip-rows="skipRows"
                 v-model:vs-rows="vsRows"
                 @removeSkipRow="removeSkipRow"
+                @moveSkipRow="moveSkipRow"
                 @generateIBSkip="handleGenerateIBSkip"
                 @removeVSCheckRow="removeVSCheckRow"
+                @moveVSCheckRow="moveVSCheckRow"
                 @updateVSCheck="handleUpdateVSCheck"
                 @generateVSCheck="handleGenerateVSCheck"
               />

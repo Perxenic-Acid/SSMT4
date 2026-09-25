@@ -236,3 +236,19 @@
   border-color: var(--work-glass-border-strong) !important;
   color: var(--work-glass-text-strong) !important;
 }
+
+/* Chromium/WebView2 can drop text layers when video is composited beneath
+   several nested backdrop-filter surfaces. Keep the workbench opaque and
+   readable while a video background is active. */
+.work-page-container.is-video-background,
+.work-page-container.is-video-background * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.work-page-container.is-video-background .panel,
+.work-page-container.is-video-background .inner-panel,
+.work-page-container.is-video-background .side-drawer,
+.work-page-container.is-video-background .specific-ib-dump-toggle {
+  background: rgba(17, 21, 29, 0.92) !important;
+}

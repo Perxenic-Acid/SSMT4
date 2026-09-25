@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { FolderOpened, Download, ArrowUp, ArrowDown, Delete, Document } from '@element-plus/icons-vue';
+import { FolderOpened, Download, Delete, Document, Rank } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, ref } from 'vue';
 import type { ModelRow } from './WorkPage.types';
 import type { FullExtractDataTypeFilter } from './WorkPage.Extract';
 
@@ -37,89 +37,64 @@ const emit = defineEmits<{
   openLatestExtractionLog: [];
 }>();
 
-type ResizableColumn = { minWidth?: number | string; width?: number | string; realWidth?: number | null };
+const draggingModelRow = ref<number | null>(null);
+const recentlyMovedModelRow = ref<number | null>(null);
+const modelTableHost = ref<HTMLElement | null>(null);
+let modelDragPointerId: number | null = null;
+let recentMoveTimer: ReturnType<typeof setTimeout> | undefined;
 
-// DrawIB 表格的初始列宽比例在这里调整。数值只表示相对比例；
-// 表格首次显示和容器尺寸变化时会按比例铺满可用宽度。
-const DRAW_IB_INITIAL_COLUMN_RATIOS = {
-  drawIB: 180,
-  aliasName: 254,
-  order: 66,
-} as const;
-
-const modelTable = ref<any>();
-const modelTableHost = ref<HTMLElement>();
-let resizeObserver: ResizeObserver | undefined;
-let resizePair: { next?: ResizableColumn; nextStart: number } | undefined;
-const fitColumnsToContainer = () => {
-  const available = modelTableHost.value?.clientWidth || 0;
-  const columns = modelTable.value?.store?.states?.columns?.value as ResizableColumn[] | undefined;
-  if (!columns?.length || !available) return;
-  const fixedWidth = Number(columns.at(-1)?.realWidth ?? columns.at(-1)?.width) || 56;
-  const resizable = columns.slice(0, -1);
-  const currentTotal = resizable.reduce((sum, item) => sum + (Number(item.realWidth ?? item.width) || 0), 0);
-  if (available <= fixedWidth || currentTotal <= 0) return;
-  const scale = (available - fixedWidth) / currentTotal;
-  let used = fixedWidth;
-  resizable.forEach((item, index) => {
-    const width = index === resizable.length - 1 ? available - used : Math.round((Number(item.realWidth ?? item.width) || 0) * scale);
-    item.width = width;
-    item.realWidth = width;
-    used += width;
-  });
-  modelTable.value.store.scheduleLayout(false, true);
-};
-const keepDraggedColumnWidth = (newWidth: number, _oldWidth: number, column: ResizableColumn) => {
-  const minimum = Number(column.minWidth) || 60;
-  const resolvedWidth = Math.max(minimum, newWidth);
-  column.width = resolvedWidth;
-  column.realWidth = resolvedWidth;
-  if (resizePair?.next) {
-    const nextWidth = resizePair.nextStart - (resolvedWidth - _oldWidth);
-    resizePair.next.width = nextWidth;
-    resizePair.next.realWidth = nextWidth;
-  }
-  resizePair = undefined;
+const modelRowClass = ({ rowIndex }: { rowIndex: number }) => {
+  const classes: string[] = [];
+  if (draggingModelRow.value === rowIndex) classes.push('work-row-dragging');
+  if (recentlyMovedModelRow.value === rowIndex) classes.push('work-row-recently-moved');
+  return classes.join(' ');
 };
 
-let stopResizePreview: (() => void) | undefined;
-const constrainResizePreview = (event: MouseEvent, tableInstance: any) => {
-  const headerCell = (event.target as HTMLElement | null)?.closest('th.el-table__cell') as HTMLElement | null;
-  const table = headerCell?.closest('.el-table') as HTMLElement | null;
-  if (!headerCell || !table || headerCell.classList.contains('model-table-actions-column')) return;
-  const classMinimum = [...headerCell.classList].find((name) => name.startsWith('column-min-'));
-  const minimum = Number(classMinimum?.slice('column-min-'.length)) || 80;
-  const tableLeft = table.getBoundingClientRect().left;
-  const minimumLeft = headerCell.getBoundingClientRect().left - tableLeft + minimum;
-  const headers = [...headerCell.parentElement!.children] as HTMLElement[];
-  const columnIndex = headers.indexOf(headerCell);
-  const columns = tableInstance?.store?.states?.columns?.value as ResizableColumn[] | undefined;
-  const current = columns?.[columnIndex];
-  const next = columns?.[columnIndex + 1];
-  if (!current || !next) return;
-  const currentStart = Number(current.realWidth ?? current.width) || headerCell.offsetWidth;
-  const nextStart = Number(next.realWidth ?? next.width) || headers[columnIndex + 1]?.offsetWidth || 0;
-  const nextMinimum = Number(next.minWidth) || 56;
-  const maximumLeft = headerCell.getBoundingClientRect().left - tableLeft + currentStart + nextStart - nextMinimum;
-  resizePair = { next, nextStart };
-  const move = () => requestAnimationFrame(() => {
-    const proxy = table.querySelector('.el-table__column-resize-proxy') as HTMLElement | null;
-    if (proxy) proxy.style.left = `${Math.min(maximumLeft, Math.max(minimumLeft, Number.parseFloat(proxy.style.left)))}px`;
-  });
-  document.addEventListener('mousemove', move, true);
-  const stop = () => { document.removeEventListener('mousemove', move, true); document.removeEventListener('mouseup', stop, true); };
-  document.addEventListener('mouseup', stop, true);
-  stopResizePreview = stop;
+const rowIndexAtPoint = (host: HTMLElement, clientX: number, clientY: number): number => {
+  const row = document.elementFromPoint(clientX, clientY)?.closest('tr');
+  if (!row || !host.contains(row)) return -1;
+  const body = row.parentElement;
+  return body ? Array.from(body.children).indexOf(row) : -1;
 };
-onMounted(() => nextTick(() => {
-  resizeObserver = new ResizeObserver(fitColumnsToContainer);
-  if (modelTableHost.value) resizeObserver.observe(modelTableHost.value);
-  fitColumnsToContainer();
-}));
-onBeforeUnmount(() => {
-  stopResizePreview?.();
-  resizeObserver?.disconnect();
-});
+
+const stopModelRowDrag = () => {
+  window.removeEventListener('pointermove', moveModelRowDrag);
+  window.removeEventListener('pointerup', stopModelRowDrag);
+  window.removeEventListener('pointercancel', stopModelRowDrag);
+  if (recentMoveTimer) clearTimeout(recentMoveTimer);
+  recentlyMovedModelRow.value = null;
+  draggingModelRow.value = null;
+  modelDragPointerId = null;
+};
+
+const moveModelRowDrag = (event: PointerEvent) => {
+  if (modelDragPointerId !== event.pointerId || draggingModelRow.value === null) return;
+  event.preventDefault();
+  const from = draggingModelRow.value;
+  const to = rowIndexAtPoint(modelTableHost.value!, event.clientX, event.clientY);
+  const target = Math.min(to, modelRows.value.length - 2);
+  if (target < 0 || from === target || from >= modelRows.value.length - 1) return;
+  const direction = from < target ? 'down' : 'up';
+  emit('moveModelRow', from, direction);
+  recentlyMovedModelRow.value = from;
+  if (recentMoveTimer) clearTimeout(recentMoveTimer);
+  recentMoveTimer = setTimeout(() => { recentlyMovedModelRow.value = null; }, 220);
+  draggingModelRow.value = target;
+};
+
+const startModelRowDrag = (index: number, event: PointerEvent) => {
+  if (event.button !== 0 || index >= modelRows.value.length - 1) return;
+  event.preventDefault();
+  event.stopPropagation();
+  modelDragPointerId = event.pointerId;
+  draggingModelRow.value = index;
+  window.addEventListener('pointermove', moveModelRowDrag, { passive: false });
+  window.addEventListener('pointerup', stopModelRowDrag);
+  window.addEventListener('pointercancel', stopModelRowDrag);
+};
+
+onBeforeUnmount(stopModelRowDrag);
+
 </script>
 
 <template>
@@ -182,8 +157,19 @@ onBeforeUnmount(() => {
     <el-tabs v-model="extractPanelTab" class="extract-tabs">
       <el-tab-pane :label="t('workPage.tabs.extractByDrawIB')" name="drawib">
         <div ref="modelTableHost" class="table-row">
-          <el-table ref="modelTable" :data="modelRows" border size="small" class="model-table glass-table" @mousedown.capture="constrainResizePreview($event, modelTable)" @header-dragend="keepDraggedColumnWidth">
-            <el-table-column :label="t('workPage.columns.drawIB')" :width="DRAW_IB_INITIAL_COLUMN_RATIOS.drawIB" min-width="130" label-class-name="column-min-130">
+          <el-table :data="modelRows" border size="small" class="model-table glass-table" :row-class-name="modelRowClass">
+            <el-table-column width="40" align="center" :resizable="false" class-name="model-table-drag-column">
+              <template #default="{ $index }">
+                <button
+                  type="button"
+                  class="row-drag-handle"
+                  :class="{ 'is-dragging': draggingModelRow === $index }"
+                  :aria-label="t('workPage.ui.dragRow')"
+                  @pointerdown="startModelRowDrag($index, $event)"
+                ><el-icon><Rank /></el-icon></button>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('workPage.columns.drawIB')" min-width="130" :resizable="false">
               <template #default="{ $index }">
                 <el-input
                   v-model="modelRows[$index].drawIB"
@@ -191,32 +177,12 @@ onBeforeUnmount(() => {
                 />
               </template>
             </el-table-column>
-            <el-table-column :label="t('workPage.columns.aliasName')" :width="DRAW_IB_INITIAL_COLUMN_RATIOS.aliasName" min-width="140" label-class-name="column-min-140">
+            <el-table-column :label="t('workPage.columns.aliasName')" min-width="140" :resizable="false">
               <template #default="{ $index }">
                 <el-input
                   v-model="modelRows[$index].aliasName"
                   :placeholder="t('workPage.placeholders.enterAlias')"
                 />
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('workPage.columns.order')" :width="DRAW_IB_INITIAL_COLUMN_RATIOS.order" min-width="60" align="center" label-class-name="column-min-60">
-              <template #default="{ $index }">
-                <div class="row-move-actions">
-                  <el-button
-                    size="small"
-                    class="row-move-btn"
-                    :icon="ArrowUp"
-                    :disabled="$index === 0"
-                    @click="emit('moveModelRow', $index, 'up')"
-                  />
-                  <el-button
-                    size="small"
-                    class="row-move-btn"
-                    :icon="ArrowDown"
-                    :disabled="$index === modelRows.length - 1"
-                    @click="emit('moveModelRow', $index, 'down')"
-                  />
-                </div>
               </template>
             </el-table-column>
             <el-table-column width="56" align="center" :resizable="false" class-name="model-table-actions-column" label-class-name="model-table-actions-column">
@@ -345,60 +311,48 @@ onBeforeUnmount(() => {
   background-color: rgba(var(--theme-surface-tint-rgb), 0.12);
 }
 
-.row-move-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0;
-  width: 100%;
-}
-
-.row-move-btn {
-  width: 22px;
-  height: 22px;
-  min-height: 22px;
-  padding: 0;
-  border-radius: 0;
-  background: rgba(var(--theme-surface-tint-rgb), 0.045) !important;
-  border-color: rgba(var(--theme-surface-tint-rgb), 0.14) !important;
-  color: rgba(var(--theme-text-secondary-rgb), 0.72) !important;
-  display: inline-grid !important;
-  place-items: center;
-  line-height: 1;
-}
-
-.row-move-btn :deep(.el-icon) {
-  width: 14px;
-  height: 14px;
-  display: grid;
-  place-items: center;
-}
-
-.row-move-btn :deep(.el-icon svg) {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-
 .model-table :deep(.model-table-actions-column) {
   cursor: default !important;
 }
 
-.row-move-btn:hover {
-  background: rgba(var(--theme-surface-tint-rgb), 0.10) !important;
-  border-color: rgba(var(--theme-surface-tint-rgb), 0.28) !important;
-  color: var(--theme-accent) !important;
+.row-drag-handle {
+  width: 22px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(var(--theme-text-secondary-rgb), 0.58);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
-.row-move-actions .row-move-btn:first-child {
-  border-top-left-radius: 4px;
-  border-bottom-left-radius: 4px;
+.row-drag-handle:hover,
+.row-drag-handle.is-dragging {
+  background: rgba(var(--theme-surface-tint-rgb), 0.12);
+  color: var(--theme-accent);
 }
 
-.row-move-actions .row-move-btn:last-child {
-  border-top-right-radius: 4px;
-  border-bottom-right-radius: 4px;
-  margin-left: -1px;
+.row-drag-handle.is-dragging {
+  cursor: grabbing;
+  opacity: 0.72;
+}
+
+.model-table :deep(.work-row-dragging > td) {
+  opacity: 0.68;
+  transition: opacity 140ms ease, background-color 140ms ease;
+}
+
+.model-table :deep(.work-row-recently-moved > td) {
+  animation: work-row-shift 220ms ease-out;
+}
+
+@keyframes work-row-shift {
+  0% { transform: translateY(-4px); background-color: rgba(var(--theme-accent-rgb), 0.15); }
+  100% { transform: translateY(0); background-color: transparent; }
 }
 
 .config-row-delete-btn {

@@ -615,8 +615,8 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.028);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.045);
   color: rgba(232, 236, 245, 0.82);
   font: inherit;
   font-size: 12px;
@@ -635,18 +635,15 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
 }
 
 .workspace-list-item:hover {
-  background: rgba(var(--theme-surface-tint-rgb), 0.07);
-  border-color: rgba(var(--theme-surface-tint-rgb), 0.20);
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(var(--theme-surface-tint-rgb), 0.40);
   color: rgba(var(--theme-text-primary-rgb), 0.94);
-  transform: translateY(-1px);
 }
 
 .workspace-list-item.is-active {
-  border-width: 2px;
-  border-color: rgba(var(--theme-surface-tint-rgb), 0.66);
-  background: rgba(var(--theme-surface-tint-rgb), 0.10);
-  color: rgba(var(--theme-text-primary-rgb), 0.98);
-  box-shadow: 0 6px 18px rgba(var(--theme-surface-tint-rgb), 0.08);
+  border-color: rgba(var(--theme-surface-tint-rgb), 0.58);
+  background: rgba(var(--theme-surface-tint-rgb), 0.14);
+  color: #b8e5ff;
 }
 
 .side-menu-trigger {
@@ -657,7 +654,7 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
   justify-content: flex-start;
   gap: 0;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: 4px;
   border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.14);
   background: rgba(var(--theme-surface-tint-rgb), 0.045);
   color: rgba(var(--theme-text-secondary-rgb), 0.76);
@@ -682,11 +679,9 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
 }
 
 .side-menu-trigger:hover {
-  border-color: rgba(var(--theme-surface-tint-rgb), 0.28);
-  background: rgba(var(--theme-surface-tint-rgb), 0.09);
-  color: var(--theme-accent);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(var(--theme-surface-tint-rgb), 0.08);
+  border-color: rgba(var(--theme-surface-tint-rgb), 0.45);
+  background: rgba(var(--theme-surface-tint-rgb), 0.10);
+  color: #a9dfff;
 }
 
 .specific-ib-dump-toggle {

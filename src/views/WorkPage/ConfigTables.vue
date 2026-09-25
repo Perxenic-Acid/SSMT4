@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Delete } from '@element-plus/icons-vue';
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { Delete, Rank } from '@element-plus/icons-vue';
+import { onBeforeUnmount, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { SkipRow, VSCheckRow } from './WorkPage.types';
 
@@ -11,109 +11,96 @@ const vsRows = defineModel<VSCheckRow[]>('vsRows', { required: true });
 
 const emit = defineEmits<{
   removeSkipRow: [index: number];
+  moveSkipRow: [index: number, direction: 'up' | 'down'];
   generateIBSkip: [];
   removeVSCheckRow: [index: number];
+  moveVSCheckRow: [index: number, direction: 'up' | 'down'];
   updateVSCheck: [];
   generateVSCheck: [];
 }>();
 
-type ResizableColumn = { minWidth?: number | string; width?: number | string; realWidth?: number | null };
-const skipTable = ref<any>();
-const vsTable = ref<any>();
-const skipTableHost = ref<HTMLElement>();
-const vsTableHost = ref<HTMLElement>();
-let resizePair: { next?: ResizableColumn; nextStart: number } | undefined;
-const resizeObservers: ResizeObserver[] = [];
-
-const fitColumnsToContainer = (host: HTMLElement | undefined, tableInstance: any) => {
-  if (!host || !tableInstance) return;
-  const columns = tableInstance.store?.states?.columns?.value as ResizableColumn[] | undefined;
-  if (!columns?.length) return;
-  const available = host.clientWidth;
-  const fixedWidth = Number(columns.at(-1)?.realWidth ?? columns.at(-1)?.width) || 56;
-  const resizable = columns.slice(0, -1);
-  const currentTotal = resizable.reduce((sum, item) => sum + (Number(item.realWidth ?? item.width) || 0), 0);
-  if (available <= fixedWidth || currentTotal <= 0) return;
-  const scale = (available - fixedWidth) / currentTotal;
-  let used = fixedWidth;
-  resizable.forEach((item, index) => {
-    const width = index === resizable.length - 1
-      ? available - used
-      : Math.round((Number(item.realWidth ?? item.width) || 0) * scale);
-    item.width = width;
-    item.realWidth = width;
-    used += width;
-  });
-  tableInstance.store.scheduleLayout(false, true);
+const draggingSkipRow = ref<number | null>(null);
+const draggingVSRow = ref<number | null>(null);
+const recentlyMovedKind = ref<'skip' | 'vs' | null>(null);
+const recentlyMovedRow = ref<number | null>(null);
+const skipTableHost = ref<HTMLElement | null>(null);
+const vsTableHost = ref<HTMLElement | null>(null);
+let dragKind: 'skip' | 'vs' | null = null;
+let dragPointerId: number | null = null;
+let recentMoveTimer: ReturnType<typeof setTimeout> | undefined;
+const rowClass = (kind: 'skip' | 'vs') => ({ rowIndex }: { rowIndex: number }) => {
+  const classes: string[] = [];
+  const dragging = getDragState(kind).value;
+  if (dragging === rowIndex) classes.push('work-row-dragging');
+  if (recentlyMovedKind.value === kind && recentlyMovedRow.value === rowIndex) classes.push('work-row-recently-moved');
+  return classes.join(' ');
 };
-
-const observeTable = (host: HTMLElement | undefined, tableInstance: any) => {
-  if (!host) return;
-  const observer = new ResizeObserver(() => fitColumnsToContainer(host, tableInstance));
-  observer.observe(host);
-  resizeObservers.push(observer);
-  fitColumnsToContainer(host, tableInstance);
+const getDragState = (kind: 'skip' | 'vs') => kind === 'skip' ? draggingSkipRow : draggingVSRow;
+const rowIndexAtPoint = (host: HTMLElement, clientX: number, clientY: number): number => {
+  const row = document.elementFromPoint(clientX, clientY)?.closest('tr');
+  if (!row || !host.contains(row)) return -1;
+  const body = row.parentElement;
+  return body ? Array.from(body.children).indexOf(row) : -1;
 };
-const keepDraggedColumnWidth = (newWidth: number, _oldWidth: number, column: ResizableColumn) => {
-  const minimum = Number(column.minWidth) || 60;
-  const resolvedWidth = Math.max(minimum, newWidth);
-  column.width = resolvedWidth;
-  column.realWidth = resolvedWidth;
-  if (resizePair?.next) {
-    const nextWidth = resizePair.nextStart - (resolvedWidth - _oldWidth);
-    resizePair.next.width = nextWidth;
-    resizePair.next.realWidth = nextWidth;
-  }
-  resizePair = undefined;
+const stopRowDrag = () => {
+  window.removeEventListener('pointermove', moveRowDrag);
+  window.removeEventListener('pointerup', stopRowDrag);
+  window.removeEventListener('pointercancel', stopRowDrag);
+  if (recentMoveTimer) clearTimeout(recentMoveTimer);
+  recentlyMovedKind.value = null;
+  recentlyMovedRow.value = null;
+  draggingSkipRow.value = null;
+  draggingVSRow.value = null;
+  dragKind = null;
+  dragPointerId = null;
 };
-
-let stopResizePreview: (() => void) | undefined;
-const constrainResizePreview = (event: MouseEvent, tableInstance: any) => {
-  const headerCell = (event.target as HTMLElement | null)?.closest('th.el-table__cell') as HTMLElement | null;
-  const table = headerCell?.closest('.el-table') as HTMLElement | null;
-  if (!headerCell || !table || headerCell.classList.contains('model-table-actions-column')) return;
-  const classMinimum = [...headerCell.classList].find((name) => name.startsWith('column-min-'));
-  const minimum = Number(classMinimum?.slice('column-min-'.length)) || 80;
-  const tableLeft = table.getBoundingClientRect().left;
-  const minimumLeft = headerCell.getBoundingClientRect().left - tableLeft + minimum;
-  const headers = [...headerCell.parentElement!.children] as HTMLElement[];
-  const columnIndex = headers.indexOf(headerCell);
-  const columns = tableInstance?.store?.states?.columns?.value as ResizableColumn[] | undefined;
-  const current = columns?.[columnIndex];
-  const next = columns?.[columnIndex + 1];
-  if (!current || !next) return;
-  const currentStart = Number(current.realWidth ?? current.width) || headerCell.offsetWidth;
-  const nextStart = Number(next.realWidth ?? next.width) || headers[columnIndex + 1]?.offsetWidth || 0;
-  const nextMinimum = Number(next.minWidth) || 56;
-  const maximumLeft = headerCell.getBoundingClientRect().left - tableLeft + currentStart + nextStart - nextMinimum;
-  resizePair = { next, nextStart };
-  const move = () => requestAnimationFrame(() => {
-    const proxy = table.querySelector('.el-table__column-resize-proxy') as HTMLElement | null;
-    if (proxy) proxy.style.left = `${Math.min(maximumLeft, Math.max(minimumLeft, Number.parseFloat(proxy.style.left)))}px`;
-  });
-  document.addEventListener('mousemove', move, true);
-  const stop = () => {
-    document.removeEventListener('mousemove', move, true);
-    document.removeEventListener('mouseup', stop, true);
-  };
-  document.addEventListener('mouseup', stop, true);
-  stopResizePreview = stop;
+const moveRowDrag = (event: PointerEvent) => {
+  if (!dragKind || dragPointerId !== event.pointerId) return;
+  const state = getDragState(dragKind);
+  const host = dragKind === 'skip' ? skipTableHost.value : vsTableHost.value;
+  if (!host || state.value === null) return;
+  event.preventDefault();
+  const rowCount = dragKind === 'skip' ? skipRows.value.length : vsRows.value.length;
+  const target = Math.min(rowIndexAtPoint(host, event.clientX, event.clientY), rowCount - 2);
+  const from = state.value;
+  if (target < 0 || from === target || from >= rowCount - 1) return;
+  const direction = from < target ? 'down' : 'up';
+  if (dragKind === 'skip') emit('moveSkipRow', from, direction);
+  else emit('moveVSCheckRow', from, direction);
+  recentlyMovedKind.value = dragKind;
+  recentlyMovedRow.value = from;
+  if (recentMoveTimer) clearTimeout(recentMoveTimer);
+  recentMoveTimer = setTimeout(() => {
+    recentlyMovedKind.value = null;
+    recentlyMovedRow.value = null;
+  }, 220);
+  state.value = target;
 };
-onMounted(() => nextTick(() => {
-  observeTable(skipTableHost.value, skipTable.value);
-  observeTable(vsTableHost.value, vsTable.value);
-}));
-onBeforeUnmount(() => {
-  stopResizePreview?.();
-  resizeObservers.forEach((observer) => observer.disconnect());
-});
+const startRowDrag = (kind: 'skip' | 'vs', index: number, event: PointerEvent) => {
+  const rowCount = kind === 'skip' ? skipRows.value.length : vsRows.value.length;
+  if (event.button !== 0 || index >= rowCount - 1) return;
+  event.preventDefault();
+  event.stopPropagation();
+  dragKind = kind;
+  dragPointerId = event.pointerId;
+  getDragState(kind).value = index;
+  window.addEventListener('pointermove', moveRowDrag, { passive: false });
+  window.addEventListener('pointerup', stopRowDrag);
+  window.addEventListener('pointercancel', stopRowDrag);
+};
+onBeforeUnmount(stopRowDrag);
 </script>
 
 <template>
   <section class="inner-panel">
     <div ref="skipTableHost" class="table-row">
-      <el-table ref="skipTable" :data="skipRows" border size="small" class="model-table glass-table" @mousedown.capture="constrainResizePreview($event, skipTable)" @header-dragend="keepDraggedColumnWidth">
-        <el-table-column :label="t('workPage.columns.skipIB')" width="130" min-width="110" label-class-name="column-min-110">
+      <el-table :data="skipRows" border size="small" class="model-table glass-table" :row-class-name="rowClass('skip')">
+        <el-table-column width="40" align="center" :resizable="false" class-name="model-table-drag-column">
+          <template #default="{ $index }">
+            <button type="button" class="row-drag-handle" :class="{ 'is-dragging': draggingSkipRow === $index }" :aria-label="t('workPage.ui.dragRow')" @pointerdown="startRowDrag('skip', $index, $event)"><el-icon><Rank /></el-icon></button>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('workPage.columns.skipIB')" min-width="110" :resizable="false">
           <template #default="{ $index }">
             <el-input
               v-model="skipRows[$index].skipIB"
@@ -121,7 +108,7 @@ onBeforeUnmount(() => {
             />
           </template>
         </el-table-column>
-        <el-table-column :label="t('workPage.columns.aliasName')" width="150" min-width="120" label-class-name="column-min-120">
+        <el-table-column :label="t('workPage.columns.aliasName')" min-width="120" :resizable="false">
           <template #default="{ $index }">
             <el-input
               v-model="skipRows[$index].aliasName"
@@ -129,7 +116,7 @@ onBeforeUnmount(() => {
             />
           </template>
         </el-table-column>
-        <el-table-column :label="t('workPage.columns.indexCount')" width="110" min-width="90" label-class-name="column-min-90">
+        <el-table-column :label="t('workPage.columns.indexCount')" min-width="90" :resizable="false">
           <template #default="{ $index }">
             <el-input
               v-model="skipRows[$index].indexCount"
@@ -137,7 +124,7 @@ onBeforeUnmount(() => {
             />
           </template>
         </el-table-column>
-        <el-table-column :label="t('workPage.columns.firstIndex')" width="110" min-width="90" label-class-name="column-min-90">
+        <el-table-column :label="t('workPage.columns.firstIndex')" min-width="90" :resizable="false">
           <template #default="{ $index }">
             <el-input
               v-model="skipRows[$index].firstIndex"
@@ -170,13 +157,18 @@ onBeforeUnmount(() => {
 
   <section class="inner-panel">
     <div ref="vsTableHost" class="table-row">
-      <el-table ref="vsTable" :data="vsRows" border size="small" class="model-table glass-table" @mousedown.capture="constrainResizePreview($event, vsTable)" @header-dragend="keepDraggedColumnWidth">
-        <el-table-column :label="t('workPage.columns.enabled')" width="80" min-width="72" align="center">
+      <el-table :data="vsRows" border size="small" class="model-table glass-table" :row-class-name="rowClass('vs')">
+        <el-table-column width="40" align="center" :resizable="false" class-name="model-table-drag-column">
+          <template #default="{ $index }">
+            <button type="button" class="row-drag-handle" :class="{ 'is-dragging': draggingVSRow === $index }" :aria-label="t('workPage.ui.dragRow')" @pointerdown="startRowDrag('vs', $index, $event)"><el-icon><Rank /></el-icon></button>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('workPage.columns.enabled')" width="80" min-width="72" align="center" :resizable="false">
           <template #default="{ $index }">
             <el-checkbox v-model="vsRows[$index].enabled" />
           </template>
         </el-table-column>
-        <el-table-column :label="t('workPage.columns.vsHash')" width="420" min-width="180" label-class-name="column-min-180">
+        <el-table-column :label="t('workPage.columns.vsHash')" min-width="180" :resizable="false">
           <template #default="{ $index }">
             <el-input
               v-model="vsRows[$index].hash"
@@ -246,6 +238,46 @@ onBeforeUnmount(() => {
 
 .config-row-delete-btn:active {
   transform: scale(0.94);
+}
+
+.row-drag-handle {
+  width: 22px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(var(--theme-text-secondary-rgb), 0.58);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.row-drag-handle:hover,
+.row-drag-handle.is-dragging {
+  background: rgba(var(--theme-surface-tint-rgb), 0.12);
+  color: var(--theme-accent);
+}
+
+.row-drag-handle.is-dragging {
+  cursor: grabbing;
+  opacity: 0.72;
+}
+
+.model-table :deep(.work-row-dragging > td) {
+  opacity: 0.68;
+  transition: opacity 140ms ease, background-color 140ms ease;
+}
+
+.model-table :deep(.work-row-recently-moved > td) {
+  animation: work-row-shift 220ms ease-out;
+}
+
+@keyframes work-row-shift {
+  0% { transform: translateY(-4px); background-color: rgba(var(--theme-accent-rgb), 0.15); }
+  100% { transform: translateY(0); background-color: transparent; }
 }
 
 .inner-panel {

@@ -1017,6 +1017,7 @@
       "sortByNewest": "日期（新到旧）",
       "sortByName": "名称",
       "sortWorkspaces": "工作空间排序方式",
+      "dragRow": "拖动以重新排序",
       "defaultTabNamePrefix": "LOD",
       "specificIbDumpHint": "禁用 Mods 引用，并且只对当前 LOD DrawIB 列表里的 IB 执行 Dump。",
       "workspaceName": "工作空间",

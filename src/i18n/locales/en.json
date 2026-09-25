@@ -1018,6 +1018,7 @@
       "sortByNewest": "Date (newest)",
       "sortByName": "Name",
       "sortWorkspaces": "Workspace sorting",
+      "dragRow": "Drag to reorder",
       "defaultTabNamePrefix": "LOD",
       "specificIbDumpHint": "Disable Mods include and only dump the DrawIB list shown in this LOD.",
       "workspaceName": "Workspace",
