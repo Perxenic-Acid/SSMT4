@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "ssmt.hoyoshade.bridge",
+  "name": "HoYoShade Bridge",
+  "version": "0.1.0",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.x",
+    "platforms": ["windows-x64"]
+  },
+  "contributions": {
+    "runtimePlugins": [],
+    "launcherAdapters": [
+      {
+        "type": "process-forwarder",
+        "executable": "${external.hoyoshade}/inject.exe",
+        "arguments": ["${game.processName}"],
+        "workingDirectory": "${external.hoyoshade}",
+        "ready": {
+          "type": "stderr-contains",
+          "value": "HOYOSHADE_READY:9999",
+          "timeoutMs": 15000
+        },
+        "failurePolicy": "abort"
+      }
+    ],
+    "uiPages": []
+  },
+  "externalDependencies": [
+    {
+      "id": "hoyoshade",
+      "type": "directory",
+      "requiredFiles": [
+        "inject.exe",
+        "ReShade64.dll",
+        "LauncherResource/INIBuild.exe",
+        "InjectResource",
+        "reshade-shaders",
+        "Presets"
+      ]
+    }
+  ],
+  "permissions": ["process.spawn", "process.observe", "game.launch"]
+}
