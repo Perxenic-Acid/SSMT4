@@ -1,5 +1,6 @@
 use super::package_installer::install_ssmtpkg;
 use super::registry::{ExternalDependencyState, PluginRegistry};
+use super::settings::PluginSettingsStore;
 use super::PluginManifest;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -176,6 +177,37 @@ pub fn install_plugin_package(
     install_ssmtpkg(&mut registry, &PathBuf::from(archive_path))
         .map_err(|error| error.to_string())?;
     Ok(snapshot(&registry))
+}
+
+#[tauri::command]
+pub fn get_plugin_setting(
+    plugin_id: String,
+    key: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    if registry.find(&plugin_id).is_none() {
+        return Err(format!("plugin not found: {plugin_id}"));
+    }
+    PluginSettingsStore::from_default_location()
+        .and_then(|store| store.get(&plugin_id, &key))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_plugin_setting(
+    plugin_id: String,
+    key: String,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    if registry.find(&plugin_id).is_none() {
+        return Err(format!("plugin not found: {plugin_id}"));
+    }
+    let mut store =
+        PluginSettingsStore::from_default_location().map_err(|error| error.to_string())?;
+    store
+        .set(&plugin_id, &key, value)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
