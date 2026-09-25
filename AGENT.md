@@ -169,6 +169,8 @@ TheHerta 主要涉及：
 
 除非任务明确要求，否则不要自动 commit、push、rebase、reset 或 force push。
 
+除非明确要求或环境迫使, 否则必须使用中文 commit、注释等.
+
 ## 7. 修改原则
 
 ### 7.1 先理解现有实现
