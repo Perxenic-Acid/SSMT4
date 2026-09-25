@@ -38,6 +38,26 @@ pub struct PluginManifest {
 pub struct PluginCompatibility {
     pub ssmt: String,
     pub platforms: Vec<String>,
+    #[serde(default)]
+    pub games: Vec<String>,
+}
+
+impl PluginCompatibility {
+    pub fn supports(&self, ssmt_version: &str, platform: &str, game: Option<&str>) -> bool {
+        let Ok(version) = Version::parse(ssmt_version) else {
+            return false;
+        };
+        let Ok(requirement) = VersionReq::parse(&self.ssmt.replace(['x', 'X', '*'], "0")) else {
+            return false;
+        };
+        if !requirement.matches(&version) || !self.platforms.iter().any(|item| item == platform) {
+            return false;
+        }
+        match game {
+            Some(game) if !self.games.is_empty() => self.games.iter().any(|item| item == game),
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -655,6 +675,18 @@ mod tests {
             manifest.validate(),
             Err(PluginManifestError::InvalidContribution(_))
         ));
+    }
+
+    #[test]
+    fn compatibility_matches_version_platform_and_optional_game() {
+        let compatibility = PluginCompatibility {
+            ssmt: ">=4.0.0, <5.0.0".to_string(),
+            platforms: vec!["windows-x64".to_string()],
+            games: vec!["GIMI".to_string()],
+        };
+        assert!(compatibility.supports("4.1.89", "windows-x64", Some("GIMI")));
+        assert!(!compatibility.supports("5.0.0", "windows-x64", Some("GIMI")));
+        assert!(!compatibility.supports("4.1.89", "windows-x64", Some("ZZMI")));
     }
 
     #[test]

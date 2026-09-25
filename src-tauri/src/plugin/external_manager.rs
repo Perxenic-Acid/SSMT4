@@ -172,6 +172,7 @@ mod tests {
                 compatibility: PluginCompatibility {
                     ssmt: ">=4.0.0".to_string(),
                     platforms: vec!["windows-x64".to_string()],
+                    games: Vec::new(),
                 },
                 contributions: PluginContributions {
                     external_managers: vec![ExternalManagerContribution {

@@ -20,6 +20,8 @@ pub struct MarketplaceEntry {
     pub download_url: String,
     pub sha256: String,
     pub minimum_ssmt_version: String,
+    #[serde(default)]
+    pub maximum_ssmt_version: Option<String>,
     pub supported_platforms: Vec<String>,
     #[serde(default)]
     pub supported_games: Vec<String>,
@@ -92,6 +94,14 @@ impl MarketplaceCatalog {
                         entry.minimum_ssmt_version
                     ))
                 })?;
+            if let Some(maximum) = &entry.maximum_ssmt_version {
+                semver::VersionReq::parse(&format!("<={}", maximum.replace(['x', 'X', '*'], "0")))
+                    .map_err(|_| {
+                        MarketplaceError::InvalidEntry(format!(
+                            "invalid maximum SSMT version: {maximum}"
+                        ))
+                    })?;
+            }
             let url = reqwest::Url::parse(&entry.download_url)
                 .map_err(|_| MarketplaceError::InvalidUrl(entry.download_url.clone()))?;
             if url.scheme() != "https" {
@@ -124,6 +134,36 @@ impl MarketplaceCatalog {
     }
 }
 
+impl MarketplaceEntry {
+    pub fn supports(&self, ssmt_version: &str, platform: &str, game: Option<&str>) -> bool {
+        let Ok(version) = semver::Version::parse(ssmt_version) else {
+            return false;
+        };
+        let minimum =
+            semver::VersionReq::parse(&self.minimum_ssmt_version.replace(['x', 'X', '*'], "0"));
+        if minimum.map_or(true, |requirement| !requirement.matches(&version)) {
+            return false;
+        }
+        if let Some(maximum) = &self.maximum_ssmt_version {
+            let Ok(requirement) =
+                semver::VersionReq::parse(&format!("<={}", maximum.replace(['x', 'X', '*'], "0")))
+            else {
+                return false;
+            };
+            if !requirement.matches(&version) {
+                return false;
+            }
+        }
+        self.supported_platforms.iter().any(|item| item == platform)
+            && (game.is_none()
+                || self.supported_games.is_empty()
+                || self
+                    .supported_games
+                    .iter()
+                    .any(|item| Some(item.as_str()) == game))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +178,7 @@ mod tests {
             download_url: "https://example.com/ssmt.hoyoshade.bridge.ssmtpkg".to_string(),
             sha256: "a".repeat(64),
             minimum_ssmt_version: ">=4.x".to_string(),
+            maximum_ssmt_version: None,
             supported_platforms: vec!["windows-x64".to_string()],
             supported_games: vec!["GIMI".to_string()],
             package_size: 1234,
@@ -202,5 +243,14 @@ mod tests {
             .validate(),
             Err(MarketplaceError::UnsupportedPlatform(_))
         ));
+    }
+
+    #[test]
+    fn applies_minimum_maximum_platform_and_game_compatibility() {
+        let mut value = entry();
+        value.maximum_ssmt_version = Some("4.9.0".to_string());
+        assert!(value.supports("4.1.89", "windows-x64", Some("GIMI")));
+        assert!(!value.supports("5.0.0", "windows-x64", Some("GIMI")));
+        assert!(!value.supports("4.1.89", "windows-x64", Some("ZZMI")));
     }
 }
