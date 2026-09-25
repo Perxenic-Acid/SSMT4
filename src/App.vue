@@ -113,6 +113,9 @@ const selectedFirstRunPages = computed(() => {
 });
 const confirmFirstRunRole = async () => {
   if (!selectedFirstRunRole.value || !firstRunCacheResolved.value) return;
+  // Launcher-style home content is useful to players and mixed users, while
+  // author-only setups keep the focused workspace layout by default.
+  appSettings.showHomeLauncherContent = selectedFirstRunRole.value !== 'author';
   appSettings.DBMTWorkFolder = firstRunCacheResolved.value;
   localStorage.setItem('ssmt4:post-processing-preview:lighting-mode', appSettings.postProcessPreviewLightingMode);
   appSettings.sidebarGameOrder = [
@@ -263,6 +266,8 @@ onUnmounted(() => {
       <!-- Video Background -->
       <video v-if="appSettings.bgType === BGType.Video && appSettings.bgVideo" :key="appSettings.bgVideo"
         :src="appSettings.bgVideo" autoplay loop muted playsinline class="bg-item"></video>
+      <div v-if="appSettings.bgType === BGType.Video && appSettings.bgTheme" :key="appSettings.bgTheme" class="bg-item bg-video-theme"
+        :style="{ backgroundImage: `url(${appSettings.bgTheme})` }"></div>
     </transition-group>
   </div>
 
@@ -597,6 +602,12 @@ textarea {
   background-size: cover;
   background-position: center;
   will-change: opacity;
+}
+.bg-video-theme {
+  z-index: 1;
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
 }
 
 /* Transition Classes */

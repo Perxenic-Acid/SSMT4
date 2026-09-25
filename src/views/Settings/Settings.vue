@@ -18,9 +18,9 @@ import { ref, onMounted, computed, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
   ArrowRight,
+  Bell,
   Brush,
   ChatDotRound,
-  Coffee,
   Delete,
   Document,
   Edit,
@@ -513,6 +513,34 @@ const confirmCreateGame = async () => {
                   />
                 </div>
               </div>
+              <div class="setting-row">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
+                  <div>
+                    <div class="setting-label">{{ t('settings.personalization.homeLauncherContent') }}</div>
+                    <div class="setting-description">{{ t('settings.personalization.homeLauncherContentHint') }}</div>
+                  </div>
+                </div>
+                <div class="setting-control compact-control">
+                  <el-switch v-model="appSettings.showHomeLauncherContent" :aria-label="t('settings.personalization.homeLauncherContent')" />
+                </div>
+              </div>
+              <div class="setting-row setting-subrow">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Bell /></el-icon></span>
+                  <div>
+                    <div class="setting-label">{{ t('settings.personalization.homeGameNews') }}</div>
+                    <div class="setting-description">{{ t('settings.personalization.homeGameNewsHint') }}</div>
+                  </div>
+                </div>
+                <div class="setting-control compact-control">
+                  <el-switch
+                    v-model="appSettings.showHomeGameNews"
+                    :disabled="!appSettings.showHomeLauncherContent"
+                    :aria-label="t('settings.personalization.homeGameNews')"
+                  />
+                </div>
+              </div>
             </div>
           </section>
 
@@ -825,6 +853,13 @@ const confirmCreateGame = async () => {
 
 .setting-row + .setting-row {
   border-top: 1px solid rgba(var(--theme-surface-tint-rgb), 0.10);
+}
+
+.setting-subrow {
+  margin-left: 42px;
+  min-height: 68px;
+  padding-left: 14px;
+  border-left: 2px solid rgba(var(--theme-surface-tint-rgb), 0.18);
 }
 
 .setting-row-wide {

@@ -25,6 +25,21 @@ export interface GameInfo {
   iconPath: string
   bgPath: string
   bgVideoPath?: string
+  bgThemePath?: string
+  bgImages?: string[]
+  bgVideos?: string[]
+  backgroundEntries?: Array<{
+    id: string
+    type: BGType
+    imagePath?: string
+    videoPath?: string
+    themePath?: string
+    imageUrl?: string
+    videoUrl?: string
+    themeUrl?: string
+  }>
+  selectedBackgroundId?: string
+  bgIndex?: number
   bgType: BGType
   showSidebar: boolean
 }
@@ -234,12 +249,26 @@ export const useAppStateStore = defineStore('appState', () => {
         const icon = g.icon_path ? convertFileSrc(g.icon_path) + `?t=${timestamp}` : ''
         const bg = g.bg_path ? convertFileSrc(g.bg_path) + `?t=${timestamp}` : undefined
         const bgVideo = g.bg_video_path ? convertFileSrc(g.bg_video_path) + `?t=${timestamp}` : undefined
+        const bgTheme = g.bg_theme_path ? convertFileSrc(g.bg_theme_path) + `?t=${timestamp}` : undefined
 
         return {
           name: g.name,
           iconPath: icon,
           bgPath: bg,
           bgVideoPath: bgVideo,
+          bgThemePath: bgTheme,
+          bgImages: (g.bg_images || []).map(path => convertFileSrc(path) + `?t=${timestamp}`),
+          bgVideos: (g.bg_videos || []).map(path => convertFileSrc(path) + `?t=${timestamp}`),
+          backgroundEntries: (g.background_entries || []).map(entry => ({
+            ...entry,
+            imagePath: entry.imagePath ? convertFileSrc(entry.imagePath) + `?t=${timestamp}` : undefined,
+            videoPath: entry.videoPath ? convertFileSrc(entry.videoPath) + `?t=${timestamp}` : undefined,
+            themePath: entry.themePath ? convertFileSrc(entry.themePath) + `?t=${timestamp}` : undefined,
+          })),
+          selectedBackgroundId: g.selected_background_id,
+          bgIndex: g.selected_background_id
+            ? Math.max(0, (g.background_entries || []).findIndex(entry => entry.id === g.selected_background_id))
+            : 0,
           bgType: g.bg_type || BGType.Image,
           showSidebar: g.show_sidebar,
         } as GameInfo
@@ -258,11 +287,13 @@ export const useAppStateStore = defineStore('appState', () => {
           appSettings.bgType = BGType.Image
           appSettings.bgImage = DEFAULT_BG_IMAGE
           appSettings.bgVideo = ''
+          appSettings.bgTheme = ''
         }
       } else {
         appSettings.bgType = BGType.Image
         appSettings.bgImage = DEFAULT_BG_IMAGE
         appSettings.bgVideo = ''
+        appSettings.bgTheme = ''
       }
     } catch (e) {
       console.error('Failed to scan games:', e)
@@ -296,8 +327,16 @@ export const useAppStateStore = defineStore('appState', () => {
     appSettings.CurrentWorkSpace = appSettings.CurrentWorkSpaceByGame?.[workspaceMemoryKey] || ''
     const useVideo = game.bgType === BGType.Video
 
+    const selectedEntry = game.backgroundEntries?.[game.bgIndex || 0]
+    if (selectedEntry) {
+      applyBackgroundEntry(game, game.bgIndex || 0)
+      void autoUpdateBackgroundIfNeeded(game)
+      return
+    }
+
     if (useVideo && game.bgVideoPath) {
       const newVideo = game.bgVideoPath || ''
+      appSettings.bgTheme = game.bgThemePath || ''
       if (appSettings.bgType !== BGType.Video) {
         appSettings.bgType = BGType.Video
         if (appSettings.bgVideo !== newVideo) appSettings.bgVideo = newVideo
@@ -312,12 +351,33 @@ export const useAppStateStore = defineStore('appState', () => {
         appSettings.bgType = BGType.Image
         if (appSettings.bgImage !== resolvedImage) appSettings.bgImage = resolvedImage
         if (appSettings.bgVideo !== '') appSettings.bgVideo = ''
+        appSettings.bgTheme = ''
       } else if (appSettings.bgImage !== resolvedImage) {
         appSettings.bgImage = resolvedImage
       }
     }
 
     void autoUpdateBackgroundIfNeeded(game)
+  }
+
+  function applyBackgroundEntry(game: GameInfo, index: number): void {
+    const entries = game.backgroundEntries || []
+    if (!entries.length) return
+    const normalizedIndex = ((index % entries.length) + entries.length) % entries.length
+    const entry = entries[normalizedIndex]
+    game.bgIndex = normalizedIndex
+    if (entry.type === BGType.Video && entry.videoPath) {
+      appSettings.bgType = BGType.Video
+      appSettings.bgVideo = entry.videoPath
+      appSettings.bgImage = entry.imagePath || ''
+      appSettings.bgTheme = entry.themePath || ''
+      return
+    }
+
+    appSettings.bgType = BGType.Image
+    appSettings.bgImage = entry.imagePath || entry.videoPath || DEFAULT_BG_IMAGE
+    appSettings.bgVideo = ''
+    appSettings.bgTheme = ''
   }
 
   function refreshCurrentPage() {
@@ -331,6 +391,7 @@ export const useAppStateStore = defineStore('appState', () => {
     appSettings.bgType = BGType.Image
     appSettings.bgImage = DEFAULT_BG_IMAGE
     appSettings.bgVideo = ''
+    appSettings.bgTheme = ''
   }
 
   function hasSelectedGame(): boolean {
@@ -363,36 +424,23 @@ export const useAppStateStore = defineStore('appState', () => {
       if (config?.backgroundUpdateMode !== 'auto') return
       if (!preset || !AUTO_UPDATE_SUPPORTED_PRESET_SET.has(preset)) return
 
-      const targetTypes: BGType[] = [BGType.Video, BGType.Image]
-      for (const target of targetTypes) {
-        try {
-          const result = await ResourceManager.updateGameBackground(
-            game.name, preset, target,
-            config.lastBackgroundUrl,
-          )
-          await loadGames()
+      try {
+        const result = await ResourceManager.updateGameBackground(
+          game.name, preset, (config.backgroundType as BGType) || BGType.Image,
+          config.lastBackgroundUrl,
+        )
+        await loadGames()
 
-          if (result.changed) {
-            // Persist the new URL for future change detection
-            const updatedConfig = await ResourceManager.loadGameConfig(game.name)
-            updatedConfig.lastBackgroundUrl = result.url
-            await ResourceManager.saveGameConfig(game.name, updatedConfig)
-
-            ElMessage({
-              message: target === BGType.Video
-                ? t('appState.messages.autoUpdatedVideoBackground', { game: game.name })
-                : t('appState.messages.autoUpdatedImageBackground', { game: game.name }),
-              type: 'success',
-              duration: 3000,
-              showClose: true,
-            })
-          }
-          break
-        } catch (err) {
-          if (target === BGType.Image) {
-            console.warn('Auto background update failed:', err)
-          }
+        if (result.changed) {
+          ElMessage({
+            message: t('appState.messages.autoUpdatedImageBackground', { game: game.name }),
+            type: 'success',
+            duration: 3000,
+            showClose: true,
+          })
         }
+      } catch (err) {
+        console.warn('Auto background update failed:', err)
       }
     } finally {
       autoUpdateInFlight.delete(game.name)
@@ -441,6 +489,7 @@ export const useAppStateStore = defineStore('appState', () => {
     loadGames,
     selectGame,
     switchToGame,
+    applyBackgroundEntry,
     refreshCurrentPage,
     switchToDefaultGame,
     hasSelectedGame,
@@ -465,6 +514,7 @@ export const AppStateManager = {
   get loadGames() { return useAppStateStore().loadGames },
   get selectGame() { return useAppStateStore().selectGame },
   get switchToGame() { return useAppStateStore().switchToGame },
+  get applyBackgroundEntry() { return useAppStateStore().applyBackgroundEntry },
   get refreshCurrentPage() { return useAppStateStore().refreshCurrentPage },
   get switchToDefaultGame() { return useAppStateStore().switchToDefaultGame },
   get hasSelectedGame() { return useAppStateStore().hasSelectedGame },

@@ -260,6 +260,7 @@ export class AppSettings {
 	bgType: BGType = BGType.Image
 	bgImage: string = ''
 	bgVideo: string = ''
+	bgTheme: string = ''
 	appTheme: AppThemeMode = 'dark'
 	contentOpacity: number = 0.5
 	globalDimMaskStrength: number = 2.5
@@ -323,6 +324,8 @@ export class AppSettings {
 	gamebananaTranslationFontStyle: GameBananaTranslationFontStyle = 'regular'
 	gamebananaTranslationFailureMode: GameBananaTranslationFailureMode = 'message'
 	showWindowShortcutEnabled: boolean = true
+	showHomeLauncherContent: boolean = true
+	showHomeGameNews: boolean = true
 	gameLaunchMode: GameLaunchMode = 'ctrl-pure'
 	modelExtractionLogLanguage: ModelExtractionLogLanguage = 'zh-CN'
 	pageVisibility: PageVisibilitySettings = { ...DEFAULT_PAGE_VISIBILITY }
@@ -353,6 +356,7 @@ export class AppSettings {
 		this.bgType = init?.bgType ?? this.bgType
 		this.bgImage = init?.bgImage ?? this.bgImage
 		this.bgVideo = init?.bgVideo ?? this.bgVideo
+		this.bgTheme = init?.bgTheme ?? this.bgTheme
 		this.appTheme = normalizeAppThemeMode(init?.appTheme)
 		this.contentOpacity = init?.contentOpacity ?? this.contentOpacity
 
@@ -420,6 +424,8 @@ export class AppSettings {
 			? 'Ctrl'
 			: savedTranslationShortcut
 		this.showWindowShortcutEnabled = init?.showWindowShortcutEnabled ?? this.showWindowShortcutEnabled
+		this.showHomeLauncherContent = init?.showHomeLauncherContent ?? this.showHomeLauncherContent
+		this.showHomeGameNews = init?.showHomeGameNews ?? this.showHomeGameNews
 		this.gameLaunchMode = ['always-pure', 'ctrl-pure', 'always-normal'].includes(init?.gameLaunchMode || '')
 			? init!.gameLaunchMode!
 			: this.gameLaunchMode
@@ -485,6 +491,7 @@ export class AppSettings {
 			bgType: this.bgType,
 			bgImage: this.bgImage,
 			bgVideo: this.bgVideo,
+			bgTheme: this.bgTheme,
 			appTheme: this.appTheme,
 			contentOpacity: this.contentOpacity,
 			globalDimMaskStrength: this.globalDimMaskStrength,
@@ -540,6 +547,8 @@ export class AppSettings {
 			gamebananaTranslationFontStyle: this.gamebananaTranslationFontStyle,
 			gamebananaTranslationFailureMode: this.gamebananaTranslationFailureMode,
 			showWindowShortcutEnabled: this.showWindowShortcutEnabled,
+			showHomeLauncherContent: this.showHomeLauncherContent,
+			showHomeGameNews: this.showHomeGameNews,
 			gameLaunchMode: this.gameLaunchMode,
 			modelExtractionLogLanguage: this.modelExtractionLogLanguage,
 			pageVisibility: { ...this.pageVisibility },

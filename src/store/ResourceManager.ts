@@ -69,6 +69,44 @@ const hypPresetToGameId: Record<string, string> = {
     ZZMIDX12: 'x6znKlJ0xK',
 };
 
+export type BackgroundEntry = {
+    id: string;
+    type: BGType;
+    imagePath?: string;
+    videoPath?: string;
+    themePath?: string;
+    imageUrl?: string;
+    videoUrl?: string;
+    themeUrl?: string;
+};
+
+export type GameNewsPost = {
+    id: string;
+    type: string;
+    title: string;
+    link: string;
+    date: string;
+};
+
+export type GameNewsContent = {
+    banners: Array<{ id: string; imageUrl: string; link: string }>;
+    posts: GameNewsPost[];
+};
+
+function getBackgroundApiLanguage(): string {
+    const locale = String(i18n.global.locale.value || '').toLowerCase();
+    if (locale === 'zhs') return 'zh-cn';
+    if (locale === 'zht') return 'zh-tw';
+    if (locale === 'ja') return 'ja-jp';
+    if (locale === 'ko') return 'ko-kr';
+    if (locale === 'ru') return 'ru-ru';
+    if (locale === 'de') return 'de-de';
+    if (locale === 'fr') return 'fr-fr';
+    if (locale === 'es') return 'es-es';
+    if (locale === 'it') return 'it-it';
+    return 'en-us';
+}
+
 const fixedBackgroundSources: Record<string, FixedBackgroundSource> = {
     NTEMI: {
         imageUrl: 'https://yh.wanmei.com/images/cover260408/section-head-bg.jpg',
@@ -193,12 +231,18 @@ export type BGType = 'Image' | 'Video';
 
 const BACKGROUND_IMAGE_CANDIDATES = ['Background.png', 'Background.webp', 'Background.jpg', 'Background.jpeg', 'Background.gif', 'Background.svg', 'Background.bmp', 'Background.ico', 'Background.avif'];
 const BACKGROUND_VIDEO_CANDIDATES = ['Background.mp4', 'Background.webm', 'Background.mkv', 'Background.ogg', 'Background.mov'];
+const BACKGROUND_THEME_CANDIDATES = ['BackgroundTheme.png', 'BackgroundTheme.webp', 'BackgroundTheme.jpg', 'BackgroundTheme.jpeg'];
 
 export type GameInfo = {
     name: string;
     icon_path: string;
     bg_path: string;
     bg_video_path?: string | null;
+    bg_theme_path?: string | null;
+    bg_images?: string[];
+    bg_videos?: string[];
+    background_entries?: BackgroundEntry[];
+    selected_background_id?: string;
     bg_type: BGType;
     show_sidebar: boolean;
 };
@@ -242,23 +286,13 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         return '';
     }
 
-    function getFixedBackgroundUrl(gamePreset: string, bgType: BGType): string {
-        const source = fixedBackgroundSources[gamePreset];
-        if (!source) {
-            return '';
-        }
-
-        const candidate = bgType === 'Video' ? source.videoUrl : source.imageUrl;
-        return typeof candidate === 'string' ? candidate.trim() : '';
-    }
-
-    async function getHypBackgroundUrl(gamePreset: string, bgType: BGType): Promise<string> {
+    async function getHypBackgrounds(gamePreset: string): Promise<BackgroundEntry[]> {
         const gameId = hypPresetToGameId[gamePreset];
         if (!gameId) {
-            return '';
+            return [];
         }
 
-        const apiUrl = `https://hyp-api.mihoyo.com/hyp/hyp-connect/api/getAllGameBasicInfo?launcher_id=jGHBHlcOq1&language=zh-cn&game_id=${gameId}`;
+        const apiUrl = `https://hyp-api.mihoyo.com/hyp/hyp-connect/api/getAllGameBasicInfo?launcher_id=jGHBHlcOq1&language=${getBackgroundApiLanguage()}&game_id=${gameId}`;
         const resp = await fetch(apiUrl, { method: 'GET' });
         if (!resp.ok) {
             throw new Error(t('resourceManager.messages.requestFailed', { status: resp.status }));
@@ -270,28 +304,63 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             throw new Error(t('resourceManager.messages.backgroundsMissingFromServer'));
         }
 
-        for (const item of backgrounds) {
-            if (!item || typeof item !== 'object') continue;
-
-            const candidate = bgType === 'Video'
-                ? item?.video?.url
-                : item?.background?.url;
-
-            if (typeof candidate === 'string' && candidate.trim() !== '') {
-                return candidate.trim();
-            }
-        }
-
-        return '';
+        return backgrounds.map((item: any, index: number) => {
+            const imageUrl = typeof item?.background?.url === 'string' ? item.background.url.trim() : '';
+            const videoUrl = typeof item?.video?.url === 'string' ? item.video.url.trim() : '';
+            const themeUrl = typeof item?.theme?.url === 'string' ? item.theme.url.trim() : '';
+            if (!imageUrl && !videoUrl && !themeUrl) return null;
+            const id = String(item?.id || `${gamePreset.toLowerCase()}-${index + 1}`);
+            return {
+                id,
+                type: videoUrl ? 'Video' : 'Image',
+                imageUrl: imageUrl || undefined,
+                videoUrl: videoUrl || undefined,
+                themeUrl: themeUrl || undefined,
+            } as BackgroundEntry;
+        }).filter((entry: BackgroundEntry | null): entry is BackgroundEntry => !!entry);
     }
 
-    async function resolveBackgroundDownloadUrl(gamePreset: string, bgType: BGType): Promise<string> {
-        const fixedUrl = getFixedBackgroundUrl(gamePreset, bgType);
-        if (fixedUrl) {
-            return fixedUrl;
+    async function getAvailableBackgrounds(gamePreset: string): Promise<BackgroundEntry[]> {
+        const hypBackgrounds = await getHypBackgrounds(gamePreset);
+        if (hypBackgrounds.length > 0) return hypBackgrounds;
+
+        const fixed = fixedBackgroundSources[gamePreset];
+        if (!fixed) return [];
+        const entries: BackgroundEntry[] = [];
+        if (fixed.imageUrl) entries.push({ id: `${gamePreset.toLowerCase()}-image`, type: 'Image', imageUrl: fixed.imageUrl });
+        if (fixed.videoUrl) entries.push({ id: `${gamePreset.toLowerCase()}-video`, type: 'Video', videoUrl: fixed.videoUrl });
+        return entries;
+    }
+
+    async function getGameNews(gamePreset: string): Promise<GameNewsContent> {
+        const gameId = hypPresetToGameId[gamePreset];
+        if (!gameId) return { banners: [], posts: [] };
+
+        const apiUrl = `https://hyp-api.mihoyo.com/hyp/hyp-connect/api/getGameContent?launcher_id=jGHBHlcOq1&game_id=${gameId}&language=${getBackgroundApiLanguage()}`;
+        const response = await fetch(apiUrl, { method: 'GET' });
+        if (!response.ok) {
+            throw new Error(t('resourceManager.messages.requestFailed', { status: response.status }));
         }
 
-        return getHypBackgroundUrl(gamePreset, bgType);
+        const json = await response.json();
+        const content = json?.data?.content;
+        const banners = Array.isArray(content?.banners)
+            ? content.banners.map((item: any, index: number) => ({
+                id: String(item?.id || `banner-${index}`),
+                imageUrl: typeof item?.image?.url === 'string' ? item.image.url.trim() : '',
+                link: typeof item?.image?.link === 'string' ? item.image.link.trim() : '',
+            })).filter((item: { imageUrl: string }): boolean => !!item.imageUrl)
+            : [];
+        const posts = Array.isArray(content?.posts)
+            ? content.posts.map((item: any, index: number) => ({
+                id: String(item?.id || `post-${index}`),
+                type: String(item?.type || 'POST_TYPE_INFO'),
+                title: typeof item?.title === 'string' ? item.title.trim() : '',
+                link: typeof item?.link === 'string' ? item.link.trim() : '',
+                date: typeof item?.date === 'string' ? item.date.trim() : '',
+            })).filter((item: GameNewsPost): boolean => !!item.title)
+            : [];
+        return { banners, posts };
     }
 
     function supportsAutoUpdateBackground(gamePreset: string): boolean {
@@ -578,8 +647,16 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             throw new Error(t('resourceManager.messages.unsupportedPresetForAutoUpdate'));
         }
 
-        const targetUrl = await resolveBackgroundDownloadUrl(gamePreset, bgType);
-        if (!targetUrl) {
+        const gamesRoot = await GlobalConfig.GlobalGamesFolder();
+        const dirPath = await SSMTFileUtils.JoinPath(gamesRoot, gameName);
+        if (!(await exists(dirPath))) {
+            await mkdir(dirPath, { recursive: true });
+        }
+
+        const conf = await loadGameConfig(gameName);
+        const previousEntries = Array.isArray(conf.backgroundEntries) ? conf.backgroundEntries : [];
+        const available = await getAvailableBackgrounds(gamePreset);
+        if (available.length === 0) {
             throw new Error(
                 bgType === 'Video'
                     ? t('resourceManager.messages.noVideoBackgroundAvailable')
@@ -587,48 +664,80 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             );
         }
 
-        // URL change detection: if the same URL was already downloaded, skip the download
-        if (lastUrl && lastUrl === targetUrl) {
-            return { path: '', url: targetUrl, changed: false };
+        const safeId = (id: string, index: number) => {
+            const safe = id.trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+            return safe || `entry-${index + 1}`;
+        };
+        const download = async (url: string, path: string): Promise<void> => {
+            const response = await fetch(url, { method: 'GET' });
+            if (!response.ok) {
+                throw new Error(t('resourceManager.messages.downloadFailedWithStatus', { status: response.status }));
+            }
+            await writeFile(path, new Uint8Array(await response.arrayBuffer()));
+        };
+
+        const entries: BackgroundEntry[] = [];
+        const managedNames = new Set<string>();
+        let changed = false;
+        for (let index = 0; index < available.length; index += 1) {
+            const remote = available[index];
+            const id = safeId(remote.id, index);
+            const previous = previousEntries.find(item => item?.id === remote.id || item?.id === id);
+            const entry: BackgroundEntry = { id: remote.id, type: remote.type, imageUrl: remote.imageUrl, videoUrl: remote.videoUrl, themeUrl: remote.themeUrl };
+
+            const saveResource = async (url: string | undefined, kind: 'image' | 'video' | 'theme', fallbackExt: string): Promise<string | undefined> => {
+                if (!url) return undefined;
+                const previousPath = previous && (kind === 'image' ? previous.imagePath : kind === 'video' ? previous.videoPath : previous.themePath);
+                const previousUrl = previous && (kind === 'image' ? previous.imageUrl : kind === 'video' ? previous.videoUrl : previous.themeUrl);
+                const ext = extensionFromUrl(url, fallbackExt);
+                const prefix = kind === 'theme' ? 'BackgroundTheme' : 'Background';
+                const filename = `${prefix}-${id}${kind === 'video' ? `.${ext}` : `.${ext}`}`;
+                const targetPath = await SSMTFileUtils.JoinPath(dirPath, filename);
+                managedNames.add(filename.toLowerCase());
+                if (!previousPath || previousUrl !== url || !(await exists(previousPath))) {
+                    await download(url, targetPath);
+                    changed = true;
+                } else if (previousPath !== targetPath && await exists(previousPath)) {
+                    await copyFile(previousPath, targetPath);
+                    changed = true;
+                }
+                return targetPath;
+            };
+
+            entry.imagePath = await saveResource(remote.imageUrl, 'image', 'png');
+            entry.videoPath = await saveResource(remote.videoUrl, 'video', 'mp4');
+            entry.themePath = await saveResource(remote.themeUrl, 'theme', 'webp');
+            if (entry.imagePath || entry.videoPath || entry.themePath) entries.push(entry);
         }
 
-        const downloadResp = await fetch(targetUrl, { method: 'GET' });
-        if (!downloadResp.ok) {
-            throw new Error(t('resourceManager.messages.downloadFailedWithStatus', { status: downloadResp.status }));
-        }
-        const bytes = new Uint8Array(await downloadResp.arrayBuffer());
-
-        const gamesRoot = await GlobalConfig.GlobalGamesFolder();
-        const dirPath = await SSMTFileUtils.JoinPath(gamesRoot, gameName);
-        if (!(await exists(dirPath))) {
-            await mkdir(dirPath, { recursive: true });
+        if (entries.length === 0) {
+            throw new Error(t('resourceManager.messages.backgroundsMissingFromServer'));
         }
 
-        const ext = extensionFromUrl(targetUrl, bgType === 'Video' ? 'mp4' : 'png');
-        const filename = `Background.${ext}`;
-        const targetPath = await SSMTFileUtils.JoinPath(dirPath, filename);
-
-        const cleanup = [...BACKGROUND_IMAGE_CANDIDATES, ...BACKGROUND_VIDEO_CANDIDATES];
-
-        for (const candidate of cleanup) {
-            const candidatePath = await SSMTFileUtils.JoinPath(dirPath, candidate);
-            if (await exists(candidatePath)) {
-                try {
-                    await remove(candidatePath);
-                } catch (err) {
-                    console.warn('Failed to remove old background file', candidatePath, err);
+        try {
+            const children = await readDir(dirPath);
+            for (const child of children) {
+                const name = child?.name || '';
+                const lower = name.toLowerCase();
+                if (!child.isDirectory && (lower.startsWith('background-') || lower.startsWith('backgroundtheme-')) && !managedNames.has(lower)) {
+                    await remove(await SSMTFileUtils.JoinPath(dirPath, name));
+                    changed = true;
                 }
             }
+        } catch (err) {
+            console.warn('Failed to clean stale managed background files', err);
         }
 
-        await writeFile(targetPath, bytes);
-
-        const conf = await loadGameConfig(gameName);
         conf.backgroundType = bgType;
-        conf.lastBackgroundUrl = targetUrl;
+        conf.backgroundEntries = entries;
+        conf.lastBackgroundUrl = entries.map(entry => entry.videoUrl || entry.imageUrl || '').filter(Boolean).join('|');
         await saveGameConfig(gameName, conf);
 
-        return { path: targetPath, url: targetUrl, changed: true };
+        const selected = entries.find(entry => entry.type === bgType) || entries[0];
+        const path = bgType === 'Video' ? selected.videoPath || selected.imagePath : selected.imagePath || selected.videoPath;
+        const url = bgType === 'Video' ? selected.videoUrl || selected.imageUrl || '' : selected.imageUrl || selected.videoUrl || '';
+        if (!lastUrl && !changed) changed = true;
+        return { path: path || '', url, changed };
     }
 
     async function loadGameConfig(gameName: string): Promise<GameConfig> {
@@ -1010,6 +1119,9 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             let iconPath = '';
             let bgPath = '';
             let bgVideoPath: string | null = null;
+            const bgImages: string[] = [];
+            const bgVideos: string[] = [];
+            const backgroundEntries: BackgroundEntry[] = [];
 
             const imgCandidates = BACKGROUND_IMAGE_CANDIDATES;
             const videoCandidates = BACKGROUND_VIDEO_CANDIDATES;
@@ -1032,15 +1144,54 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
                 iconPath = `${basePath}/${nameMap.get('icon.png')}`;
             }
 
+            for (const candidate of imgCandidates) {
+                const matched = nameMap.get(candidate.toLowerCase());
+                if (matched) bgImages.push(`${basePath}/${matched}`);
+            }
+            for (const candidate of videoCandidates) {
+                const matched = nameMap.get(candidate.toLowerCase());
+                if (matched) bgVideos.push(`${basePath}/${matched}`);
+            }
+
             let bgType: BGType = 'Image';
             const configPath = `${basePath}/Config.json`;
             const cfg = await SSMTJsonUtils.readJson(configPath) as Record<string, unknown> | null;
+            if (cfg && Array.isArray(cfg.backgroundEntries)) {
+                for (const raw of cfg.backgroundEntries) {
+                    if (!raw || typeof raw !== 'object') continue;
+                    const candidate = raw as BackgroundEntry;
+                    const imagePath = typeof candidate.imagePath === 'string' && candidate.imagePath ? candidate.imagePath : undefined;
+                    const videoPath = typeof candidate.videoPath === 'string' && candidate.videoPath ? candidate.videoPath : undefined;
+                    const themePath = typeof candidate.themePath === 'string' && candidate.themePath ? candidate.themePath : undefined;
+                    const hasImage = !!imagePath && await exists(imagePath);
+                    const hasVideo = !!videoPath && await exists(videoPath);
+                    if (!hasImage && !hasVideo) continue;
+                    backgroundEntries.push({
+                        id: String(candidate.id || backgroundEntries.length + 1),
+                        type: candidate.type === 'Video' && hasVideo ? 'Video' : 'Image',
+                        imagePath: hasImage ? imagePath : undefined,
+                        videoPath: hasVideo ? videoPath : undefined,
+                        themePath: themePath && await exists(themePath) ? themePath : undefined,
+                        imageUrl: typeof candidate.imageUrl === 'string' ? candidate.imageUrl : undefined,
+                        videoUrl: typeof candidate.videoUrl === 'string' ? candidate.videoUrl : undefined,
+                        themeUrl: typeof candidate.themeUrl === 'string' ? candidate.themeUrl : undefined,
+                    });
+                    if (hasImage) bgImages.push(imagePath!);
+                    if (hasVideo) bgVideos.push(videoPath!);
+                }
+            }
             if (cfg && cfg.backgroundType) {
                 const v = String(cfg.backgroundType);
                 bgType = v.toLowerCase() === 'video' ? 'Video' : 'Image';
             } else if (cfg && cfg.background_type) {
                 const v = String(cfg.background_type);
                 bgType = v.toLowerCase() === 'video' ? 'Video' : 'Image';
+            }
+
+            const preferredEntry = backgroundEntries.find(entry => entry.type === bgType) || backgroundEntries[0];
+            if (preferredEntry) {
+                if (preferredEntry.imagePath) bgPath = preferredEntry.imagePath;
+                if (preferredEntry.videoPath) bgVideoPath = preferredEntry.videoPath;
             }
 
             if (bgType === 'Video') {
@@ -1086,6 +1237,11 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
                 icon_path: iconPath,
                 bg_path: bgPath,
                 bg_video_path: bgVideoPath,
+                bg_theme_path: preferredEntry?.themePath || await findExistingFileIgnoreCase(basePath, BACKGROUND_THEME_CANDIDATES),
+                bg_images: bgImages,
+                bg_videos: bgVideos,
+                background_entries: backgroundEntries,
+                selected_background_id: typeof cfg?.selectedBackgroundId === 'string' ? cfg.selectedBackgroundId : undefined,
                 bg_type: bgType,
                 show_sidebar,
             });
@@ -1146,6 +1302,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         setGameIcon,
         setGameBackground,
         updateGameBackground,
+        getGameNews,
         findGameBackgroundPath,
         // D3D11 mode
         getEffectiveD3d11Mode,
@@ -1204,6 +1361,7 @@ export const ResourceManager = new Proxy({} as Record<string, unknown>, {
     setGameIcon: (gameName: string, sourcePath: string) => Promise<void>;
     setGameBackground: (gameName: string, sourcePath: string, bgType: 'Image' | 'Video') => Promise<void>;
     updateGameBackground: (gameName: string, gamePreset: string, bgType: 'Image' | 'Video', lastUrl?: string) => Promise<{ path: string; url: string; changed: boolean }>;
+    getGameNews: (gamePreset: string) => Promise<GameNewsContent>;
     findGameBackgroundPath: (gameName: string, bgType?: BGType) => Promise<string>;
     getEffectiveD3d11Mode: (config?: Pick<GameConfig, 'd3d11Mode' | 'gamePreset'> | null) => D3d11Mode;
     getGameD3d11Mode: (gameName: string) => Promise<D3d11Mode>;

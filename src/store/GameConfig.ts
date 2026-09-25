@@ -145,6 +145,17 @@ export type GameConfig = {
     postLaunchPrograms?: LaunchProgramConfig[];
     backgroundUpdateMode?: 'manual' | 'auto';
     lastBackgroundUrl?: string;
+    backgroundEntries?: Array<{
+        id: string;
+        type: 'Image' | 'Video';
+        imagePath?: string;
+        videoPath?: string;
+        themePath?: string;
+        imageUrl?: string;
+        videoUrl?: string;
+        themeUrl?: string;
+    }>;
+    selectedBackgroundId?: string;
 
     [key: string]: unknown;
 };

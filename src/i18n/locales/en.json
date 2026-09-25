@@ -41,6 +41,8 @@
     "Naraka": "NARAKA: BLADEPOINT", "NarakaM": "NARAKA: BLADEPOINT Mobile"
   },
   "home": {
+    "launcherLinks": {"switchBackground": "Switch background", "previousBackground": "Previous background", "nextBackground": "Next background", "imageBackground": "Static background", "videoBackground": "Animated background"},
+    "gameNews": {"activity": "Events", "announcement": "Announcements", "info": "News", "empty": "No content"},
     "versionInfo": {
       "coreTitle": "Core Release Notes",
       "packageTitle": "Package Release Notes",
@@ -591,6 +593,10 @@
       "selectCacheFolderTitle": "Select SSMT Cache Folder"
     },
     "personalization": {
+      "homeLauncherContent": "Launcher-style home content",
+      "homeLauncherContentHint": "Show game-launcher style content on the home page.",
+      "homeGameNews": "Show game news panel",
+      "homeGameNewsHint": "Show activities, announcements, and information supplied by the current game's launcher.",
       "textureMarkStyle": "Texture Marking Style Preference",
       "uiScale": "Global UI Scale",
       "uiScaleHint": "Reduce component size to fit more content on low-resolution or high-DPI-scaled displays.",

@@ -40,6 +40,8 @@
     "APMI": "蓝色星原：旅谣", "Naraka": "永劫无间", "NarakaM": "永劫无间手游"
   },
   "home": {
+    "launcherLinks": {"switchBackground": "切换背景", "previousBackground": "上一个背景", "nextBackground": "下一个背景", "imageBackground": "静态背景", "videoBackground": "动态背景"},
+    "gameNews": {"activity": "活动", "announcement": "公告", "info": "资讯", "empty": "暂无内容"},
     "versionInfo": {
       "coreTitle": "Core 更新说明",
       "packageTitle": "Package 更新说明",
@@ -590,6 +592,10 @@
       "selectCacheFolderTitle": "选择 SSMT 缓存目录"
     },
     "personalization": {
+      "homeLauncherContent": "启动器式主页内容",
+      "homeLauncherContentHint": "在主页显示游戏启动器式内容。",
+      "homeGameNews": "显示游戏资讯栏",
+      "homeGameNewsHint": "显示当前游戏启动器提供的活动、公告和资讯内容。",
       "textureMarkStyle": "贴图标记风格偏好",
       "uiScale": "全局组件尺寸",
       "uiScaleHint": "缩小界面组件以便在低分辨率或系统高缩放时显示更多内容。",

@@ -1,14 +1,15 @@
-<script setup lang="ts" >
+<script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { ArrowDown, ArrowUp, Picture, VideoCamera, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
-import { AppStateManager } from '../../store/AppStateManager'
+import { AppStateManager, BGType } from '../../store/AppStateManager'
 
 import { openPath, openUrl } from '@tauri-apps/plugin-opener'
 import { exists, mkdir } from '@tauri-apps/plugin-fs'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useRouter } from 'vue-router'
-import { ResourceManager, type UpdateInfo } from '../../store/ResourceManager'
+import { ResourceManager, type UpdateInfo, type BackgroundEntry, type GameNewsContent } from '../../store/ResourceManager'
 import { handOffModInstallDrop } from '../../store/ModInstallDropBus'
 import { join } from '@tauri-apps/api/path'
 import { getVersion } from '@tauri-apps/api/app'
@@ -178,6 +179,106 @@ const handleCheckAndInstallAppUpdate = async () => {
 
 const hasVersionInfo = computed(() => Boolean(packageVersionText.value || coreVersionText.value || appVersionText.value || currentDllModeText.value))
 
+const openHomeLink = async (url: string) => {
+  if (!url) return
+  try { await openUrl(url) } catch (error) { console.error('Failed to open home link:', error) }
+}
+
+const gameNews = ref<GameNewsContent>({ banners: [], posts: [] })
+const gameNewsTab = ref<'activity' | 'announcement' | 'info'>('activity')
+const gameNewsBannerIndex = ref(0)
+const gameNewsLoading = ref(false)
+let gameNewsRequestId = 0
+let gameNewsTimer: ReturnType<typeof setInterval> | null = null
+const gameNewsTabs = computed(() => [
+  { key: 'activity' as const, label: t('home.gameNews.activity') },
+  { key: 'announcement' as const, label: t('home.gameNews.announcement') },
+  { key: 'info' as const, label: t('home.gameNews.info') },
+])
+const gameNewsPosts = computed(() => gameNews.value.posts.filter(post => {
+  if (gameNewsTab.value === 'activity') return post.type === 'POST_TYPE_ACTIVITY'
+  if (gameNewsTab.value === 'announcement') return post.type === 'POST_TYPE_ANNOUNCE'
+  return post.type === 'POST_TYPE_INFO'
+}))
+const currentGameNewsBanner = computed(() => gameNews.value.banners[gameNewsBannerIndex.value] || null)
+const loadGameNews = async () => {
+  if (!appSettings.showHomeLauncherContent || !appSettings.showHomeGameNews) {
+    gameNews.value = { banners: [], posts: [] }
+    return
+  }
+  const preset = (currentGameConfig.value.gamePreset || '').trim().toUpperCase()
+  if (!preset) return
+  const requestId = ++gameNewsRequestId
+  gameNewsLoading.value = true
+  try {
+    const content = await ResourceManager.getGameNews(preset)
+    if (requestId !== gameNewsRequestId) return
+    gameNews.value = content
+    gameNewsBannerIndex.value = 0
+  } catch (error) {
+    if (requestId === gameNewsRequestId) {
+      gameNews.value = { banners: [], posts: [] }
+      console.warn('Failed to load game news:', error)
+    }
+  } finally {
+    if (requestId === gameNewsRequestId) gameNewsLoading.value = false
+  }
+}
+
+const currentGame = computed(() => AppStateManager.gamesList.find(game => game.name === appSettings.CurrentGameName))
+const showBackgroundControls = ref(false)
+const backgroundEntries = computed(() => {
+  const game = currentGame.value
+  if (!game) return []
+  if (game.backgroundEntries?.length) return game.backgroundEntries
+  const images = game.bgImages?.length ? game.bgImages : [game.bgPath].filter(Boolean) as string[]
+  const videos = game.bgVideos?.length ? game.bgVideos : [game.bgVideoPath].filter(Boolean) as string[]
+  return ([
+    ...images.map((path, index) => ({ id: `image-${index}`, type: BGType.Image, imagePath: path })),
+    ...videos.map((path, index) => ({ id: `video-${index}`, type: BGType.Video, videoPath: path, themePath: game.bgThemePath })),
+  ] as BackgroundEntry[])
+})
+const canSwitchBackground = computed(() => backgroundEntries.value.length > 1)
+const currentBackgroundIndex = computed(() => currentGame.value?.bgIndex || 0)
+const currentBackgroundIsVideo = computed(() => backgroundEntries.value[currentBackgroundIndex.value]?.type === BGType.Video)
+const backgroundVideoPaused = ref(false)
+const toggleBackgroundVideo = async () => {
+  const video = document.querySelector<HTMLVideoElement>('.bg-layer video.bg-item')
+  if (!video) return
+  if (video.paused) {
+    try {
+      await video.play()
+      backgroundVideoPaused.value = false
+    } catch (error) {
+      console.warn('Background video playback failed:', error)
+    }
+  } else {
+    video.pause()
+    backgroundVideoPaused.value = true
+  }
+}
+const applyBackgroundAt = async (index: number) => {
+  const game = currentGame.value
+  if (!game || !backgroundEntries.value.length) return
+  const normalized = (index + backgroundEntries.value.length) % backgroundEntries.value.length
+  AppStateManager.applyBackgroundEntry(game, normalized)
+  try {
+    const config = await ResourceManager.loadGameConfig(game.name)
+    config.backgroundType = backgroundEntries.value[normalized].type
+    config.selectedBackgroundId = backgroundEntries.value[normalized].id
+    await ResourceManager.saveGameConfig(game.name, config)
+  } catch (error) {
+    console.warn('Failed to persist selected background', error)
+  }
+}
+const stepBackground = (delta: number) => {
+  if (!canSwitchBackground.value) return
+  void applyBackgroundAt(currentBackgroundIndex.value + delta)
+}
+const selectBackground = (index: number) => {
+  void applyBackgroundAt(index)
+}
+
 const open3dmigotoFolder = async () => {
   const gameName = appSettings.CurrentGameName;
   if (!gameName || gameName === 'Default') return;
@@ -270,27 +371,27 @@ const precheckStartGameUpdates = async (config: LaunchPrecheckConfig): Promise<S
 
   const dllPromise = shouldCheckDllUpdate && currentCoreVersion
     ? pickNewerUpdate(
-        () => ResourceManager.getD3d11LatestRelease(
-          d3d11Mode,
-          appSettings.githubToken,
-          config.includePrereleaseUpdates ?? appSettings.includePrereleaseUpdates,
-          gamePreset,
-        ),
-        currentCoreVersion,
-        UPDATE_CHECK_TIMEOUT_MS,
-      )
+      () => ResourceManager.getD3d11LatestRelease(
+        d3d11Mode,
+        appSettings.githubToken,
+        config.includePrereleaseUpdates ?? appSettings.includePrereleaseUpdates,
+        gamePreset,
+      ),
+      currentCoreVersion,
+      UPDATE_CHECK_TIMEOUT_MS,
+    )
     : Promise.resolve(null);
 
   const packagePromise = shouldCheckPackageUpdate && currentPackageVersion && gamePreset && getGithubRepoByGamePreset(gamePreset)
     ? pickNewerUpdate(
-        () => ResourceManager.get3DMigotoLatestRelease(
-          gamePreset,
-          appSettings.githubToken,
-          config.includePrereleaseUpdates ?? appSettings.includePrereleaseUpdates,
-        ),
-        currentPackageVersion,
-        UPDATE_CHECK_TIMEOUT_MS,
-      )
+      () => ResourceManager.get3DMigotoLatestRelease(
+        gamePreset,
+        appSettings.githubToken,
+        config.includePrereleaseUpdates ?? appSettings.includePrereleaseUpdates,
+      ),
+      currentPackageVersion,
+      UPDATE_CHECK_TIMEOUT_MS,
+    )
     : Promise.resolve(null);
 
   const [dllUpdate, packageUpdate] = await Promise.all([dllPromise, packagePromise]);
@@ -364,7 +465,7 @@ const switchD3d11Mode = async (mode: D3d11Mode) => {
         ? t('home.messages.switchedToPlayDll')
         : appliedMode === 'ssice-a'
           ? t('home.messages.switchedToSsiceADll')
-        : t('home.messages.switchedToDevDll'),
+          : t('home.messages.switchedToDevDll'),
     );
   } catch (e) {
     console.error('Failed to switch d3d11 mode:', e);
@@ -385,17 +486,17 @@ const launchGame = async (event?: MouseEvent) => {
   }
 
   isLaunching.value = true;
-  
+
   try {
-      await installPrecheckedUpdatesBeforeLaunch();
-      await LaunchGame.launch(
-        gameName,
-        appSettings,
-        check3DMigotoPackageUpdate,
-        openSettingsTo3Dmigoto,
-        checkD3D11DllUpdate,
-        event?.ctrlKey ?? false
-      );
+    await installPrecheckedUpdatesBeforeLaunch();
+    await LaunchGame.launch(
+      gameName,
+      appSettings,
+      check3DMigotoPackageUpdate,
+      openSettingsTo3Dmigoto,
+      checkD3D11DllUpdate,
+      event?.ctrlKey ?? false
+    );
   } finally {
     setTimeout(() => {
       isLaunching.value = false;
@@ -428,11 +529,19 @@ onMounted(() => {
   }).catch((error) => {
     console.error('Failed to attach Home drop listener', error);
   });
+
+  gameNewsTimer = setInterval(() => {
+    if (gameNews.value.banners.length > 1) {
+      gameNewsBannerIndex.value = (gameNewsBannerIndex.value + 1) % gameNews.value.banners.length
+    }
+  }, 6000)
 });
 
 onUnmounted(() => {
   unlistenNativeDrop?.();
   unlistenNativeDrop = null;
+  if (gameNewsTimer) clearInterval(gameNewsTimer)
+  gameNewsTimer = null
 });
 
 watch(
@@ -442,24 +551,24 @@ watch(
   },
   { immediate: true }
 )
+
+watch(
+  [() => currentGameConfig.value.gamePreset, () => appSettings.showHomeLauncherContent, () => appSettings.showHomeGameNews],
+  () => { void loadGameNews() },
+  { immediate: true },
+)
+
+watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
 </script>
 
 <template>
   <div class="home-container">
     <div class="content-area">
-
-
-
     </div>
 
-    <div v-if="hasVersionInfo" class="version-info-panel">
-      <el-popover
-        v-if="appVersionText"
-        trigger="hover"
-        placement="top-start"
-        :width="220"
-        popper-class="version-info-popper version-info-popper-menu"
-      >
+    <div v-if="appSettings.showHomeLauncherContent && hasVersionInfo" class="version-info-panel">
+      <el-popover v-if="appVersionText" trigger="hover" placement="top-start" :width="220"
+        popper-class="version-info-popper version-info-popper-menu">
         <template #reference>
           <div class="version-info-chip">{{ appVersionText }}</div>
         </template>
@@ -473,49 +582,93 @@ watch(
         </div>
       </el-popover>
 
-      <el-popover
-        v-if="coreVersionText"
-        trigger="hover"
-        placement="top-start"
-        :width="420"
-        popper-class="version-info-popper"
-      >
+      <el-popover v-if="coreVersionText" trigger="hover" placement="top-start" :width="420"
+        popper-class="version-info-popper">
         <template #reference>
           <div class="version-info-chip">{{ coreVersionText }}</div>
         </template>
         <div class="version-popover-content">
           <div class="version-popover-title">{{ t('home.versionInfo.coreTitle') }}</div>
           <div class="version-popover-version">{{ coreVersionText }}</div>
-          <ReleaseNotesMarkdown
-            class="version-popover-body"
-            :content="coreReleaseDescriptionText"
-            compact
-          />
+          <ReleaseNotesMarkdown class="version-popover-body" :content="coreReleaseDescriptionText" compact />
         </div>
       </el-popover>
 
-      <el-popover
-        v-if="packageVersionText"
-        trigger="hover"
-        placement="top-start"
-        :width="420"
-        popper-class="version-info-popper"
-      >
+      <el-popover v-if="packageVersionText" trigger="hover" placement="top-start" :width="420"
+        popper-class="version-info-popper">
         <template #reference>
           <div class="version-info-chip">{{ packageVersionText }}</div>
         </template>
         <div class="version-popover-content">
           <div class="version-popover-title">{{ t('home.versionInfo.packageTitle') }}</div>
           <div class="version-popover-version">{{ packageVersionText }}</div>
-          <ReleaseNotesMarkdown
-            class="version-popover-body"
-            :content="packageReleaseDescriptionText"
-            compact
-          />
+          <ReleaseNotesMarkdown class="version-popover-body" :content="packageReleaseDescriptionText" compact />
         </div>
       </el-popover>
 
       <div v-if="currentDllModeText" class="version-info-chip version-info-chip-mode">{{ currentDllModeText }}</div>
+    </div>
+
+    <div
+      v-if="appSettings.showHomeLauncherContent && appSettings.showHomeGameNews && (gameNews.banners.length || gameNews.posts.length || gameNewsLoading)"
+      class="home-launcher-links">
+      <section class="home-news-panel">
+        <div v-if="currentGameNewsBanner" class="home-news-banner" @click="openHomeLink(currentGameNewsBanner.link)">
+          <img :src="currentGameNewsBanner.imageUrl" alt="" />
+          <div class="home-news-banner-dots"><i v-for="(_, index) in gameNews.banners" :key="index"
+              :class="{ active: gameNewsBannerIndex === index }"></i></div>
+        </div>
+        <div class="home-news-tabs">
+          <button v-for="tab in gameNewsTabs" :key="tab.key" type="button" :class="{ active: gameNewsTab === tab.key }"
+            @click="gameNewsTab = tab.key">{{ tab.label }}</button>
+        </div>
+        <button v-for="post in gameNewsPosts" :key="post.id" class="home-news-item" type="button"
+          @click="openHomeLink(post.link)"><span>{{ post.title }}</span><time>{{ post.date }}</time></button>
+        <div v-if="!gameNewsLoading && gameNewsPosts.length === 0" class="home-news-empty">{{ t('home.gameNews.empty')
+          }}
+        </div>
+      </section>
+    </div>
+
+    <div v-if="appSettings.showHomeLauncherContent && canSwitchBackground" class="home-background-hotzone"
+      @mouseenter="showBackgroundControls = true" @mouseleave="showBackgroundControls = false">
+      <aside class="home-background-rail" :class="{ 'is-visible': showBackgroundControls }"
+        @mouseenter="showBackgroundControls = true">
+        <button v-if="currentBackgroundIsVideo" type="button" class="home-background-playback"
+          :title="t('home.launcherLinks.toggleVideoPlayback')" @click="toggleBackgroundVideo">
+          <el-icon>
+            <VideoPlay v-if="backgroundVideoPaused" />
+            <VideoPause v-else />
+          </el-icon>
+        </button>
+        <button type="button" class="home-background-arrow" :title="t('home.launcherLinks.previousBackground')"
+          @click="stepBackground(-1)">
+          <el-icon>
+            <ArrowUp />
+          </el-icon>
+        </button>
+        <div class="home-background-list">
+          <button v-for="(entry, index) in backgroundEntries" :key="entry.id" type="button"
+            class="home-background-thumb" :class="{ active: currentBackgroundIndex === index }"
+            :title="entry.type === BGType.Video ? t('home.launcherLinks.videoBackground') : t('home.launcherLinks.imageBackground')"
+            @click="selectBackground(index)">
+            <span class="home-background-thumb-image"
+              :style="{ backgroundImage: `url(${entry.imagePath || entry.themePath || entry.videoPath || ''})` }"></span>
+            <span class="home-background-thumb-type">
+              <el-icon>
+                <VideoCamera v-if="entry.type === BGType.Video" />
+                <Picture v-else />
+              </el-icon>
+            </span>
+          </button>
+        </div>
+        <button type="button" class="home-background-arrow" :title="t('home.launcherLinks.nextBackground')"
+          @click="stepBackground(1)">
+          <el-icon>
+            <ArrowDown />
+          </el-icon>
+        </button>
+      </aside>
     </div>
 
     <!-- Settings Modal -->
@@ -532,16 +685,10 @@ watch(
       </div>
 
       <!-- Settings Menu -->
-      <SettingsMenu
-        :show-settings="showSettings"
-        :is-current-preset-ntemi="isCurrentPresetNtemi"
-        @update:show-settings="showSettings = $event"
-        @switch-d3d11-mode="switchD3d11Mode"
-        @open-3dmigoto-folder="open3dmigotoFolder"
-        @open-d3dx-ini="openD3dxIni"
-        @check-d3-d11-dll-update="checkD3D11DllUpdate"
-        @check-3-d-migoto-package-update="check3DMigotoPackageUpdate"
-      />
+      <SettingsMenu :show-settings="showSettings" :is-current-preset-ntemi="isCurrentPresetNtemi"
+        @update:show-settings="showSettings = $event" @switch-d3d11-mode="switchD3d11Mode"
+        @open-3dmigoto-folder="open3dmigotoFolder" @open-d3dx-ini="openD3dxIni"
+        @check-d3-d11-dll-update="checkD3D11DllUpdate" @check-3-d-migoto-package-update="check3DMigotoPackageUpdate" />
     </div>
 
 
@@ -579,7 +726,7 @@ watch(
 .version-info-panel {
   position: absolute;
   left: var(--version-panel-gap);
-  bottom: var(--bottom-ui-gap);
+  bottom: 24px;
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -592,6 +739,288 @@ watch(
   z-index: 2;
   flex-wrap: wrap;
   max-width: calc(100% - var(--action-bar-width) - (var(--version-panel-gap) * 3));
+}
+
+.home-launcher-links {
+  position: absolute;
+  left: 38px;
+  bottom: 82px;
+  z-index: 2;
+  display: flex;
+  align-items: end;
+  gap: 0;
+}
+
+.home-news-panel {
+  width: min(360px, 34vw);
+  height: min(410px, 54vh);
+  min-height: 300px;
+  padding: 0 14px 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 12px;
+  background: rgba(8, 12, 22, .66);
+  backdrop-filter: blur(14px);
+}
+
+.home-news-banner {
+  position: relative;
+  flex: 0 0 auto;
+  aspect-ratio: 16 / 9;
+  margin: 10px 0 8px;
+  overflow: hidden;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, .2);
+}
+
+.home-news-banner img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.home-news-banner::after {
+  content: '';
+  position: absolute;
+  inset: 42% 0 0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .42));
+  pointer-events: none;
+}
+
+.home-news-banner-dots {
+  position: absolute;
+  z-index: 1;
+  right: 12px;
+  bottom: 8px;
+  display: flex;
+  gap: 5px;
+}
+
+.home-news-banner-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .48);
+}
+
+.home-news-banner-dots i.active {
+  background: #fff;
+}
+
+.home-news-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 20px;
+  margin-bottom: 6px;
+}
+
+.home-news-tabs button,
+.home-news-item {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, .58);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.home-news-tabs button.active {
+  color: rgba(255, 255, 255, .96);
+}
+
+.home-news-tabs button:hover,
+.home-news-item:hover {
+  color: rgba(255, 255, 255, .92);
+}
+
+.home-news-item {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  padding: 6px 0;
+  color: rgba(255, 255, 255, .86);
+  text-align: left;
+}
+
+.home-news-item {
+  flex: 0 0 auto;
+}
+
+.home-news-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-news-item span {
+  color: rgba(255, 255, 255, .86);
+}
+
+.home-news-item time {
+  color: rgba(255, 255, 255, .42);
+  font-size: 10px;
+}
+
+.home-news-empty {
+  padding: 13px 0 4px;
+  color: rgba(255, 255, 255, .45);
+  font-size: 11px;
+}
+
+.home-background-hotzone {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 86px;
+  z-index: 4;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.home-background-rail {
+  position: relative;
+  isolation: isolate;
+  width: 68px;
+  min-height: 178px;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 13px 8px;
+  box-sizing: border-box;
+  opacity: 0;
+  transform: translateX(18px);
+  pointer-events: none;
+  background: transparent;
+  transition: opacity .2s ease, transform .2s ease;
+}
+
+.home-background-rail::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: -104px;
+  right: -42px;
+  bottom: -104px;
+  left: -78px;
+  background: linear-gradient(90deg, transparent 0%, rgba(8, 12, 22, .16) 35%, rgba(8, 12, 22, .55) 70%, rgba(8, 12, 22, .78) 100%);
+  pointer-events: none;
+}
+
+.home-background-rail.is-visible {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.home-background-arrow {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, .65);
+  font-size: 32px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.home-background-arrow .el-icon {
+  font-size: 32px;
+}
+
+.home-background-arrow:hover {
+  color: var(--theme-accent, #75d6bb);
+}
+
+.home-background-playback {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, .78);
+  cursor: pointer;
+  font-size: 32px;
+}
+
+.home-background-playback:hover {
+  color: var(--theme-accent, #75d6bb);
+}
+
+.home-background-list {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 238px;
+  overflow-y: auto;
+  overflow-x: visible;
+  scrollbar-width: none;
+}
+
+.home-background-list::-webkit-scrollbar {
+  display: none;
+}
+
+.home-background-thumb {
+  position: relative;
+  width: 42px;
+  height: 30px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .08);
+  cursor: pointer;
+  opacity: .62;
+  transition: opacity .18s ease, border-color .18s ease, transform .18s ease;
+}
+
+.home-background-thumb:hover {
+  opacity: 1;
+  transform: translateX(-2px);
+}
+
+.home-background-thumb.active {
+  opacity: 1;
+  border-color: var(--theme-accent, #75d6bb);
+}
+
+.home-background-thumb-image {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+}
+
+.home-background-thumb-type {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  display: flex;
+  color: rgba(255, 255, 255, .9);
+  font-size: 10px;
+  filter: drop-shadow(0 1px 2px #000);
+}
+
+.home-background-thumb-type .el-icon {
+  font-size: 10px;
 }
 
 .version-info-chip {
@@ -619,7 +1048,7 @@ watch(
   border-radius: 999px 999px 0 0;
 }
 
-.version-info-chip > * {
+.version-info-chip>* {
   position: relative;
   z-index: 2;
 }
@@ -742,6 +1171,32 @@ watch(
   z-index: 3;
 }
 
+@media (max-width: 900px) {
+  .home-launcher-links {
+    left: 20px;
+    bottom: 92px;
+  }
+
+  .home-news-panel {
+    width: min(360px, calc(100vw - 56px));
+    height: min(410px, 54vh);
+  }
+
+  .version-info-panel {
+    left: 20px;
+    bottom: 20px;
+    max-width: calc(100% - 330px);
+  }
+
+  .home-background-hotzone {
+    width: 72px;
+  }
+
+  .home-background-rail {
+    width: 62px;
+  }
+}
+
 /* --- Start Game Button (Glass Card) --- */
 .start-game-btn {
   background: rgba(255, 255, 255, 0.08);
@@ -770,7 +1225,7 @@ watch(
   border-radius: 30px 30px 0 0;
 }
 
-.start-game-btn > * {
+.start-game-btn>* {
   position: relative;
   z-index: 2;
 }
@@ -827,8 +1282,13 @@ watch(
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .start-game-btn.disabled {
