@@ -150,6 +150,8 @@ pub fn run() {
             plugin::commands::install_plugin_package,
             plugin::commands::get_plugin_setting,
             plugin::commands::set_plugin_setting,
+            plugin::commands::read_plugin_log,
+            plugin::commands::clear_plugin_log,
             config::path_manager::ssmt_install_directory,
             commands::ccswitch::import_ccswitch_providers,
             commands::clipboard::clipboard_write_text,

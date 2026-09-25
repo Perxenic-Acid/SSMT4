@@ -1,3 +1,4 @@
+use super::logging::PluginLogWriter;
 use super::package_installer::install_ssmtpkg;
 use super::registry::{ExternalDependencyState, PluginRegistry};
 use super::settings::PluginSettingsStore;
@@ -177,6 +178,28 @@ pub fn install_plugin_package(
     install_ssmtpkg(&mut registry, &PathBuf::from(archive_path))
         .map_err(|error| error.to_string())?;
     Ok(snapshot(&registry))
+}
+
+#[tauri::command]
+pub fn read_plugin_log(plugin_id: String) -> Result<String, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    if registry.find(&plugin_id).is_none() {
+        return Err(format!("plugin not found: {plugin_id}"));
+    }
+    PluginLogWriter::new(&plugin_id)
+        .and_then(|writer| writer.read())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn clear_plugin_log(plugin_id: String) -> Result<(), String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    if registry.find(&plugin_id).is_none() {
+        return Err(format!("plugin not found: {plugin_id}"));
+    }
+    PluginLogWriter::new(&plugin_id)
+        .and_then(|writer| writer.clear())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

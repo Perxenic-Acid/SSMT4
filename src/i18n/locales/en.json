@@ -335,8 +335,10 @@
     "empty": { "discover": "No curated plugins are available.", "installed": "No plugins installed yet.", "updates": "All installed plugins are up to date." },
     "none": "None",
     "notProvided": "Not provided by this catalog entry.",
-    "actions": { "refresh": "Refresh", "installFromFile": "Install from file", "choosePackage": "Choose an SSMT plugin package", "installPackage": "Install package", "enable": "Enable", "disable": "Disable" },
-    "messages": { "loadFailed": "Failed to load plugin registry: {error}", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}" }
+    "actions": { "refresh": "Refresh", "installFromFile": "Install from file", "choosePackage": "Choose an SSMT plugin package", "installPackage": "Install package", "enable": "Enable", "disable": "Disable", "viewLog": "View log", "clearLog": "Clear log", "close": "Close" },
+    "logTitle": "Plugin log · {name}",
+    "logEmpty": "No plugin log entries.",
+    "messages": { "loadFailed": "Failed to load plugin registry: {error}", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}", "logFailed": "Failed to access plugin log: {error}", "logCleared": "Plugin log cleared." }
   },
   "launchUi": {
     "title": "Launching game",

@@ -334,8 +334,10 @@
     "empty": { "discover": "暂无受控插件。", "installed": "还没有安装插件。", "updates": "已安装插件都是最新版本。" },
     "none": "无",
     "notProvided": "此目录条目尚未提供。",
-    "actions": { "refresh": "刷新", "installFromFile": "从文件安装", "choosePackage": "选择 SSMT 插件包", "installPackage": "安装插件包", "enable": "启用", "disable": "禁用" },
-    "messages": { "loadFailed": "读取插件注册表失败：{error}", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}" }
+    "actions": { "refresh": "刷新", "installFromFile": "从文件安装", "choosePackage": "选择 SSMT 插件包", "installPackage": "安装插件包", "enable": "启用", "disable": "禁用", "viewLog": "查看日志", "clearLog": "清空日志", "close": "关闭" },
+    "logTitle": "插件日志 · {name}",
+    "logEmpty": "暂无插件日志。",
+    "messages": { "loadFailed": "读取插件注册表失败：{error}", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}", "logFailed": "访问插件日志失败：{error}", "logCleared": "插件日志已清空。" }
   },
   "launchUi": {
     "title": "正在启动游戏",

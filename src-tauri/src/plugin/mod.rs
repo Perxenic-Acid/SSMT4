@@ -9,6 +9,7 @@ pub mod hoyoshade;
 pub mod launch_barrier;
 pub mod launch_coordinator;
 pub mod launch_event_bus;
+pub mod logging;
 pub mod marketplace;
 pub mod package_installer;
 pub mod process_forwarder;

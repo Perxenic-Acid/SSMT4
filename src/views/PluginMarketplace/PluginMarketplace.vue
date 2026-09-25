@@ -3,8 +3,9 @@ import { computed, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { ElMessage } from 'element-plus'
-import { Download, FolderOpened, Refresh, Setting, SwitchButton } from '@element-plus/icons-vue'
+import { Download, FolderOpened, Refresh, Setting, SwitchButton, Document, Delete } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
+import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 
 type DependencyStatus = 'missing' | 'invalid' | 'ready'
 
@@ -84,6 +85,9 @@ const activeTab = ref<'discover' | 'installed' | 'updates'>('discover')
 const selectedId = ref(catalog[0]?.id ?? '')
 const installed = ref<InstalledPlugin[]>([])
 const loading = ref(false)
+const logDialogOpen = ref(false)
+const pluginLog = ref('')
+const logLoading = ref(false)
 
 const selectedEntry = computed(() => catalog.find(entry => entry.id === selectedId.value) ?? catalog[0])
 const installedById = computed(() => new Map(installed.value.map(plugin => [plugin.manifest.id, plugin])))
@@ -165,6 +169,33 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
     ElMessage.error(t('pluginMarketplace.messages.updateFailed', { error: String(error) }))
   } finally {
     loading.value = false
+  }
+}
+
+const openPluginLog = async () => {
+  if (!selectedEntry.value || !installedById.value.has(selectedEntry.value.id)) return
+  logLoading.value = true
+  try {
+    pluginLog.value = await readPluginLog(selectedEntry.value.id)
+    logDialogOpen.value = true
+  } catch (error) {
+    ElMessage.error(t('pluginMarketplace.messages.logFailed', { error: String(error) }))
+  } finally {
+    logLoading.value = false
+  }
+}
+
+const clearSelectedPluginLog = async () => {
+  if (!selectedEntry.value) return
+  logLoading.value = true
+  try {
+    await clearPluginLog(selectedEntry.value.id)
+    pluginLog.value = ''
+    ElMessage.success(t('pluginMarketplace.messages.logCleared'))
+  } catch (error) {
+    ElMessage.error(t('pluginMarketplace.messages.logFailed', { error: String(error) }))
+  } finally {
+    logLoading.value = false
   }
 }
 
@@ -277,6 +308,7 @@ onMounted(refreshInstalled)
         <div class="detail-footer">
           <span class="install-size"><Download :size="15" />{{ formatSize(selectedEntry.packageSize) }}</span>
           <template v-if="installedById.get(selectedEntry.id)">
+            <el-button :icon="Document" :loading="logLoading" @click="openPluginLog">{{ t('pluginMarketplace.actions.viewLog') }}</el-button>
             <el-button :type="installedById.get(selectedEntry.id)?.enabled ? 'warning' : 'success'" :icon="SwitchButton" :loading="loading" @click="togglePlugin(installedById.get(selectedEntry.id)!)">
               {{ installedById.get(selectedEntry.id)?.enabled ? t('pluginMarketplace.actions.disable') : t('pluginMarketplace.actions.enable') }}
             </el-button>
@@ -285,6 +317,14 @@ onMounted(refreshInstalled)
         </div>
       </aside>
     </section>
+
+    <el-dialog v-model="logDialogOpen" :title="t('pluginMarketplace.logTitle', { name: selectedEntry?.name ?? '' })" width="min(760px, calc(100vw - 36px))">
+      <pre class="plugin-log-view">{{ pluginLog || t('pluginMarketplace.logEmpty') }}</pre>
+      <template #footer>
+        <el-button :icon="Delete" :loading="logLoading" @click="clearSelectedPluginLog">{{ t('pluginMarketplace.actions.clearLog') }}</el-button>
+        <el-button @click="logDialogOpen = false">{{ t('pluginMarketplace.actions.close') }}</el-button>
+      </template>
+    </el-dialog>
   </main>
 </template>
 
@@ -354,6 +394,7 @@ onMounted(refreshInstalled)
 .screenshot-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .screenshot-list img { max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; }
 .changelog-list { margin: 0; padding-left: 18px; color: rgba(235,242,240,.62); font-size: 12px; line-height: 1.6; }
+.plugin-log-view { max-height: 58vh; overflow: auto; margin: 0; padding: 14px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; background: rgba(0,0,0,.24); color: rgba(235,242,240,.75); font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .empty-state { padding: 32px 18px; border: 1px dashed rgba(255,255,255,.14); border-radius: 10px; text-align: center; }
 .detail-footer { justify-content: flex-end; gap: 10px; margin-top: 30px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.1); }
 .install-size { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; color: rgba(235,242,240,.5); font-size: 11px; }
