@@ -312,7 +312,7 @@ fn validate_contributions(
     let mut routes = HashSet::new();
     for page in &contributions.ui_pages {
         validate_plugin_id(&page.id)?;
-        validate_non_empty("UI page route", &page.route)?;
+        validate_ui_route(&page.route)?;
         validate_package_path("UI page", &page.path)?;
         if !routes.insert(page.route.as_str()) {
             return Err(PluginManifestError::DuplicateValue {
@@ -371,6 +371,27 @@ fn validate_contributions(
                 &dependency_ids,
             )?;
         }
+    }
+    Ok(())
+}
+
+fn validate_ui_route(route: &str) -> Result<(), PluginManifestError> {
+    let Some(suffix) = route.strip_prefix("/plugins/") else {
+        return Err(PluginManifestError::InvalidContribution(format!(
+            "UI page route must be under /plugins/: {route}"
+        )));
+    };
+    if suffix.is_empty()
+        || suffix.split('/').any(|segment| {
+            segment.is_empty()
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+    {
+        return Err(PluginManifestError::InvalidContribution(format!(
+            "invalid UI page route: {route}"
+        )));
     }
     Ok(())
 }
@@ -619,6 +640,20 @@ mod tests {
         ));
         assert!(validate_package_relative_path("..\\outside.dll").is_err());
         assert!(validate_package_relative_path("C:\\outside.dll").is_err());
+    }
+
+    #[test]
+    fn rejects_ui_routes_outside_plugin_namespace() {
+        let mut manifest = valid_manifest();
+        manifest.contributions.ui_pages.push(UiPageContribution {
+            id: "settings".to_string(),
+            route: "/settings/override".to_string(),
+            path: "ui/index.html".to_string(),
+        });
+        assert!(matches!(
+            manifest.validate(),
+            Err(PluginManifestError::InvalidContribution(_))
+        ));
     }
 
     #[test]

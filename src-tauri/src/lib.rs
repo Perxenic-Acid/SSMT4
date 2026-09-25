@@ -144,6 +144,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             set_show_window_shortcut_enabled,
             plugin::commands::plugin_registry_snapshot,
+            plugin::commands::plugin_ui_routes,
             plugin::commands::set_plugin_enabled,
             plugin::commands::install_plugin_package,
             config::path_manager::ssmt_install_directory,
