@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 pub mod launch_coordinator;
+pub mod process_forwarder;
 pub mod registry;
 
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
