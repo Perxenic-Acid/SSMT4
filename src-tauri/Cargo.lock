@@ -4756,6 +4756,7 @@ dependencies = [
  "toml 0.8.2",
  "trash",
  "unrar",
+ "windows-sys 0.61.2",
  "zip 0.6.6",
 ]
 
