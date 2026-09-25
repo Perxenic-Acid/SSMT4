@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+pub mod launch_coordinator;
 pub mod registry;
 
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
