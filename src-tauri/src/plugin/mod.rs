@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+pub mod commands;
 pub mod external_manager;
 pub mod hoyoshade;
 pub mod launch_barrier;

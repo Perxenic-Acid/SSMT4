@@ -99,6 +99,7 @@ const allNavItems: NavItem[] = [
     { id: 'nexusmods', path: '/nexusmods', labelKey: 'titlebar.nav.nexusMods' },
     { id: 'xianzun', path: '/xianzun', labelKey: 'titlebar.nav.xianzun' },
     { id: 'ui-builder', path: '/ui-builder', labelKey: 'titlebar.nav.uiBuilder' },
+    { id: 'plugins', path: '/plugins', labelKey: 'titlebar.nav.plugins' },
 ];
 
 const navOrder = ref<string[]>([]);
@@ -494,6 +495,7 @@ const toggleSettingsPage = () => {
                             <svg v-else-if="item.id === 'nexusmods'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v16H6z"></path><path d="M9 8h6"></path><path d="M9 12h6"></path><path d="M9 16h4"></path></svg>
                             <svg v-else-if="item.id === 'xianzun'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path><path d="M8.5 11h7"></path><path d="M8.5 14.5h4"></path></svg>
                             <svg v-else-if="item.id === 'ui-builder'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M8 8h8v8H8z"></path><path d="M8 12h8M12 8v8"></path></svg>
+                            <svg v-else-if="item.id === 'plugins'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v3M15 3v3M7 6h10a2 2 0 0 1 2 2v3h-3a2 2 0 1 0 0 4h3v1a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-3h3a2 2 0 1 0 0-4H5V8a2 2 0 0 1 2-2Z"></path></svg>
                         </span>
                         <span class="caption-tab-label">{{ item.label }}</span>
                     </button>

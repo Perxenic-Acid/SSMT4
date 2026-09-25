@@ -319,8 +319,23 @@
       "gameBanana": "GameBanana",
       "nexusMods": "Nexus Mods",
       "xianzun": "Cheese Cat",
-      "uiBuilder": "UI Builder"
+      "uiBuilder": "UI Builder",
+      "plugins": "Plugins"
     }
+  },
+  "pluginMarketplace": {
+    "title": "Plugin Marketplace",
+    "subtitle": "Curated SSMT integrations with explicit permissions and dependency status.",
+    "byAuthor": "by {author}",
+    "tabs": { "discover": "Discover", "installed": "Installed", "updates": "Updates" },
+    "status": { "enabled": "Enabled", "disabled": "Disabled" },
+    "sections": { "supportedGames": "Supported games", "permissions": "Permissions", "externalDependencies": "External dependencies", "screenshots": "Screenshots", "changelog": "Release notes" },
+    "dependencyStatus": { "ready": "Ready", "missing": "Missing", "invalid": "Invalid" },
+    "empty": { "discover": "No curated plugins are available.", "installed": "No plugins installed yet.", "updates": "All installed plugins are up to date." },
+    "none": "None",
+    "notProvided": "Not provided by this catalog entry.",
+    "actions": { "refresh": "Refresh", "installFromFile": "Install from file", "choosePackage": "Choose an SSMT plugin package", "installPackage": "Install package", "enable": "Enable", "disable": "Disable" },
+    "messages": { "loadFailed": "Failed to load plugin registry: {error}", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}" }
   },
   "xianzun": {
     "nav": "Cheese Cat",

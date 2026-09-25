@@ -32,6 +32,7 @@ const loadSettings = () => import('../views/Settings/Settings.vue')
 const loadXianZun = () => import('../views/XianZun/XianZun.vue')
 const loadUIBuilder = () => import('../views/UIBuilder/UIBuilder.vue')
 const loadTextureModMaker = () => import('../views/TextureModMaker/TextureModMaker.vue')
+const loadPluginMarketplace = () => import('../views/PluginMarketplace/PluginMarketplace.vue')
 
 const WorkPage = asyncPage(loadWorkPage)
 const ModsManagement = asyncPage(loadModsManagement)
@@ -43,6 +44,7 @@ const Settings = asyncPage(loadSettings)
 const XianZun = asyncPage(loadXianZun)
 const UIBuilder = asyncPage(loadUIBuilder)
 const TextureModMaker = asyncPage(loadTextureModMaker)
+const PluginMarketplace = asyncPage(loadPluginMarketplace)
 
 /**
  * Warm the route chunks in the background once the app has started, so the
@@ -60,6 +62,7 @@ export const prefetchRouteComponents = () => {
     loadXianZun,
     loadGameBananaAuthor,
     loadUIBuilder,
+    loadPluginMarketplace,
   ]
   loaders.forEach((load, index) => {
     window.setTimeout(() => {
@@ -82,6 +85,7 @@ const routes = [
   { path: '/xianzun', name: 'XianZun', component: XianZun, meta: { title: '芝士猫', requiresGame: false } },
   { path: '/ui-builder', name: 'UIBuilder', component: UIBuilder, meta: { title: 'UI Builder', requiresGame: false } },
   { path: '/texture-mod-maker', name: 'TextureModMaker', component: TextureModMaker, meta: { title: 'Texture Mod Maker', requiresGame: true } },
+  { path: '/plugins', name: 'PluginMarketplace', component: PluginMarketplace, meta: { title: 'Plugin Marketplace', requiresGame: false } },
 ]
 
 const router = createRouter({
