@@ -27,6 +27,8 @@
 
 修改这里的文件属于 SSMT 主仓库本身。
 
+通常用 `bun tauri dev` 测试, 用 `.\build_release.ps1` 构建发型包. 后者 agent 禁用, 永远不要发起发型包构建.
+
 ### 2.2 Git Submodules
 
 本项目目前包含两个 Git submodule。
@@ -45,6 +47,8 @@
 对 `.\runtime\` 中源码的修改属于独立 Git 仓库。
 完成修改后需要在该 submodule 中单独提交，再由主仓库更新 submodule pointer。
 
+目前在 **其** 根目录存在两个编译脚本, `debug.ps1` 和 `release.ps1` 区别在于前者会主动唤起游戏进行测试, 实际参数都是 Release.
+
 #### SSMT Native
 
 - 路径：`.\native\`
@@ -61,6 +65,8 @@
 - 与 3DMigoto Runtime 的 Native bridge。
 
 对 `.\native\` 中源码的修改同样属于独立 Git 仓库。
+
+目前可以通过 cmake 手动编译或在 SSMT 根目录执行 `build_native.ps1` 自动部署.
 
 不要把 submodule 内的修改误认为主仓库修改。
 
