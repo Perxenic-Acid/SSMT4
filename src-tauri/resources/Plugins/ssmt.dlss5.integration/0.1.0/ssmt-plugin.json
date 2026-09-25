@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "ssmt.dlss5.integration",
+  "name": "DLSS 5 Swapper Integration",
+  "version": "0.1.0",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.x",
+    "platforms": ["windows-x64"]
+  },
+  "contributions": {
+    "runtimePlugins": [],
+    "launcherAdapters": [],
+    "uiPages": [],
+    "externalManagers": [
+      {
+        "id": "dlss5-swapper",
+        "executable": "${external.dlss5-swapper}/DLSS5-Swapper.exe",
+        "workingDirectory": "${external.dlss5-swapper}"
+      }
+    ]
+  },
+  "externalDependencies": [
+    {
+      "id": "dlss5-swapper",
+      "type": "directory",
+      "requiredFiles": ["DLSS5-Swapper.exe"]
+    }
+  ],
+  "permissions": ["process.spawn", "filesystem.read"]
+}

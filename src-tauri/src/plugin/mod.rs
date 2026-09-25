@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+pub mod external_manager;
 pub mod hoyoshade;
 pub mod launch_barrier;
 pub mod launch_coordinator;
@@ -43,7 +44,18 @@ pub struct PluginContributions {
     #[serde(default)]
     pub launcher_adapters: Vec<LauncherAdapterContribution>,
     #[serde(default)]
+    pub external_managers: Vec<ExternalManagerContribution>,
+    #[serde(default)]
     pub ui_pages: Vec<UiPageContribution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalManagerContribution {
+    pub id: String,
+    pub executable: String,
+    #[serde(default)]
+    pub working_directory: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +344,29 @@ fn validate_contributions(
                     "ready condition requires a non-empty value".to_string(),
                 ));
             }
+        }
+    }
+
+    let mut manager_ids = HashSet::new();
+    for manager in &contributions.external_managers {
+        validate_plugin_id(&manager.id)?;
+        if !manager_ids.insert(manager.id.as_str()) {
+            return Err(PluginManifestError::DuplicateValue {
+                field: "external manager id",
+                value: manager.id.clone(),
+            });
+        }
+        validate_launcher_path(
+            "external manager executable",
+            &manager.executable,
+            &dependency_ids,
+        )?;
+        if let Some(working_directory) = &manager.working_directory {
+            validate_launcher_path(
+                "external manager working directory",
+                working_directory,
+                &dependency_ids,
+            )?;
         }
     }
     Ok(())
