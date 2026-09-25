@@ -60,6 +60,42 @@ pub struct LauncherAdapterContribution {
     pub arguments: Vec<String>,
     #[serde(default)]
     pub working_directory: Option<String>,
+    #[serde(default)]
+    pub ready: Option<ReadyCondition>,
+    #[serde(default)]
+    pub failure_policy: FailurePolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadyCondition {
+    #[serde(rename = "type")]
+    pub kind: ReadyConditionType,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default = "default_ready_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReadyConditionType {
+    StderrContains,
+    StdoutContains,
+    ProcessExited,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FailurePolicy {
+    #[default]
+    Abort,
+    Warn,
+    Ignore,
+}
+
+fn default_ready_timeout_ms() -> u64 {
+    15_000
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,6 +316,20 @@ fn validate_contributions(
         }
         for argument in &adapter.arguments {
             validate_template(argument, &dependency_ids)?;
+        }
+        if let Some(ready) = &adapter.ready {
+            if ready.timeout_ms == 0 {
+                return Err(PluginManifestError::InvalidContribution(
+                    "ready timeoutMs must be greater than zero".to_string(),
+                ));
+            }
+            if !matches!(ready.kind, ReadyConditionType::ProcessExited)
+                && ready.value.as_deref().map_or(true, str::is_empty)
+            {
+                return Err(PluginManifestError::InvalidContribution(
+                    "ready condition requires a non-empty value".to_string(),
+                ));
+            }
         }
     }
     Ok(())

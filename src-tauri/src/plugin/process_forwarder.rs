@@ -1,5 +1,8 @@
 use super::registry::InstalledPlugin;
-use super::{LauncherAdapterContribution, LauncherAdapterType};
+use super::{
+    FailurePolicy, LauncherAdapterContribution, LauncherAdapterType, ReadyCondition,
+    ReadyConditionType,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitStatus;
@@ -27,6 +30,8 @@ pub struct ProcessForwarderSpec {
     pub arguments: Vec<String>,
     pub working_directory: PathBuf,
     pub timeout: Option<Duration>,
+    pub ready: Option<ReadyCondition>,
+    pub failure_policy: FailurePolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +69,8 @@ pub enum ProcessForwarderError {
     SpawnFailed(String),
     OutputReaderFailed(String),
     TimedOut,
+    ReadyTimeout,
+    ExitedBeforeReady(Option<i32>),
 }
 
 impl std::fmt::Display for ProcessForwarderError {
@@ -91,6 +98,10 @@ impl std::fmt::Display for ProcessForwarderError {
                 write!(formatter, "failed to capture launcher output: {error}")
             }
             Self::TimedOut => write!(formatter, "launcher process timed out"),
+            Self::ReadyTimeout => write!(formatter, "launcher ready condition timed out"),
+            Self::ExitedBeforeReady(code) => {
+                write!(formatter, "launcher exited before ready, code={code:?}")
+            }
         }
     }
 }
@@ -128,6 +139,8 @@ impl ProcessForwarderSpec {
             arguments,
             working_directory,
             timeout,
+            ready: contribution.ready.clone(),
+            failure_policy: contribution.failure_policy,
         })
     }
 
@@ -168,11 +181,33 @@ impl ProcessForwarderSpec {
         let stdout_task = read_output(stdout, OutputStream::Stdout, sender.clone());
         let stderr_task = read_output(stderr, OutputStream::Stderr, sender.clone());
         drop(sender);
+        let mut output = CapturedOutput::default();
+
+        if let Some(ready) = self.ready.as_ref() {
+            let ready_result = wait_for_ready(
+                &mut child,
+                &mut receiver,
+                &mut on_output,
+                &mut output,
+                ready,
+                self.failure_policy,
+            )
+            .await?;
+            if let Err(ProcessForwarderError::ExitedBeforeReady(code)) = ready_result {
+                match self.failure_policy {
+                    FailurePolicy::Abort => {
+                        return Err(ProcessForwarderError::ExitedBeforeReady(code));
+                    }
+                    FailurePolicy::Warn | FailurePolicy::Ignore => {}
+                }
+            }
+        }
 
         let wait = collect_until_exit(
             &mut child,
             &mut receiver,
             &mut on_output,
+            output,
             stdout_task,
             stderr_task,
         );
@@ -208,13 +243,13 @@ async fn collect_until_exit<F>(
     child: &mut Child,
     receiver: &mut mpsc::Receiver<ForwarderOutput>,
     on_output: &mut F,
+    mut output: CapturedOutput,
     stdout_task: JoinHandle<Result<(), std::io::Error>>,
     stderr_task: JoinHandle<Result<(), std::io::Error>>,
 ) -> Result<ProcessForwarderResult, ProcessForwarderError>
 where
     F: FnMut(ForwarderOutput),
 {
-    let mut output = CapturedOutput::default();
     let status = loop {
         tokio::select! {
             status = child.wait() => {
@@ -237,6 +272,54 @@ where
     await_reader(stdout_task).await?;
     await_reader(stderr_task).await?;
     Ok(ProcessForwarderResult { status, output })
+}
+
+async fn wait_for_ready<F>(
+    child: &mut Child,
+    receiver: &mut mpsc::Receiver<ForwarderOutput>,
+    on_output: &mut F,
+    output: &mut CapturedOutput,
+    ready: &ReadyCondition,
+    failure_policy: FailurePolicy,
+) -> Result<Result<(), ProcessForwarderError>, ProcessForwarderError>
+where
+    F: FnMut(ForwarderOutput),
+{
+    let wait = async {
+        loop {
+            tokio::select! {
+                status = child.wait() => {
+                    let status = status.map_err(|error| ProcessForwarderError::SpawnFailed(error.to_string()))?;
+                    if matches!(ready.kind, ReadyConditionType::ProcessExited) {
+                        return Ok(Ok(()));
+                    }
+                    return Ok(Err(ProcessForwarderError::ExitedBeforeReady(status.code())));
+                }
+                line = receiver.recv() => {
+                    let Some(line) = line else {
+                        continue;
+                    };
+                    append_output(output, &line);
+                    let matched = matches!((ready.kind, line.stream),
+                        (ReadyConditionType::StdoutContains, OutputStream::Stdout) |
+                        (ReadyConditionType::StderrContains, OutputStream::Stderr))
+                        && ready.value.as_deref().is_some_and(|value| line.line.contains(value));
+                    on_output(line);
+                    if matched {
+                        return Ok(Ok(()));
+                    }
+                }
+            }
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_millis(ready.timeout_ms), wait).await {
+        Ok(result) => result,
+        Err(_) => match failure_policy {
+            FailurePolicy::Abort => Err(ProcessForwarderError::ReadyTimeout),
+            FailurePolicy::Warn | FailurePolicy::Ignore => Ok(Ok(())),
+        },
+    }
 }
 
 async fn await_reader(
@@ -400,6 +483,8 @@ mod tests {
                 "--path=${game.directory}".to_string(),
             ],
             working_directory: Some("${plugin.root}".to_string()),
+            ready: None,
+            failure_policy: FailurePolicy::Abort,
         };
         let spec = ProcessForwarderSpec::resolve(&plugin, &adapter, &context, None).unwrap();
         assert_eq!(spec.executable, root.join("external/inject.exe"));
@@ -421,6 +506,8 @@ mod tests {
                 executable: executable.to_string(),
                 arguments: Vec::new(),
                 working_directory: None,
+                ready: None,
+                failure_policy: FailurePolicy::Abort,
             };
             assert!(ProcessForwarderSpec::resolve(&plugin, &adapter, &context, None).is_err());
         }
@@ -441,6 +528,8 @@ mod tests {
             ],
             working_directory: root.clone(),
             timeout: Some(Duration::from_secs(20)),
+            ready: None,
+            failure_policy: FailurePolicy::Abort,
         };
         let mut command = spec;
         command.arguments = vec![
@@ -452,6 +541,64 @@ mod tests {
         assert!(result.status.success());
         assert!(result.output.stdout.contains("forwarder-child-stdout"));
         assert!(result.output.stderr.contains("forwarder-child-stderr"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn waits_for_stderr_ready_marker_before_finishing() {
+        let root = temp_root("ready");
+        fs::create_dir_all(&root).unwrap();
+        let spec = ProcessForwarderSpec {
+            plugin_id: "test".to_string(),
+            executable: std::env::current_exe().unwrap(),
+            arguments: vec![
+                "--exact".to_string(),
+                "plugin::process_forwarder::tests::forwarder_child_process".to_string(),
+                "--nocapture".to_string(),
+            ],
+            working_directory: root.clone(),
+            timeout: Some(Duration::from_secs(20)),
+            ready: Some(ReadyCondition {
+                kind: ReadyConditionType::StderrContains,
+                value: Some("forwarder-child-stderr".to_string()),
+                timeout_ms: 5_000,
+            }),
+            failure_policy: FailurePolicy::Abort,
+        };
+        let result = spec.run(|_| {}).await.unwrap();
+        assert!(result.status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ready_timeout_obeys_failure_policy() {
+        let root = temp_root("ready-policy");
+        fs::create_dir_all(&root).unwrap();
+        let base = || ProcessForwarderSpec {
+            plugin_id: "test".to_string(),
+            executable: std::env::current_exe().unwrap(),
+            arguments: vec![
+                "--exact".to_string(),
+                "plugin::process_forwarder::tests::forwarder_child_process".to_string(),
+                "--nocapture".to_string(),
+            ],
+            working_directory: root.clone(),
+            timeout: Some(Duration::from_secs(20)),
+            ready: Some(ReadyCondition {
+                kind: ReadyConditionType::StdoutContains,
+                value: Some("missing-ready-marker".to_string()),
+                timeout_ms: 1,
+            }),
+            failure_policy: FailurePolicy::Abort,
+        };
+
+        assert!(matches!(
+            base().run(|_| {}).await,
+            Err(ProcessForwarderError::ReadyTimeout)
+        ));
+        let mut warn = base();
+        warn.failure_policy = FailurePolicy::Warn;
+        assert!(warn.run(|_| {}).await.unwrap().status.success());
         fs::remove_dir_all(root).unwrap();
     }
 
