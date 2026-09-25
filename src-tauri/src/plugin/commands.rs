@@ -6,11 +6,24 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginLifecycleStatus {
+    Installed,
+    Enabled,
+    Disabled,
+    UpdateAvailable,
+    Broken,
+    Incompatible,
+    ExternalDependencyMissing,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledPluginSnapshot {
     pub manifest: PluginManifest,
     pub enabled: bool,
+    pub lifecycle_status: PluginLifecycleStatus,
     pub external_dependencies: BTreeMap<String, ExternalDependencyState>,
 }
 
@@ -38,9 +51,25 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
         .map(|plugin| InstalledPluginSnapshot {
             manifest: plugin.manifest.clone(),
             enabled: plugin.enabled,
+            lifecycle_status: lifecycle_status(plugin),
             external_dependencies: plugin.external_dependencies.clone(),
         })
         .collect()
+}
+
+fn lifecycle_status(plugin: &super::registry::InstalledPlugin) -> PluginLifecycleStatus {
+    if plugin
+        .external_dependencies
+        .values()
+        .any(|dependency| dependency.status != super::registry::ExternalDependencyStatus::Ready)
+    {
+        return PluginLifecycleStatus::ExternalDependencyMissing;
+    }
+    if plugin.enabled {
+        PluginLifecycleStatus::Enabled
+    } else {
+        PluginLifecycleStatus::Disabled
+    }
 }
 
 fn ui_routes(registry: &PluginRegistry) -> Vec<PluginUiRouteSnapshot> {
@@ -151,8 +180,15 @@ pub fn install_plugin_package(
 
 #[cfg(test)]
 mod tests {
-    use super::capabilities_for_permissions;
-    use crate::plugin::PluginPermission;
+    use super::{capabilities_for_permissions, lifecycle_status, PluginLifecycleStatus};
+    use crate::plugin::registry::{
+        ExternalDependencyState, ExternalDependencyStatus, InstalledPlugin,
+    };
+    use crate::plugin::{
+        PluginCompatibility, PluginContributions, PluginManifest, PluginPermission,
+    };
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     #[test]
     fn maps_declared_permissions_to_scoped_capabilities() {
@@ -166,5 +202,50 @@ mod tests {
             capabilities,
             vec!["filesystem.read", "launch.start", "plugin.settings"]
         );
+    }
+
+    #[test]
+    fn derives_application_lifecycle_without_runtime_states() {
+        let manifest = PluginManifest {
+            schema_version: 1,
+            id: "ssmt.fixture".to_string(),
+            name: "Fixture".to_string(),
+            version: "1.0.0".to_string(),
+            author: "SSMT".to_string(),
+            compatibility: PluginCompatibility {
+                ssmt: ">=4.0.0".to_string(),
+                platforms: vec!["windows-x64".to_string()],
+            },
+            contributions: PluginContributions::default(),
+            external_dependencies: vec![],
+            permissions: vec![PluginPermission::ProcessSpawn],
+        };
+        let mut plugin = InstalledPlugin {
+            manifest,
+            package_root: PathBuf::from("fixture"),
+            enabled: false,
+            external_dependencies: BTreeMap::new(),
+        };
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::Disabled
+        ));
+        plugin.enabled = true;
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::Enabled
+        ));
+        plugin.external_dependencies.insert(
+            "external".to_string(),
+            ExternalDependencyState {
+                status: ExternalDependencyStatus::Missing,
+                path: None,
+                reason: Some("missing file".to_string()),
+            },
+        );
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::ExternalDependencyMissing
+        ));
     }
 }

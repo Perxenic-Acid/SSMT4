@@ -26,6 +26,7 @@ interface PluginManifest {
 interface InstalledPlugin {
   manifest: PluginManifest
   enabled: boolean
+  lifecycleStatus: 'installed' | 'enabled' | 'disabled' | 'update_available' | 'broken' | 'incompatible' | 'external_dependency_missing'
   externalDependencies: Record<string, DependencyState>
 }
 
@@ -91,6 +92,10 @@ const updateEntries = computed(() => catalog.filter(entry => {
   const current = installedById.value.get(entry.id)
   return current && compareVersions(entry.version, current.manifest.version) > 0
 }))
+const lifecycleFor = (entry: CatalogEntry, plugin: InstalledPlugin) => {
+  if (compareVersions(entry.version, plugin.manifest.version) > 0) return 'update_available'
+  return plugin.lifecycleStatus
+}
 const visibleEntries = computed(() => {
   if (activeTab.value === 'installed') return installedEntries.value
   if (activeTab.value === 'updates') return updateEntries.value
@@ -212,7 +217,7 @@ onMounted(refreshInstalled)
               <span>{{ entry.author }}</span>
               <span>{{ formatSize(entry.packageSize) }}</span>
               <span v-if="installedById.has(entry.id)" class="installed-label">
-                {{ installedById.get(entry.id)?.enabled ? t('pluginMarketplace.status.enabled') : t('pluginMarketplace.status.disabled') }}
+                {{ t(`pluginMarketplace.lifecycle.${lifecycleFor(entry, installedById.get(entry.id)!)}`) }}
               </span>
             </span>
           </span>

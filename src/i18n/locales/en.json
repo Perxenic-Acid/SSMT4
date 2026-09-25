@@ -329,6 +329,7 @@
     "byAuthor": "by {author}",
     "tabs": { "discover": "Discover", "installed": "Installed", "updates": "Updates" },
     "status": { "enabled": "Enabled", "disabled": "Disabled" },
+    "lifecycle": { "installed": "Installed", "enabled": "Enabled", "disabled": "Disabled", "update_available": "Update available", "broken": "Broken", "incompatible": "Incompatible", "external_dependency_missing": "Dependency missing" },
     "sections": { "supportedGames": "Supported games", "permissions": "Permissions", "externalDependencies": "External dependencies", "screenshots": "Screenshots", "changelog": "Release notes" },
     "dependencyStatus": { "ready": "Ready", "missing": "Missing", "invalid": "Invalid" },
     "empty": { "discover": "No curated plugins are available.", "installed": "No plugins installed yet.", "updates": "All installed plugins are up to date." },

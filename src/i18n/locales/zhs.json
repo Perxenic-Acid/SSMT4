@@ -328,6 +328,7 @@
     "byAuthor": "作者：{author}",
     "tabs": { "discover": "发现", "installed": "已安装", "updates": "可更新" },
     "status": { "enabled": "已启用", "disabled": "已禁用" },
+    "lifecycle": { "installed": "已安装", "enabled": "已启用", "disabled": "已禁用", "update_available": "有可用更新", "broken": "损坏", "incompatible": "不兼容", "external_dependency_missing": "缺少依赖" },
     "sections": { "supportedGames": "支持的游戏", "permissions": "权限", "externalDependencies": "外部依赖", "screenshots": "截图", "changelog": "更新日志" },
     "dependencyStatus": { "ready": "就绪", "missing": "缺失", "invalid": "无效" },
     "empty": { "discover": "暂无受控插件。", "installed": "还没有安装插件。", "updates": "已安装插件都是最新版本。" },
