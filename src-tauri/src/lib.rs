@@ -147,6 +147,7 @@ pub fn run() {
             plugin::commands::plugin_ui_routes,
             plugin::commands::plugin_capabilities,
             plugin::commands::set_plugin_enabled,
+            plugin::commands::set_plugin_external_dependency_path,
             plugin::commands::install_plugin_package,
             plugin::commands::get_plugin_setting,
             plugin::commands::set_plugin_setting,

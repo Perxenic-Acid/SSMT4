@@ -170,6 +170,20 @@ pub fn set_plugin_enabled(
 }
 
 #[tauri::command]
+pub fn set_plugin_external_dependency_path(
+    plugin_id: String,
+    dependency_id: String,
+    path: String,
+) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    let mut registry =
+        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    registry
+        .set_external_dependency_path(plugin_id.trim(), dependency_id.trim(), path)
+        .map_err(|error| error.to_string())?;
+    Ok(snapshot(&registry))
+}
+
+#[tauri::command]
 pub fn install_plugin_package(
     archive_path: String,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
