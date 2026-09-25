@@ -107,6 +107,11 @@ impl PathManager {
         Self::app_data_local_folder().join("SSMT4GlobalConfigs")
     }
 
+    /// 应用级插件包目录。插件包与第三方外部依赖分开存放。
+    pub fn ssmt_plugins_folder() -> PathBuf {
+        Self::ssmt_global_config_folder().join("Plugins")
+    }
+
     pub fn global_config_games_folder() -> PathBuf {
         Self::ssmt_global_config_folder().join("Games")
     }

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+pub mod registry;
+
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const SUPPORTED_PLATFORM: &str = "windows-x64";
 
