@@ -337,6 +337,15 @@
     "actions": { "refresh": "Refresh", "installFromFile": "Install from file", "choosePackage": "Choose an SSMT plugin package", "installPackage": "Install package", "enable": "Enable", "disable": "Disable" },
     "messages": { "loadFailed": "Failed to load plugin registry: {error}", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}" }
   },
+  "launchUi": {
+    "title": "Launching game",
+    "failed": "Launch failed",
+    "unknownError": "The launcher reported an unknown error.",
+    "showDetails": "Show details",
+    "hideDetails": "Hide details",
+    "waiting": "Waiting for launch events…",
+    "events": { "launch_started": "Preparing launch", "target_created": "Game process created", "inject_begin": "Injecting runtime", "inject_complete": "Runtime injected", "plugin_host_begin": "Loading plugin host", "plugin_host_ready": "Plugin host ready", "plugin_host_disabled": "Plugin host disabled", "before_resume": "Preparing game resume", "target_resumed": "Game resumed", "runtime_detected": "Runtime detected", "launch_complete": "Launch complete" }
+  },
   "xianzun": {
     "nav": "Cheese Cat",
     "nsfwBlur": "Blur NSFW images",

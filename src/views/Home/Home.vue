@@ -17,6 +17,7 @@ import { PathHelper } from '../../helper/PathHelper'
 import GameSettingsModal from '../../components/GameSettingsModal.vue'
 import SettingsMenu from '../../components/SettingsMenu.vue'
 import ReleaseNotesMarkdown from '../../components/ReleaseNotesMarkdown.vue'
+import LaunchEventOverlay from '../../components/LaunchEventOverlay.vue'
 
 import { MigotoManager } from '../../store/MigotoManager'
 import { LaunchGame } from '../../common/LaunchGame';
@@ -673,6 +674,7 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
 
     <!-- Settings Modal -->
     <GameSettingsModal ref="settingsModalRef" v-model="showSettings" :game-name="appSettings.CurrentGameName" />
+    <LaunchEventOverlay :visible="isLaunching" />
 
     <div class="action-bar">
       <!-- Start Game Button -->

@@ -336,6 +336,15 @@
     "actions": { "refresh": "刷新", "installFromFile": "从文件安装", "choosePackage": "选择 SSMT 插件包", "installPackage": "安装插件包", "enable": "启用", "disable": "禁用" },
     "messages": { "loadFailed": "读取插件注册表失败：{error}", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}" }
   },
+  "launchUi": {
+    "title": "正在启动游戏",
+    "failed": "启动失败",
+    "unknownError": "启动器报告了未知错误。",
+    "showDetails": "显示详情",
+    "hideDetails": "隐藏详情",
+    "waiting": "等待启动事件…",
+    "events": { "launch_started": "准备启动", "target_created": "游戏进程已创建", "inject_begin": "正在注入运行时", "inject_complete": "运行时注入完成", "plugin_host_begin": "正在加载插件宿主", "plugin_host_ready": "插件宿主已就绪", "plugin_host_disabled": "插件宿主未启用", "before_resume": "准备恢复游戏", "target_resumed": "游戏已恢复运行", "runtime_detected": "已检测到运行时", "launch_complete": "启动完成" }
+  },
   "xianzun": {
     "nav": "芝士猫",
     "nsfwBlur": "NSFW屏蔽",
