@@ -1,6 +1,10 @@
 use super::{ExternalDependency, PluginPermission, SUPPORTED_PLATFORM};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -46,6 +50,7 @@ pub enum MarketplaceError {
     InvalidHash(String),
     UnsupportedPlatform(String),
     BundledThirdPartyPayload(String),
+    HashMismatch { expected: String, actual: String },
 }
 
 impl std::fmt::Display for MarketplaceError {
@@ -67,11 +72,43 @@ impl std::fmt::Display for MarketplaceError {
                 formatter,
                 "marketplace packages must not bundle third-party payload: {payload}"
             ),
+            Self::HashMismatch { expected, actual } => write!(
+                formatter,
+                "marketplace package SHA256 mismatch: expected {expected}, got {actual}"
+            ),
         }
     }
 }
 
 impl std::error::Error for MarketplaceError {}
+
+pub fn verify_package_sha256(
+    package_path: &Path,
+    expected_sha256: &str,
+) -> Result<(), MarketplaceError> {
+    let expected = expected_sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(MarketplaceError::InvalidHash(expected));
+    }
+    let mut file = File::open(package_path)
+        .map_err(|error| MarketplaceError::InvalidEntry(format!("cannot read package: {error}")))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            MarketplaceError::InvalidEntry(format!("cannot hash package: {error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err(MarketplaceError::HashMismatch { expected, actual });
+    }
+    Ok(())
+}
 
 impl MarketplaceCatalog {
     pub fn validate(&self) -> Result<(), MarketplaceError> {
@@ -276,6 +313,20 @@ mod tests {
             Err(MarketplaceError::BundledThirdPartyPayload(payload))
                 if payload == "ReShade64.dll"
         ));
+    }
+
+    #[test]
+    fn verifies_downloaded_package_hash() {
+        let path =
+            std::env::temp_dir().join(format!("ssmt-marketplace-hash-{}", std::process::id()));
+        std::fs::write(&path, b"fixture package").unwrap();
+        let expected = format!("{:x}", Sha256::digest(b"fixture package"));
+        verify_package_sha256(&path, &expected).unwrap();
+        assert!(matches!(
+            verify_package_sha256(&path, &"0".repeat(64)),
+            Err(MarketplaceError::HashMismatch { .. })
+        ));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
