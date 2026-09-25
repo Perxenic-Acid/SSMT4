@@ -7,6 +7,7 @@ pub mod external_manager;
 pub mod hoyoshade;
 pub mod launch_barrier;
 pub mod launch_coordinator;
+pub mod marketplace;
 pub mod package_installer;
 pub mod process_forwarder;
 pub mod registry;
