@@ -99,9 +99,7 @@ pub async fn prepare_dds_webgl_preview(
     max_dimension.hash(&mut hasher);
     let cache_key = format!("{:016x}", hasher.finish());
     let cache_root = crate::config::path_manager::PathManager::ssmt_cache_root(&app);
-    let cache_dir = cache_root
-        .join("DdsWebglPreview")
-        .join(&cache_key);
+    let cache_dir = cache_root.join("DdsWebglPreview").join(&cache_key);
     std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
     let output = cache_dir.join(
         source

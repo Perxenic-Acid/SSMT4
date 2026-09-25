@@ -2,7 +2,7 @@
 import { AppStateManager, type GameInfo } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
 import { getGamePresetDisplayName, getGamePresetOptions } from '../../store/GamePreset'
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import {
   APP_UI_SCALE_MAX,
   APP_UI_SCALE_MIN,
@@ -23,6 +23,7 @@ import {
   ChatDotRound,
   Delete,
   Document,
+  Download,
   Edit,
   FolderOpened,
   Key,
@@ -47,6 +48,107 @@ import {
 const appSettings = AppStateManager.appSettings;
 const textureMarkStyleOptions = ['Hash', 'Slot', 'SharedSlot'] as const;
 const { t } = useI18n();
+
+const HOYOSHADE_PLUGIN_ID = 'ssmt.hoyoshade.bridge';
+const HOYOSHADE_DEPENDENCY_ID = 'hoyoshade';
+const HOYOSHADE_DOWNLOAD_URL = 'https://github.com/DuolaD/HoYoShade/releases';
+
+type PluginDependencyStatus = 'missing' | 'invalid' | 'ready';
+interface PluginDependencyState {
+  status: PluginDependencyStatus;
+  path?: string | null;
+  reason?: string | null;
+}
+interface InstalledPluginSnapshot {
+  manifest: {
+    id: string;
+    name: string;
+    externalDependencies: Array<{ id: string; requiredFiles: string[] }>;
+  };
+  enabled: boolean;
+  lifecycleStatus: string;
+  externalDependencies: Record<string, PluginDependencyState>;
+}
+
+const installedPlugins = ref<InstalledPluginSnapshot[]>([]);
+const pluginSettingsLoading = ref(false);
+const hoyoshadePlugin = computed(() => installedPlugins.value.find(
+  plugin => plugin.manifest.id === HOYOSHADE_PLUGIN_ID,
+));
+const hoyoshadeDependency = computed(() =>
+  hoyoshadePlugin.value?.externalDependencies[HOYOSHADE_DEPENDENCY_ID],
+);
+const settingsNavGroups = computed(() => [
+  {
+    title: t('settings.navigation.personalization'),
+    items: [
+      { id: 'settings-general', label: t('settings.sections.general') },
+      { id: 'settings-appearance', label: t('settings.sections.appearance') },
+      { id: 'settings-page-visibility', label: t('settings.sections.pageVisibility') },
+    ],
+  },
+  {
+    title: t('settings.navigation.integrations'),
+    items: [
+      { id: 'settings-plugins', label: t('settings.sections.plugins') },
+      { id: 'settings-games', label: t('settings.sections.games') },
+    ],
+  },
+  {
+    title: t('settings.navigation.app'),
+    items: [{ id: 'settings-about', label: t('settings.sections.about') }],
+  },
+]);
+
+const scrollToSettingsSection = (id: string) => {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+const refreshPluginSettings = async () => {
+  try {
+    installedPlugins.value = await invoke<InstalledPluginSnapshot[]>('plugin_registry_snapshot');
+  } catch (error) {
+    console.error('Failed to load plugin settings:', error);
+  }
+};
+
+const chooseHoYoShadeDirectory = async () => {
+  const selected = await openDialog({
+    directory: true,
+    multiple: false,
+    title: t('settings.plugins.hoyoshade.chooseFolderTitle'),
+  });
+  if (typeof selected !== 'string' || !selected.trim()) return;
+
+  pluginSettingsLoading.value = true;
+  try {
+    installedPlugins.value = await invoke<InstalledPluginSnapshot[]>(
+      'set_plugin_external_dependency_path',
+      {
+        pluginId: HOYOSHADE_PLUGIN_ID,
+        dependencyId: HOYOSHADE_DEPENDENCY_ID,
+        path: selected,
+      },
+    );
+    ElMessage.success(t('settings.plugins.hoyoshade.pathSaved'));
+  } catch (error) {
+    console.error('Failed to save HoYoShade path:', error);
+    ElMessage.error(t('settings.plugins.hoyoshade.pathSaveFailed', { error: String(error) }));
+  } finally {
+    pluginSettingsLoading.value = false;
+  }
+};
+
+const openHoYoShadeDirectory = async () => {
+  const path = hoyoshadeDependency.value?.path?.trim();
+  if (!path) return;
+  try {
+    await openPath(path);
+  } catch (error) {
+    console.error('Failed to open HoYoShade directory:', error);
+    ElMessage.error(t('settings.plugins.hoyoshade.openFolderFailed'));
+  }
+};
 
 const languageOptions = SSMT_LOCALE_OPTIONS;
 
@@ -136,6 +238,7 @@ onMounted(async () => {
   } catch (e) {
     console.error('Failed to get version:', e);
   }
+  await refreshPluginSettings();
 });
 
 const openReleasePage = async () => {
@@ -271,7 +374,7 @@ const confirmCreateGame = async () => {
     <div class="settings-shell">
       <div class="settings-layout">
         <main class="settings-main" :aria-label="t('settings.title')">
-          <section class="settings-section">
+          <section id="settings-general" class="settings-section">
             <div class="section-heading">
               <h2>{{ t('settings.sections.general') }}</h2>
               <p>{{ t('settings.sections.generalDesc') }}</p>
@@ -426,7 +529,7 @@ const confirmCreateGame = async () => {
             </div>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-appearance" class="settings-section">
             <div class="section-heading">
               <h2>{{ t('settings.sections.appearance') }}</h2>
               <p>{{ t('settings.sections.appearanceDesc') }}</p>
@@ -544,7 +647,7 @@ const confirmCreateGame = async () => {
             </div>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-page-visibility" class="settings-section">
             <div class="section-heading">
               <h2>{{ t('settings.sections.pageVisibility') }}</h2>
               <p>{{ t('settings.sections.pageVisibilityDesc') }}</p>
@@ -562,7 +665,78 @@ const confirmCreateGame = async () => {
             </div>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-plugins" class="settings-section">
+            <div class="section-heading">
+              <h2>{{ t('settings.sections.plugins') }}</h2>
+              <p>{{ t('settings.sections.pluginsDesc') }}</p>
+            </div>
+            <div class="settings-group plugin-settings-group">
+              <div class="plugin-settings-heading">
+                <div class="plugin-settings-title">
+                  <span class="setting-icon"><el-icon><Link /></el-icon></span>
+                  <div>
+                    <div class="setting-label">HoYoShade Bridge</div>
+                    <div class="setting-description">{{ t('settings.plugins.hoyoshade.description') }}</div>
+                  </div>
+                </div>
+                <span
+                  v-if="hoyoshadePlugin"
+                  class="plugin-settings-status"
+                  :class="`is-${hoyoshadeDependency?.status ?? 'missing'}`"
+                >
+                  {{ t(`settings.plugins.hoyoshade.status.${hoyoshadeDependency?.status ?? 'missing'}`) }}
+                </span>
+              </div>
+
+              <div v-if="!hoyoshadePlugin" class="plugin-settings-empty">
+                <span>{{ t('settings.plugins.hoyoshade.notInstalled') }}</span>
+                <el-button text @click="openUrl('https://github.com/Perxenic-Acid/SSMT4')">
+                  {{ t('settings.plugins.hoyoshade.openMarketplace') }}
+                </el-button>
+              </div>
+              <template v-else>
+                <div class="plugin-settings-path-row">
+                  <el-input
+                    :model-value="hoyoshadeDependency?.path ?? ''"
+                    readonly
+                    :placeholder="t('settings.plugins.hoyoshade.pathPlaceholder')"
+                    :aria-label="t('settings.plugins.hoyoshade.path')"
+                  />
+                  <el-tooltip :content="t('settings.plugins.hoyoshade.chooseFolder')" placement="top" :show-after="250">
+                    <el-button
+                      class="path-icon-btn"
+                      :loading="pluginSettingsLoading"
+                      :aria-label="t('settings.plugins.hoyoshade.chooseFolder')"
+                      @click="chooseHoYoShadeDirectory"
+                    >
+                      <el-icon><Edit /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip :content="t('settings.plugins.hoyoshade.openFolder')" placement="top" :show-after="250">
+                    <el-button
+                      class="path-icon-btn"
+                      :disabled="!hoyoshadeDependency?.path"
+                      :aria-label="t('settings.plugins.hoyoshade.openFolder')"
+                      @click="openHoYoShadeDirectory"
+                    >
+                      <el-icon><FolderOpened /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+                <div v-if="hoyoshadeDependency?.reason" class="plugin-settings-reason">
+                  {{ hoyoshadeDependency.reason }}
+                </div>
+                <div class="plugin-settings-actions">
+                  <el-button :icon="Download" @click="openUrl(HOYOSHADE_DOWNLOAD_URL)">
+                    {{ t('settings.plugins.hoyoshade.download') }}
+                  </el-button>
+                  <span class="plugin-settings-hint">{{ t('settings.plugins.hoyoshade.downloadHint') }}</span>
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <section id="settings-games" class="settings-section">
             <div class="section-heading games-heading">
               <div class="games-heading-text">
                 <h2>{{ t('settings.sections.games') }}</h2>
@@ -639,60 +813,75 @@ const confirmCreateGame = async () => {
             </div>
           </section>
 
+          <section id="settings-about" class="settings-section settings-about-section">
+            <div class="section-heading">
+              <h2>{{ t('settings.sections.about') }}</h2>
+              <p>{{ t('settings.sections.aboutDesc') }}</p>
+            </div>
+            <div class="settings-group about-settings-group">
+              <div class="product-lockup">
+                <img src="/icon.png" class="app-logo" alt="SSMT4" />
+                <div>
+                  <h2>SSMT4</h2>
+                  <span class="app-version">V{{ appVersion }}</span>
+                </div>
+              </div>
+              <el-button
+                class="update-button"
+                :loading="isCheckingAppUpdate || isInstallingAppUpdate"
+                :aria-busy="isCheckingAppUpdate || isInstallingAppUpdate"
+                @click="handleCheckAndInstallAppUpdate"
+              >
+                <el-icon><Refresh /></el-icon>
+                <span>{{ isInstallingAppUpdate ? t('settings.actions.installingUpdate') : t('settings.actions.checkAppUpdate') }}</span>
+              </el-button>
+
+              <div class="about-links-grid">
+                <div class="about-section">
+                  <h3>{{ t('settings.sections.resources') }}</h3>
+                  <button type="button" class="link-row" @click="openReleasePage">
+                    <el-icon><Document /></el-icon>
+                    <span>{{ t('settings.about.releasePage') }}</span>
+                    <el-icon class="link-arrow"><ArrowRight /></el-icon>
+                  </button>
+                  <button type="button" class="link-row" @click="openUsageDocs">
+                    <el-icon><Link /></el-icon>
+                    <span>{{ t('settings.about.usageDocs') }}</span>
+                    <el-icon class="link-arrow"><ArrowRight /></el-icon>
+                  </button>
+                </div>
+                <div class="about-section">
+                  <h3>{{ t('settings.sections.community') }}</h3>
+                  <button type="button" class="link-row" @click="openUrl('https://discord.gg/cnVx8cF2wd')">
+                    <el-icon><ChatDotRound /></el-icon>
+                    <span>{{ t('settings.about.discord') }}</span>
+                    <el-icon class="link-arrow"><ArrowRight /></el-icon>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
         </main>
 
         <aside class="settings-sidebar" :aria-label="t('settings.sections.about')">
-          <div class="about-panel">
-            <div class="product-lockup">
-              <img src="/icon.png" class="app-logo" alt="SSMT4" />
-              <div>
-                <h2>SSMT4</h2>
-                <span class="app-version">V{{ appVersion }}</span>
-              </div>
-            </div>
-
-            <el-button
-              class="update-button"
-              :loading="isCheckingAppUpdate || isInstallingAppUpdate"
-              :aria-busy="isCheckingAppUpdate || isInstallingAppUpdate"
-              @click="handleCheckAndInstallAppUpdate"
-            >
-              <el-icon><Refresh /></el-icon>
-              <span>{{ isInstallingAppUpdate ? t('settings.actions.installingUpdate') : t('settings.actions.checkAppUpdate') }}</span>
-            </el-button>
-
-            <div class="about-section">
-              <h3>{{ t('settings.sections.resources') }}</h3>
-              <button type="button" class="link-row" @click="openReleasePage">
-                <el-icon><Document /></el-icon>
-                <span>{{ t('settings.about.releasePage') }}</span>
-                <el-icon class="link-arrow"><ArrowRight /></el-icon>
-              </button>
-              <button type="button" class="link-row" @click="openUsageDocs">
-                <el-icon><Link /></el-icon>
-                <span>{{ t('settings.about.usageDocs') }}</span>
-                <el-icon class="link-arrow"><ArrowRight /></el-icon>
+          <nav class="settings-nav" :aria-label="t('settings.navigation.title')">
+            <h2>{{ t('settings.navigation.title') }}</h2>
+            <div v-for="group in settingsNavGroups" :key="group.title" class="settings-nav-group">
+              <div class="settings-nav-group-title">{{ group.title }}</div>
+              <button
+                v-for="item in group.items"
+                :key="item.id"
+                type="button"
+                class="settings-nav-item"
+                @click="scrollToSettingsSection(item.id)"
+              >
+                <span>{{ item.label }}</span>
+                <el-icon><ArrowRight /></el-icon>
               </button>
             </div>
+          </nav>
 
-            <div class="about-section">
-              <h3>{{ t('settings.sections.community') }}</h3>
-              <button type="button" class="link-row" @click="openUrl('https://discord.gg/cnVx8cF2wd')">
-                <el-icon><ChatDotRound /></el-icon>
-                <span>{{ t('settings.about.discord') }}</span>
-                <el-icon class="link-arrow"><ArrowRight /></el-icon>
-              </button>
-            </div>
-
-            <!--<div class="about-section">
-              <h3>{{ t('settings.about.sponsor') }}</h3>
-              <button type="button" class="link-row" @click="openUrl('https://ifdian.net/a/NicoMico666')">
-                <el-icon><Coffee /></el-icon>
-                <span>{{ t('settings.about.afdian') }}</span>
-                <el-icon class="link-arrow"><ArrowRight /></el-icon>
-              </button>
-            </div>-->
-          </div>
         </aside>
       </div>
     </div>
@@ -789,12 +978,14 @@ const confirmCreateGame = async () => {
 
 .settings-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 276px;
+  grid-template-columns: 248px minmax(0, 1fr);
   gap: 28px;
   align-items: start;
 }
 
 .settings-main {
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -803,6 +994,7 @@ const confirmCreateGame = async () => {
 
 .settings-section {
   min-width: 0;
+  scroll-margin-top: 20px;
 }
 
 .section-heading {
@@ -1103,13 +1295,181 @@ const confirmCreateGame = async () => {
 }
 
 .settings-sidebar {
+  grid-column: 1;
+  grid-row: 1;
   position: sticky;
   top: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-nav {
+  padding: 14px;
+}
+
+.settings-nav {
+  border: var(--t-page-panel-border);
+  border-radius: var(--t-page-panel-radius);
+  background: var(--t-page-panel-bg);
+  box-shadow: var(--t-page-panel-shadow);
+}
+
+.settings-nav h2 {
+  margin: 0 8px 8px;
+  color: rgba(var(--theme-text-secondary-rgb), 0.78);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-nav-group + .settings-nav-group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(var(--theme-surface-tint-rgb), 0.10);
+}
+
+.settings-nav-group-title {
+  padding: 0 8px 4px;
+  color: rgba(var(--theme-text-secondary-rgb), 0.54);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-nav-item {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(var(--theme-text-primary-rgb), 0.78);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav-item:hover,
+.settings-nav-item:focus-visible {
+  background: rgba(var(--theme-surface-tint-rgb), 0.10);
+  color: rgba(var(--theme-text-primary-rgb), 1);
+}
+
+.settings-nav-item:focus-visible {
+  outline: 2px solid rgba(var(--theme-text-primary-rgb), 0.72);
+  outline-offset: 1px;
+}
+
+.plugin-settings-heading,
+.plugin-settings-title,
+.plugin-settings-path-row,
+.plugin-settings-actions {
+  display: flex;
+  align-items: center;
+}
+
+.plugin-settings-heading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.plugin-settings-title {
+  min-width: 0;
+  gap: 10px;
+}
+
+.plugin-settings-status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.plugin-settings-status.is-ready {
+  color: #a5ebd6;
+  background: rgba(117, 214, 187, 0.14);
+}
+
+.plugin-settings-status.is-missing {
+  color: #f1c17e;
+  background: rgba(240, 177, 92, 0.14);
+}
+
+.plugin-settings-status.is-invalid {
+  color: #ff9b8e;
+  background: rgba(255, 125, 112, 0.14);
+}
+
+.plugin-settings-path-row {
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.plugin-settings-path-row .el-input {
+  min-width: 0;
+  flex: 1;
+}
+
+.plugin-settings-reason {
+  margin-top: 8px;
+  color: rgba(var(--theme-text-secondary-rgb), 0.72);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.plugin-settings-actions {
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.plugin-settings-hint,
+.plugin-settings-empty {
+  color: rgba(var(--theme-text-secondary-rgb), 0.66);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.plugin-settings-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .about-panel {
   padding: 18px;
+}
+
+.plugin-settings-group,
+.about-settings-group {
+  padding: 20px;
+}
+
+.about-settings-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px 24px;
+}
+
+.about-settings-group .update-button {
+  width: auto;
+  margin-top: 0;
+}
+
+.about-links-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
 }
 
 .product-lockup {
@@ -1421,7 +1781,18 @@ const confirmCreateGame = async () => {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .settings-main,
   .settings-sidebar {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .settings-main {
+    order: 1;
+  }
+
+  .settings-sidebar {
+    order: 2;
     position: static;
   }
 
@@ -1434,6 +1805,14 @@ const confirmCreateGame = async () => {
   .product-lockup,
   .update-button {
     grid-column: 1 / -1;
+  }
+
+  .about-settings-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .about-settings-group .update-button {
+    justify-self: start;
   }
 }
 
@@ -1452,6 +1831,10 @@ const confirmCreateGame = async () => {
 
   .settings-page {
     padding: 20px 14px 28px;
+  }
+
+  .about-links-grid {
+    grid-template-columns: 1fr;
   }
 
   .setting-row,

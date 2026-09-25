@@ -557,11 +557,42 @@
       "appearanceDesc": "语言、标记方式与视觉舒适度",
       "pageVisibility": "页面显隐",
       "pageVisibilityDesc": "选择要在左侧导航栏中显示的功能页面",
+      "plugins": "插件",
+      "pluginsDesc": "管理已安装插件及其外部依赖",
       "games": "游戏",
       "gamesDesc": "管理游戏配置、常用游戏与图标",
       "about": "关于 SSMT4",
+      "aboutDesc": "版本、更新、文档与社区入口",
       "resources": "资源",
       "community": "社区与支持"
+    },
+    "navigation": {
+      "title": "设置导航",
+      "personalization": "个性化",
+      "integrations": "集成",
+      "app": "应用"
+    },
+    "plugins": {
+      "hoyoshade": {
+        "description": "配置 HoYoShade 外部目录。设置完成后，插件可在启动游戏时调用 injector。",
+        "notInstalled": "尚未安装 HoYoShade Bridge 插件。请先从插件市场安装。",
+        "openMarketplace": "查看插件市场",
+        "path": "HoYoShade 目录",
+        "pathPlaceholder": "请选择 HoYoShade 本体目录",
+        "chooseFolder": "选择 HoYoShade 目录",
+        "openFolder": "打开 HoYoShade 目录",
+        "chooseFolderTitle": "选择 HoYoShade 本体目录",
+        "download": "下载 HoYoShade",
+        "downloadHint": "将打开官方发布页；SSMT 不重新分发第三方本体。",
+        "pathSaved": "HoYoShade 路径已保存",
+        "pathSaveFailed": "保存 HoYoShade 路径失败：{error}",
+        "openFolderFailed": "无法打开 HoYoShade 目录",
+        "status": {
+          "ready": "已就绪",
+          "missing": "未配置",
+          "invalid": "目录不完整"
+        }
+      }
     },
     "pageVisibility": {
       "modCreation": "Mod 制作",

@@ -1,9 +1,9 @@
-pub mod file_locks;
 pub mod ccswitch;
 pub mod clipboard;
 pub mod compress;
 pub mod extract_model;
 pub mod extract_textures;
+pub mod file_locks;
 pub mod game_discovery;
 pub mod game_launcher;
 pub mod mod_library;

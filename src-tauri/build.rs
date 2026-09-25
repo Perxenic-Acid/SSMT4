@@ -50,13 +50,13 @@ fn build_directxtex_bridge() {
             let installed = root.join("installed").join("x64-windows-static-md");
             (installed.join("include").join("DirectXTex.h").is_file()
                 && installed.join("lib").join("DirectXTex.lib").is_file())
-                .then(|| {
-                    (
-                        installed.join("include"),
-                        installed.join("lib"),
-                        format!("vcpkg {}", root.display()),
-                    )
-                })
+            .then(|| {
+                (
+                    installed.join("include"),
+                    installed.join("lib"),
+                    format!("vcpkg {}", root.display()),
+                )
+            })
         })
         .or_else(|| {
             (vendored_header.is_file() && vendored_lib.is_file()).then(|| {

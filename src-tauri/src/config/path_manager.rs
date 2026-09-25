@@ -29,7 +29,9 @@ impl PathManager {
     /// 3) 极端情况下回退到 AppData，避免后端落盘失败。
     pub fn ssmt_cache_root(app: &AppHandle) -> PathBuf {
         if let Ok(settings_dir) = app.path().app_local_data_dir() {
-            let settings_path = settings_dir.join("SSMT4GlobalConfigs").join("settings.json");
+            let settings_path = settings_dir
+                .join("SSMT4GlobalConfigs")
+                .join("settings.json");
             if let Ok(raw) = std::fs::read_to_string(settings_path) {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
                     if let Some(folder) = value
@@ -130,5 +132,7 @@ impl PathManager {
 /// 返回 SSMT 安装目录（可执行文件所在目录），供前端计算默认缓存位置。
 #[tauri::command]
 pub fn ssmt_install_directory() -> String {
-    PathManager::ssmt_install_dir().to_string_lossy().to_string()
+    PathManager::ssmt_install_dir()
+        .to_string_lossy()
+        .to_string()
 }

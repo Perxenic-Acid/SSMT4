@@ -558,11 +558,42 @@
       "appearanceDesc": "Language, marking, and visual comfort",
       "pageVisibility": "Page visibility",
       "pageVisibilityDesc": "Choose which feature pages appear in the left navigation sidebar",
+      "plugins": "Plugins",
+      "pluginsDesc": "Manage installed plugins and their external dependencies",
       "games": "Games",
       "gamesDesc": "Manage game configs, favorites, and icons",
       "about": "About SSMT4",
+      "aboutDesc": "Version, updates, documentation, and community links",
       "resources": "Resources",
       "community": "Community and support"
+    },
+    "navigation": {
+      "title": "Settings navigation",
+      "personalization": "Personalization",
+      "integrations": "Integrations",
+      "app": "Application"
+    },
+    "plugins": {
+      "hoyoshade": {
+        "description": "Configure the HoYoShade external directory used by the injector bridge during game launch.",
+        "notInstalled": "HoYoShade Bridge is not installed. Install it from the plugin marketplace first.",
+        "openMarketplace": "View plugin marketplace",
+        "path": "HoYoShade directory",
+        "pathPlaceholder": "Choose the HoYoShade installation directory",
+        "chooseFolder": "Choose HoYoShade directory",
+        "openFolder": "Open HoYoShade directory",
+        "chooseFolderTitle": "Choose the HoYoShade installation directory",
+        "download": "Download HoYoShade",
+        "downloadHint": "This opens the official release page; SSMT does not redistribute the third-party payload.",
+        "pathSaved": "HoYoShade path saved",
+        "pathSaveFailed": "Failed to save HoYoShade path: {error}",
+        "openFolderFailed": "Could not open the HoYoShade directory",
+        "status": {
+          "ready": "Ready",
+          "missing": "Not configured",
+          "invalid": "Incomplete directory"
+        }
+      }
     },
     "pageVisibility": {
       "modCreation": "Mod Creation",

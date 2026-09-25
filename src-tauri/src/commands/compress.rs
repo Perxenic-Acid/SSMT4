@@ -54,10 +54,7 @@ pub async fn extract_archive_to_dir(archive_path: String, dest_dir: String) -> R
         } else if lower_name.ends_with(".rar") {
             SSMTCompressUtils::extract_rar_archive(&archive_path, &dest_dir, |_current, _total| {})
         } else {
-            Err(format!(
-                "Unsupported archive format: {}",
-                lower_name
-            ))
+            Err(format!("Unsupported archive format: {}", lower_name))
         }
     })
     .await
