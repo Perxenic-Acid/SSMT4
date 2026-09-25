@@ -2,7 +2,7 @@
 import { AppStateManager, type GameInfo } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
 import { getGamePresetDisplayName, getGamePresetOptions } from '../../store/GamePreset'
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   APP_UI_SCALE_MAX,
   APP_UI_SCALE_MIN,
@@ -23,7 +23,6 @@ import {
   ChatDotRound,
   Delete,
   Document,
-  Download,
   Edit,
   FolderOpened,
   Key,
@@ -49,35 +48,6 @@ const appSettings = AppStateManager.appSettings;
 const textureMarkStyleOptions = ['Hash', 'Slot', 'SharedSlot'] as const;
 const { t } = useI18n();
 
-const HOYOSHADE_PLUGIN_ID = 'ssmt.hoyoshade.bridge';
-const HOYOSHADE_DEPENDENCY_ID = 'hoyoshade';
-const HOYOSHADE_DOWNLOAD_URL = 'https://github.com/DuolaD/HoYoShade/releases';
-
-type PluginDependencyStatus = 'missing' | 'invalid' | 'ready';
-interface PluginDependencyState {
-  status: PluginDependencyStatus;
-  path?: string | null;
-  reason?: string | null;
-}
-interface InstalledPluginSnapshot {
-  manifest: {
-    id: string;
-    name: string;
-    externalDependencies: Array<{ id: string; requiredFiles: string[] }>;
-  };
-  enabled: boolean;
-  lifecycleStatus: string;
-  externalDependencies: Record<string, PluginDependencyState>;
-}
-
-const installedPlugins = ref<InstalledPluginSnapshot[]>([]);
-const pluginSettingsLoading = ref(false);
-const hoyoshadePlugin = computed(() => installedPlugins.value.find(
-  plugin => plugin.manifest.id === HOYOSHADE_PLUGIN_ID,
-));
-const hoyoshadeDependency = computed(() =>
-  hoyoshadePlugin.value?.externalDependencies[HOYOSHADE_DEPENDENCY_ID],
-);
 const settingsNavGroups = computed(() => [
   {
     title: t('settings.navigation.personalization'),
@@ -88,9 +58,8 @@ const settingsNavGroups = computed(() => [
     ],
   },
   {
-    title: t('settings.navigation.integrations'),
+    title: t('settings.navigation.games'),
     items: [
-      { id: 'settings-plugins', label: t('settings.sections.plugins') },
       { id: 'settings-games', label: t('settings.sections.games') },
     ],
   },
@@ -102,52 +71,6 @@ const settingsNavGroups = computed(() => [
 
 const scrollToSettingsSection = (id: string) => {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-};
-
-const refreshPluginSettings = async () => {
-  try {
-    installedPlugins.value = await invoke<InstalledPluginSnapshot[]>('plugin_registry_snapshot');
-  } catch (error) {
-    console.error('Failed to load plugin settings:', error);
-  }
-};
-
-const chooseHoYoShadeDirectory = async () => {
-  const selected = await openDialog({
-    directory: true,
-    multiple: false,
-    title: t('settings.plugins.hoyoshade.chooseFolderTitle'),
-  });
-  if (typeof selected !== 'string' || !selected.trim()) return;
-
-  pluginSettingsLoading.value = true;
-  try {
-    installedPlugins.value = await invoke<InstalledPluginSnapshot[]>(
-      'set_plugin_external_dependency_path',
-      {
-        pluginId: HOYOSHADE_PLUGIN_ID,
-        dependencyId: HOYOSHADE_DEPENDENCY_ID,
-        path: selected,
-      },
-    );
-    ElMessage.success(t('settings.plugins.hoyoshade.pathSaved'));
-  } catch (error) {
-    console.error('Failed to save HoYoShade path:', error);
-    ElMessage.error(t('settings.plugins.hoyoshade.pathSaveFailed', { error: String(error) }));
-  } finally {
-    pluginSettingsLoading.value = false;
-  }
-};
-
-const openHoYoShadeDirectory = async () => {
-  const path = hoyoshadeDependency.value?.path?.trim();
-  if (!path) return;
-  try {
-    await openPath(path);
-  } catch (error) {
-    console.error('Failed to open HoYoShade directory:', error);
-    ElMessage.error(t('settings.plugins.hoyoshade.openFolderFailed'));
-  }
 };
 
 const languageOptions = SSMT_LOCALE_OPTIONS;
@@ -238,7 +161,6 @@ onMounted(async () => {
   } catch (e) {
     console.error('Failed to get version:', e);
   }
-  await refreshPluginSettings();
 });
 
 const openReleasePage = async () => {
@@ -662,77 +584,6 @@ const confirmCreateGame = async () => {
                   </label>
                 </div>
               </div>
-            </div>
-          </section>
-
-          <section id="settings-plugins" class="settings-section">
-            <div class="section-heading">
-              <h2>{{ t('settings.sections.plugins') }}</h2>
-              <p>{{ t('settings.sections.pluginsDesc') }}</p>
-            </div>
-            <div class="settings-group plugin-settings-group">
-              <div class="plugin-settings-heading">
-                <div class="plugin-settings-title">
-                  <span class="setting-icon"><el-icon><Link /></el-icon></span>
-                  <div>
-                    <div class="setting-label">HoYoShade Bridge</div>
-                    <div class="setting-description">{{ t('settings.plugins.hoyoshade.description') }}</div>
-                  </div>
-                </div>
-                <span
-                  v-if="hoyoshadePlugin"
-                  class="plugin-settings-status"
-                  :class="`is-${hoyoshadeDependency?.status ?? 'missing'}`"
-                >
-                  {{ t(`settings.plugins.hoyoshade.status.${hoyoshadeDependency?.status ?? 'missing'}`) }}
-                </span>
-              </div>
-
-              <div v-if="!hoyoshadePlugin" class="plugin-settings-empty">
-                <span>{{ t('settings.plugins.hoyoshade.notInstalled') }}</span>
-                <el-button text @click="openUrl('https://github.com/Perxenic-Acid/SSMT4')">
-                  {{ t('settings.plugins.hoyoshade.openMarketplace') }}
-                </el-button>
-              </div>
-              <template v-else>
-                <div class="plugin-settings-path-row">
-                  <el-input
-                    :model-value="hoyoshadeDependency?.path ?? ''"
-                    readonly
-                    :placeholder="t('settings.plugins.hoyoshade.pathPlaceholder')"
-                    :aria-label="t('settings.plugins.hoyoshade.path')"
-                  />
-                  <el-tooltip :content="t('settings.plugins.hoyoshade.chooseFolder')" placement="top" :show-after="250">
-                    <el-button
-                      class="path-icon-btn"
-                      :loading="pluginSettingsLoading"
-                      :aria-label="t('settings.plugins.hoyoshade.chooseFolder')"
-                      @click="chooseHoYoShadeDirectory"
-                    >
-                      <el-icon><Edit /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                  <el-tooltip :content="t('settings.plugins.hoyoshade.openFolder')" placement="top" :show-after="250">
-                    <el-button
-                      class="path-icon-btn"
-                      :disabled="!hoyoshadeDependency?.path"
-                      :aria-label="t('settings.plugins.hoyoshade.openFolder')"
-                      @click="openHoYoShadeDirectory"
-                    >
-                      <el-icon><FolderOpened /></el-icon>
-                    </el-button>
-                  </el-tooltip>
-                </div>
-                <div v-if="hoyoshadeDependency?.reason" class="plugin-settings-reason">
-                  {{ hoyoshadeDependency.reason }}
-                </div>
-                <div class="plugin-settings-actions">
-                  <el-button :icon="Download" @click="openUrl(HOYOSHADE_DOWNLOAD_URL)">
-                    {{ t('settings.plugins.hoyoshade.download') }}
-                  </el-button>
-                  <span class="plugin-settings-hint">{{ t('settings.plugins.hoyoshade.downloadHint') }}</span>
-                </div>
-              </template>
             </div>
           </section>
 
@@ -1367,88 +1218,10 @@ const confirmCreateGame = async () => {
   outline-offset: 1px;
 }
 
-.plugin-settings-heading,
-.plugin-settings-title,
-.plugin-settings-path-row,
-.plugin-settings-actions {
-  display: flex;
-  align-items: center;
-}
-
-.plugin-settings-heading {
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.plugin-settings-title {
-  min-width: 0;
-  gap: 10px;
-}
-
-.plugin-settings-status {
-  flex: 0 0 auto;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-}
-
-.plugin-settings-status.is-ready {
-  color: #a5ebd6;
-  background: rgba(117, 214, 187, 0.14);
-}
-
-.plugin-settings-status.is-missing {
-  color: #f1c17e;
-  background: rgba(240, 177, 92, 0.14);
-}
-
-.plugin-settings-status.is-invalid {
-  color: #ff9b8e;
-  background: rgba(255, 125, 112, 0.14);
-}
-
-.plugin-settings-path-row {
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.plugin-settings-path-row .el-input {
-  min-width: 0;
-  flex: 1;
-}
-
-.plugin-settings-reason {
-  margin-top: 8px;
-  color: rgba(var(--theme-text-secondary-rgb), 0.72);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.plugin-settings-actions {
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.plugin-settings-hint,
-.plugin-settings-empty {
-  color: rgba(var(--theme-text-secondary-rgb), 0.66);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.plugin-settings-empty {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
-}
-
 .about-panel {
   padding: 18px;
 }
 
-.plugin-settings-group,
 .about-settings-group {
   padding: 20px;
 }

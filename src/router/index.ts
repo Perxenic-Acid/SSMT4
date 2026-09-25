@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { invoke } from '@tauri-apps/api/core'
 import { defineAsyncComponent, type AsyncComponentLoader } from 'vue'
 import { ElMessage } from 'element-plus'
 import { exists } from '@tauri-apps/plugin-fs'
@@ -33,6 +34,7 @@ const loadXianZun = () => import('../views/XianZun/XianZun.vue')
 const loadUIBuilder = () => import('../views/UIBuilder/UIBuilder.vue')
 const loadTextureModMaker = () => import('../views/TextureModMaker/TextureModMaker.vue')
 const loadPluginMarketplace = () => import('../views/PluginMarketplace/PluginMarketplace.vue')
+const loadHoYoShadeSettings = () => import('../plugin/components/HoYoShadeSettings.vue')
 
 const WorkPage = asyncPage(loadWorkPage)
 const ModsManagement = asyncPage(loadModsManagement)
@@ -45,6 +47,7 @@ const XianZun = asyncPage(loadXianZun)
 const UIBuilder = asyncPage(loadUIBuilder)
 const TextureModMaker = asyncPage(loadTextureModMaker)
 const PluginMarketplace = asyncPage(loadPluginMarketplace)
+const HoYoShadeSettings = asyncPage(loadHoYoShadeSettings)
 
 /**
  * Warm the route chunks in the background once the app has started, so the
@@ -63,6 +66,7 @@ export const prefetchRouteComponents = () => {
     loadGameBananaAuthor,
     loadUIBuilder,
     loadPluginMarketplace,
+    loadHoYoShadeSettings,
   ]
   loaders.forEach((load, index) => {
     window.setTimeout(() => {
@@ -86,6 +90,22 @@ const routes = [
   { path: '/ui-builder', name: 'UIBuilder', component: UIBuilder, meta: { title: 'UI Builder', requiresGame: false } },
   { path: '/texture-mod-maker', name: 'TextureModMaker', component: TextureModMaker, meta: { title: 'Texture Mod Maker', requiresGame: true } },
   { path: '/plugins', name: 'PluginMarketplace', component: PluginMarketplace, meta: { title: 'Plugin Marketplace', requiresGame: false } },
+  {
+    path: '/plugins/hoyoshade',
+    name: 'HoYoShadeSettings',
+    component: HoYoShadeSettings,
+    meta: { title: 'HoYoShade Bridge', requiresGame: false },
+    beforeEnter: async () => {
+      try {
+        const routes = await invoke<Array<{ pluginId: string; route: string }>>('plugin_ui_routes')
+        return routes.some(route => route.pluginId === 'ssmt.hoyoshade.bridge' && route.route === '/plugins/hoyoshade')
+          ? true
+          : { name: 'PluginMarketplace' }
+      } catch {
+        return { name: 'PluginMarketplace' }
+      }
+    },
+  },
 ]
 
 const router = createRouter({

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { ElMessage } from 'element-plus'
@@ -46,6 +47,7 @@ interface CatalogEntry {
 }
 
 const { t } = useI18n()
+const router = useRouter()
 
 // TODO 12 deliberately keeps the catalog first-party and local. Online catalog
 // refresh and package download belong to the next marketplace iteration.
@@ -199,6 +201,12 @@ const clearSelectedPluginLog = async () => {
   }
 }
 
+const openPluginSettings = () => {
+  if (selectedEntry.value?.id === 'ssmt.hoyoshade.bridge') {
+    void router.push('/plugins/hoyoshade')
+  }
+}
+
 const dependencyStatusLabel = (status: DependencyStatus) => t(`pluginMarketplace.dependencyStatus.${status}`)
 const dependencyStatusClass = (status: DependencyStatus) => `is-${status}`
 
@@ -308,6 +316,9 @@ onMounted(refreshInstalled)
         <div class="detail-footer">
           <span class="install-size"><Download :size="15" />{{ formatSize(selectedEntry.packageSize) }}</span>
           <template v-if="installedById.get(selectedEntry.id)">
+            <el-button v-if="selectedEntry.id === 'ssmt.hoyoshade.bridge'" :icon="Setting" @click="openPluginSettings">
+              {{ t('pluginMarketplace.actions.openSettings') }}
+            </el-button>
             <el-button :icon="Document" :loading="logLoading" @click="openPluginLog">{{ t('pluginMarketplace.actions.viewLog') }}</el-button>
             <el-button :type="installedById.get(selectedEntry.id)?.enabled ? 'warning' : 'success'" :icon="SwitchButton" :loading="loading" @click="togglePlugin(installedById.get(selectedEntry.id)!)">
               {{ installedById.get(selectedEntry.id)?.enabled ? t('pluginMarketplace.actions.disable') : t('pluginMarketplace.actions.enable') }}

@@ -24,7 +24,13 @@
         "failurePolicy": "abort"
       }
     ],
-    "uiPages": []
+    "uiPages": [
+      {
+        "id": "settings",
+        "route": "/plugins/hoyoshade",
+        "path": "ui/hoyoshade-settings"
+      }
+    ]
   },
   "externalDependencies": [
     {
