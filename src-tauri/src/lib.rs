@@ -6,6 +6,7 @@ pub mod extract_new;
 pub mod gametype;
 pub mod helper;
 pub mod ini_container;
+pub mod plugin;
 pub mod utils;
 pub mod workspace;
 pub mod workspace_access;
