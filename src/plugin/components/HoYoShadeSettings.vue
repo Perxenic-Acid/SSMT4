@@ -7,6 +7,10 @@ import { ElMessage } from 'element-plus'
 import { Download, Edit, FolderOpened, Link } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), {
+  embedded: false,
+})
+
 const pluginId = 'ssmt.hoyoshade.bridge'
 const dependencyId = 'hoyoshade'
 const officialReleasesUrl = 'https://github.com/DuolaD/HoYoShade/releases'
@@ -74,8 +78,8 @@ onMounted(refresh)
 </script>
 
 <template>
-  <main class="plugin-settings-page">
-    <header class="plugin-settings-header">
+  <div class="plugin-settings-page" :class="{ 'is-embedded': props.embedded }">
+    <header v-if="!props.embedded" class="plugin-settings-header">
       <div class="plugin-settings-icon"><Link /></div>
       <div>
         <p class="plugin-settings-kicker">SSMT PLUGIN</p>
@@ -84,7 +88,7 @@ onMounted(refresh)
       </div>
     </header>
 
-    <section class="plugin-settings-card">
+    <section class="plugin-settings-card" :class="{ 'is-embedded': props.embedded }">
       <div class="plugin-settings-card-heading">
         <div>
           <h2>{{ t('settings.plugins.hoyoshade.path') }}</h2>
@@ -117,17 +121,19 @@ onMounted(refresh)
         </el-button>
       </div>
     </section>
-  </main>
+  </div>
 </template>
 
 <style scoped>
 .plugin-settings-page { width: min(920px, 100%); margin: 0; padding: 34px clamp(20px, 4vw, 56px) 48px; color: var(--t-page-text, #edf4f2); }
+.plugin-settings-page.is-embedded { width: 100%; padding: 0; }
 .plugin-settings-header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 26px; }
 .plugin-settings-icon { display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid rgba(117,214,187,.35); border-radius: 10px; color: #a5ebd6; background: rgba(117,214,187,.12); }
 .plugin-settings-kicker { margin: 0; color: #75d6bb; font-size: 11px; font-weight: 800; letter-spacing: .14em; }
 h1 { margin: 4px 0 7px; font-size: 28px; }
 .plugin-settings-header p:last-child, .plugin-settings-card-heading p { margin: 0; color: rgba(235,242,240,.62); line-height: 1.5; }
 .plugin-settings-card { padding: 22px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; background: rgba(12,18,24,.7); }
+.plugin-settings-card.is-embedded { background: rgba(12,18,24,.42); }
 .plugin-settings-card-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
 h2 { margin: 0 0 6px; font-size: 16px; }
 .plugin-settings-status { padding: 4px 8px; border-radius: 6px; font-size: 11px; }

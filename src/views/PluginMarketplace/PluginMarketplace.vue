@@ -203,7 +203,7 @@ const clearSelectedPluginLog = async () => {
 
 const openPluginSettings = () => {
   if (selectedEntry.value?.id === 'ssmt.hoyoshade.bridge') {
-    void router.push('/plugins/hoyoshade')
+    void router.push({ name: 'Settings', hash: '#settings-plugins' })
   }
 }
 

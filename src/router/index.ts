@@ -34,7 +34,6 @@ const loadXianZun = () => import('../views/XianZun/XianZun.vue')
 const loadUIBuilder = () => import('../views/UIBuilder/UIBuilder.vue')
 const loadTextureModMaker = () => import('../views/TextureModMaker/TextureModMaker.vue')
 const loadPluginMarketplace = () => import('../views/PluginMarketplace/PluginMarketplace.vue')
-const loadHoYoShadeSettings = () => import('../plugin/components/HoYoShadeSettings.vue')
 
 const WorkPage = asyncPage(loadWorkPage)
 const ModsManagement = asyncPage(loadModsManagement)
@@ -47,7 +46,6 @@ const XianZun = asyncPage(loadXianZun)
 const UIBuilder = asyncPage(loadUIBuilder)
 const TextureModMaker = asyncPage(loadTextureModMaker)
 const PluginMarketplace = asyncPage(loadPluginMarketplace)
-const HoYoShadeSettings = asyncPage(loadHoYoShadeSettings)
 
 /**
  * Warm the route chunks in the background once the app has started, so the
@@ -66,7 +64,6 @@ export const prefetchRouteComponents = () => {
     loadGameBananaAuthor,
     loadUIBuilder,
     loadPluginMarketplace,
-    loadHoYoShadeSettings,
   ]
   loaders.forEach((load, index) => {
     window.setTimeout(() => {
@@ -93,13 +90,13 @@ const routes = [
   {
     path: '/plugins/hoyoshade',
     name: 'HoYoShadeSettings',
-    component: HoYoShadeSettings,
+    component: Settings,
     meta: { title: 'HoYoShade Bridge', requiresGame: false },
     beforeEnter: async () => {
       try {
-        const routes = await invoke<Array<{ pluginId: string; route: string }>>('plugin_ui_routes')
-        return routes.some(route => route.pluginId === 'ssmt.hoyoshade.bridge' && route.route === '/plugins/hoyoshade')
-          ? true
+        const plugins = await invoke<Array<{ manifest: { id: string } }>>('plugin_registry_snapshot')
+        return plugins.some(plugin => plugin.manifest.id === 'ssmt.hoyoshade.bridge')
+          ? { name: 'Settings', hash: '#settings-plugins' }
           : { name: 'PluginMarketplace' }
       } catch {
         return { name: 'PluginMarketplace' }
