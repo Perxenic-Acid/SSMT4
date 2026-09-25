@@ -30,6 +30,11 @@ pub struct MarketplaceEntry {
     pub permissions: Vec<PluginPermission>,
     #[serde(default)]
     pub external_dependencies: Vec<ExternalDependency>,
+    /// Third-party payloads must remain user-provided external dependencies.
+    /// Keeping this field in the catalog makes an accidental redistribution
+    /// visible and rejectable instead of silently treating it as an adapter.
+    #[serde(default)]
+    pub bundled_third_party_payloads: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +45,7 @@ pub enum MarketplaceError {
     InvalidUrl(String),
     InvalidHash(String),
     UnsupportedPlatform(String),
+    BundledThirdPartyPayload(String),
 }
 
 impl std::fmt::Display for MarketplaceError {
@@ -57,6 +63,10 @@ impl std::fmt::Display for MarketplaceError {
             Self::UnsupportedPlatform(platform) => {
                 write!(formatter, "unsupported marketplace platform: {platform}")
             }
+            Self::BundledThirdPartyPayload(payload) => write!(
+                formatter,
+                "marketplace packages must not bundle third-party payload: {payload}"
+            ),
         }
     }
 }
@@ -122,6 +132,13 @@ impl MarketplaceCatalog {
                     return Err(MarketplaceError::UnsupportedPlatform(platform.clone()));
                 }
             }
+            if let Some(payload) = entry
+                .bundled_third_party_payloads
+                .iter()
+                .find(|payload| !payload.trim().is_empty())
+            {
+                return Err(MarketplaceError::BundledThirdPartyPayload(payload.clone()));
+            }
         }
         Ok(())
     }
@@ -184,6 +201,7 @@ mod tests {
             package_size: 1234,
             permissions: vec![PluginPermission::ProcessSpawn],
             external_dependencies: Vec::new(),
+            bundled_third_party_payloads: Vec::new(),
         }
     }
 
@@ -242,6 +260,21 @@ mod tests {
             })
             .validate(),
             Err(MarketplaceError::UnsupportedPlatform(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_bundled_third_party_payloads() {
+        let mut value = entry();
+        value.bundled_third_party_payloads = vec!["ReShade64.dll".to_string()];
+        assert!(matches!(
+            (MarketplaceCatalog {
+                schema_version: 1,
+                entries: vec![value]
+            })
+            .validate(),
+            Err(MarketplaceError::BundledThirdPartyPayload(payload))
+                if payload == "ReShade64.dll"
         ));
     }
 
