@@ -463,21 +463,24 @@ pub fn prepare_hoyoshade_launch(
         .validate_external_directory(dependency_path)
         .map_err(|error| error.to_string())?;
     let managed = graphics_decision == Some(GraphicsLaunchDecision::PrepareManagedStack);
-    if managed {
+    let wait_for_local_dxgi = if managed {
         match inspect_game_executable(&game_executable) {
             Dlss5State::Managed(state) => {
-                managed_stack::prepare(&registry, &game_executable, &state)?
+                managed_stack::prepare(&registry, &game_executable, &state)?;
+                matches!(state.route, super::dlss5::Dlss5Route::OptiScaler)
             }
             Dlss5State::Broken { reason, .. } => return Err(reason),
             Dlss5State::NotManaged => {
                 return Err("DLSS5 is not installed for this game".to_string())
             }
         }
-    }
+    } else { false };
     let injector = dependency_path.join("inject.exe");
     Ok(Some(PluginLaunchProgram {
         path: injector.to_string_lossy().into_owned(),
-        args: if managed {
+        args: if wait_for_local_dxgi {
+            format!("--ssmt-managed-config-after-dxgi {process_name}")
+        } else if managed {
             format!("--ssmt-managed-config {process_name}")
         } else {
             process_name.to_string()
