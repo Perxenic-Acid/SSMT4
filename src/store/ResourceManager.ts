@@ -122,21 +122,29 @@ const DEV_D3D11_FILE_NAME = 'd3d11.dev.dll';
 const IDENTITY_V_DEV_D3D11_FILE_NAME = 'd3d11.identityv.dev.dll';
 const CAPPED_DEV_D3D11_FILE_NAME = IDENTITY_V_DEV_D3D11_FILE_NAME;
 const SSICE_A_D3D11_FILE_NAME = 'd3d11.ssice-a.dll';
+const CAMI_D3D11_FILE_NAME = 'd3d11.cami.dll';
 const D3DCOMPILER_FILE_NAME = 'd3dcompiler_47.dll';
 const DX12_PRESET = 'ZZMIDX12';
 const DX12_D3D12_FILE_NAME = 'd3d12.dll';
+const CAMI_PRESET = 'CAMI';
 const CAPPED_DEV_D3D11_PRESETS = ['IDENTITYV', 'NARAKA', 'NARAKAM'] as const;
 const CAPPED_DEV_D3D11_PRESET_SET: ReadonlySet<string> = new Set(CAPPED_DEV_D3D11_PRESETS);
 const CAPPED_DEV_D3D11_MAX_VERSION = [0, 9, 2] as const;
+
+const isCamiGamePreset = (gamePreset?: string | null): boolean => (
+    (gamePreset || '').trim().toUpperCase() === CAMI_PRESET
+);
 
 const isCappedDevD3d11Preset = (gamePreset?: string | null): boolean => (
     CAPPED_DEV_D3D11_PRESET_SET.has((gamePreset || '').trim().toUpperCase())
 );
 
 const getD3d11CacheFileName = (mode: D3d11Mode, gamePreset?: string | null): string => (
-    mode === 'dev' && isCappedDevD3d11Preset(gamePreset)
-        ? CAPPED_DEV_D3D11_FILE_NAME
-        : D3D11_RELEASE_SOURCES[mode].cacheFileName
+    isCamiGamePreset(gamePreset)
+        ? CAMI_D3D11_FILE_NAME
+        : mode === 'dev' && isCappedDevD3d11Preset(gamePreset)
+            ? CAPPED_DEV_D3D11_FILE_NAME
+            : D3D11_RELEASE_SOURCES[mode].cacheFileName
 );
 
 const isCappedDevD3d11VersionSupported = (version: string): boolean => {
@@ -178,6 +186,24 @@ const constrainD3d11ReleasesForGame = (
 };
 
 
+
+// CAMI（卡拉彼丘）必须使用hello2565/3Dmigoto的构建注入，运行时dll来源与其余预设不同。
+// 该仓库已切换到 XXMI-Libs-Package 基底，release 资产为 XXMI-PACKAGE-v*.zip
+// （根目录含 d3d11.dll），与其上游 SpectrumQT/XXMI-Libs-Package 的发布格式一致。
+const CAMI_D3D11_RELEASE_SOURCE: D3d11ReleaseSource = {
+    repo: 'hello2565/3Dmigoto',
+    cacheFileName: CAMI_D3D11_FILE_NAME,
+    assetMatcher: (assetName) => {
+        const normalizedName = assetName.toLowerCase();
+        return normalizedName.endsWith('.zip')
+            && normalizedName.includes('xxmi')
+            && normalizedName.includes('package');
+    },
+    filesToInstall: [
+        { sourceFileName: 'd3d11.dll', targetFileName: CAMI_D3D11_FILE_NAME },
+        { sourceFileName: 'd3dcompiler_47.dll', targetFileName: D3DCOMPILER_FILE_NAME, optional: true },
+    ],
+};
 
 const D3D11_RELEASE_SOURCES: Record<D3d11Mode, D3d11ReleaseSource> = {
     dev: {
@@ -257,7 +283,10 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
     // Private helpers (not returned from store)
     // ============================================================
 
-    function getD3d11ReleaseSource(mode: D3d11Mode): D3d11ReleaseSource {
+    function getD3d11ReleaseSource(mode: D3d11Mode, gamePreset?: string | null): D3d11ReleaseSource {
+        if (isCamiGamePreset(gamePreset)) {
+            return CAMI_D3D11_RELEASE_SOURCE;
+        }
         return D3D11_RELEASE_SOURCES[mode];
     }
 
@@ -962,7 +991,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         includePrerelease = false,
         gamePreset?: string,
     ): Promise<UpdateInfo[]> {
-        const source = getD3d11ReleaseSource(mode);
+        const source = getD3d11ReleaseSource(mode, gamePreset);
         const releases = await getGithubReleaseList(source.repo, githubToken, {
             includePrerelease,
             assetMatcher: source.assetMatcher,
@@ -1046,7 +1075,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         const tempRoot = await join(resourcesDir, '_xxmi_libs_update_tmp');
         const extractDir = await join(tempRoot, 'extracted');
         const zipPath = await join(tempRoot, 'xxmi-libs-package.zip');
-        const source = getD3d11ReleaseSource(mode);
+        const source = getD3d11ReleaseSource(mode, gamePreset);
 
         if (await exists(tempRoot)) {
             await remove(tempRoot, { recursive: true });
