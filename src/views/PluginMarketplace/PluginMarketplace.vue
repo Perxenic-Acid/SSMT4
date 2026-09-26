@@ -55,14 +55,14 @@ const catalog: CatalogEntry[] = [
   {
     id: 'ssmt.hoyoshade.bridge',
     name: 'HoYoShade Bridge',
-    description: '在启动游戏时协调 HoYoShade injector，并等待其就绪信号。',
+    description: '启动游戏前准备 ReShade.ini，并协调 HoYoShade injector。',
     author: 'SSMT',
     version: '0.1.0',
     supportedGames: ['GIMI', 'HIMI', 'SRMI', 'ZZMI'],
     permissions: ['process.spawn', 'process.observe', 'game.launch'],
     externalDependencies: [{
       id: 'hoyoshade',
-      requiredFiles: ['inject.exe', 'ReShade64.dll', 'LauncherResource/INIBuild.exe', 'InjectResource', 'reshade-shaders', 'Presets'],
+      requiredFiles: ['inject.exe', 'ReShade64.dll', 'ReShade.ini', 'LauncherResource/INIBuild.exe', 'InjectResource', 'reshade-shaders', 'Presets'],
     }],
     packageSize: 18_432,
     screenshots: [],

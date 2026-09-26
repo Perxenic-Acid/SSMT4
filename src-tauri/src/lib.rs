@@ -148,6 +148,7 @@ pub fn run() {
             plugin::commands::plugin_capabilities,
             plugin::commands::set_plugin_enabled,
             plugin::commands::set_plugin_external_dependency_path,
+            plugin::commands::prepare_hoyoshade_launch,
             plugin::commands::install_plugin_package,
             plugin::commands::get_plugin_setting,
             plugin::commands::set_plugin_setting,

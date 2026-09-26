@@ -8,7 +8,16 @@ use std::time::Duration;
 
 pub const HOYOSHADE_PLUGIN_ID: &str = "ssmt.hoyoshade.bridge";
 pub const HOYOSHADE_DEPENDENCY_ID: &str = "hoyoshade";
-pub const HOYOSHADE_READY_MARKER: &str = "HOYOSHADE_READY:9999";
+const HOYOSHADE_GAME_PROCESSES: &[&str] = &[
+    "YuanShen.exe",
+    "GenshinImpact.exe",
+    "Genshin.exe",
+    "BH3.exe",
+    "StarRail.exe",
+    "ZenlessZoneZero.exe",
+    "ZenlessZoneZeroBeta.exe",
+    "ZZZ.exe",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoYoShadeBridge {
@@ -136,6 +145,42 @@ impl HoYoShadeBridge {
             Some(timeout),
         )?)
     }
+
+    pub fn supports_process(&self, process_name: &str) -> bool {
+        HOYOSHADE_GAME_PROCESSES
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(process_name))
+    }
+
+    pub fn deploy_reshade_ini(
+        &self,
+        dependency_directory: &Path,
+        game_directory: &Path,
+    ) -> Result<(), HoYoShadeBridgeError> {
+        self.validate_external_directory(dependency_directory)?;
+        let source = dependency_directory.join("ReShade.ini");
+        if !source.is_file() {
+            return Err(HoYoShadeBridgeError::MissingRequiredFile(source));
+        }
+        let target = game_directory.join("ReShade.ini");
+        let backup = game_directory.join("ReShade.ini.ssmt-backup");
+        if target.is_file() && std::fs::read(&target).ok() != std::fs::read(&source).ok() {
+            if !backup.exists() {
+                std::fs::copy(&target, &backup).map_err(|error| {
+                    HoYoShadeBridgeError::DependencyNotReady(format!(
+                        "could not preserve existing ReShade.ini: {error}"
+                    ))
+                })?;
+            }
+        }
+        std::fs::copy(&source, &target).map_err(|error| {
+            HoYoShadeBridgeError::DependencyNotReady(format!(
+                "could not deploy ReShade.ini to {}: {error}",
+                target.display()
+            ))
+        })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -169,8 +214,8 @@ mod tests {
                         arguments: vec!["${game.processName}".to_string()],
                         working_directory: Some("${external.hoyoshade}".to_string()),
                         ready: Some(super::super::ReadyCondition {
-                            kind: super::super::ReadyConditionType::StderrContains,
-                            value: Some(HOYOSHADE_READY_MARKER.to_string()),
+                            kind: super::super::ReadyConditionType::ProcessExited,
+                            value: None,
                             timeout_ms: 15_000,
                         }),
                         failure_policy: FailurePolicy::Abort,
@@ -180,7 +225,11 @@ mod tests {
                 external_dependencies: vec![ExternalDependency {
                     id: HOYOSHADE_DEPENDENCY_ID.to_string(),
                     kind: ExternalDependencyType::Directory,
-                    required_files: vec!["inject.exe".to_string(), "ReShade64.dll".to_string()],
+                    required_files: vec![
+                        "inject.exe".to_string(),
+                        "ReShade64.dll".to_string(),
+                        "ReShade.ini".to_string(),
+                    ],
                 }],
                 permissions: vec![
                     PluginPermission::ProcessSpawn,
@@ -204,8 +253,42 @@ mod tests {
             Err(HoYoShadeBridgeError::MissingRequiredFile(_))
         ));
         fs::write(root.join("ReShade64.dll"), b"fixture").unwrap();
+        fs::write(root.join("ReShade.ini"), b"fixture").unwrap();
         bridge.validate_external_directory(&root).unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deploys_ini_and_preserves_existing_game_configuration_once() {
+        let root =
+            std::env::temp_dir().join(format!("ssmt-hoyoshade-deploy-{}", std::process::id()));
+        let external = root.join("external");
+        let game = root.join("game");
+        fs::create_dir_all(&external).unwrap();
+        fs::create_dir_all(&game).unwrap();
+        fs::write(external.join("inject.exe"), b"fixture").unwrap();
+        fs::write(external.join("ReShade64.dll"), b"fixture").unwrap();
+        fs::write(external.join("ReShade.ini"), b"hoyoshade").unwrap();
+        fs::write(game.join("ReShade.ini"), b"user config").unwrap();
+        let bridge = HoYoShadeBridge::from_installed(&fixture(&root)).unwrap();
+
+        bridge.deploy_reshade_ini(&external, &game).unwrap();
+        assert_eq!(fs::read(game.join("ReShade.ini")).unwrap(), b"hoyoshade");
+        assert_eq!(
+            fs::read(game.join("ReShade.ini.ssmt-backup")).unwrap(),
+            b"user config"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_targets_known_hoyoverse_game_processes() {
+        let root =
+            std::env::temp_dir().join(format!("ssmt-hoyoshade-process-{}", std::process::id()));
+        let bridge = HoYoShadeBridge::from_installed(&fixture(&root)).unwrap();
+        assert!(bridge.supports_process("YuanShen.exe"));
+        assert!(bridge.supports_process("StarRail.exe"));
+        assert!(!bridge.supports_process("notepad.exe"));
     }
 
     #[test]

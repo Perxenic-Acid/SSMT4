@@ -1,3 +1,4 @@
+use super::hoyoshade::{HoYoShadeBridge, HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
 use super::logging::PluginLogWriter;
 use super::package_installer::install_ssmtpkg;
 use super::registry::{ExternalDependencyState, PluginRegistry};
@@ -7,6 +8,15 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginLaunchProgram {
+    pub path: String,
+    pub args: String,
+    pub work_dir: String,
+    pub run_as_administrator: bool,
+}
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,6 +191,49 @@ pub fn set_plugin_external_dependency_path(
         .set_external_dependency_path(plugin_id.trim(), dependency_id.trim(), path)
         .map_err(|error| error.to_string())?;
     Ok(snapshot(&registry))
+}
+
+#[tauri::command]
+pub fn prepare_hoyoshade_launch(
+    game_executable: String,
+) -> Result<Option<PluginLaunchProgram>, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let Some(plugin) = registry
+        .find(HOYOSHADE_PLUGIN_ID)
+        .filter(|plugin| plugin.enabled)
+    else {
+        return Ok(None);
+    };
+    let bridge = HoYoShadeBridge::from_installed(plugin).map_err(|error| error.to_string())?;
+    let game_executable = PathBuf::from(game_executable);
+    let process_name = game_executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "game executable has no file name".to_string())?;
+    if !bridge.supports_process(process_name) {
+        return Ok(None);
+    }
+    let dependency = plugin
+        .external_dependencies
+        .get(HOYOSHADE_DEPENDENCY_ID)
+        .ok_or_else(|| "HoYoShade dependency is missing".to_string())?;
+    let dependency_path = dependency
+        .path
+        .as_ref()
+        .ok_or_else(|| "HoYoShade path is not configured".to_string())?;
+    let game_directory = game_executable
+        .parent()
+        .ok_or_else(|| "game executable has no parent directory".to_string())?;
+    bridge
+        .deploy_reshade_ini(dependency_path, game_directory)
+        .map_err(|error| error.to_string())?;
+    let injector = dependency_path.join("inject.exe");
+    Ok(Some(PluginLaunchProgram {
+        path: injector.to_string_lossy().into_owned(),
+        args: process_name.to_string(),
+        work_dir: dependency_path.to_string_lossy().into_owned(),
+        run_as_administrator: true,
+    }))
 }
 
 #[tauri::command]

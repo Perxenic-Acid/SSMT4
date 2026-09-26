@@ -597,7 +597,7 @@ mod tests {
               "externalDependencies": [{
                 "id": "hoyoshade",
                 "type": "directory",
-                "requiredFiles": ["inject.exe", "ReShade64.dll"]
+                "requiredFiles": ["inject.exe", "ReShade64.dll", "ReShade.ini"]
               }],
               "permissions": ["process.spawn", "process.observe"]
             }

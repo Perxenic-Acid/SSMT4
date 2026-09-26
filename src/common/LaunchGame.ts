@@ -20,11 +20,19 @@ export interface ProgramToLaunch {
     waitForProcessName?: string;
     waitTimeoutSecs?: number;
     waitOnly?: boolean;
+    runAsAdministrator?: boolean;
 }
 
 interface DiscoveredGamePaths {
     targetExePath: string;
     launcherExePath: string;
+}
+
+interface PluginLaunchProgram {
+    path: string;
+    args: string;
+    workDir: string;
+    runAsAdministrator: boolean;
 }
 
 type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
@@ -500,6 +508,23 @@ export class LaunchGame {
 
             // Construct programs list
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
+
+            const hoyoshade = launchTargetProgram && targetExe
+                ? await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
+                      gameExecutable: targetExe,
+                  })
+                : null;
+
+            if (hoyoshade) {
+                // HoYoShade's injector waits for the target process itself, so it
+                // must be started before Run.exe/the game launcher.
+                programs.push({
+                    path: hoyoshade.path,
+                    args: hoyoshade.args,
+                    workDir: hoyoshade.workDir,
+                    runAsAdministrator: hoyoshade.runAsAdministrator,
+                });
+            }
 
             if (!pureMode || !launchTargetProgram) {
                 // 1. Default flow launches Run.exe first.

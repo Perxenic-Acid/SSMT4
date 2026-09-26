@@ -17,8 +17,7 @@
         "arguments": ["${game.processName}"],
         "workingDirectory": "${external.hoyoshade}",
         "ready": {
-          "type": "stderr-contains",
-          "value": "HOYOSHADE_READY:9999",
+          "type": "process-exited",
           "timeoutMs": 15000
         },
         "failurePolicy": "abort"
@@ -39,6 +38,7 @@
       "requiredFiles": [
         "inject.exe",
         "ReShade64.dll",
+        "ReShade.ini",
         "LauncherResource/INIBuild.exe",
         "InjectResource",
         "reshade-shaders",

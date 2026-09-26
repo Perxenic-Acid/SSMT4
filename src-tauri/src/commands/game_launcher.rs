@@ -30,6 +30,7 @@ pub struct ProgramToLaunch {
     pub wait_for_process_name: Option<String>,
     pub wait_timeout_secs: Option<u64>,
     pub wait_only: Option<bool>,
+    pub run_as_administrator: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -691,8 +692,14 @@ pub async fn launch_programs(programs: Vec<ProgramToLaunch>) -> Result<(), Strin
 
             // Use Powershell Start-Process to handle UAC elevation automatically.
             let mut ps_script = format!(
-                "Start-Process -FilePath '{}' -WorkingDirectory '{}'",
-                escaped_path, escaped_work_dir
+                "try {{ Start-Process -FilePath '{}' -WorkingDirectory '{}'{}",
+                escaped_path,
+                escaped_work_dir,
+                if prog.run_as_administrator.unwrap_or(false) {
+                    " -Verb RunAs"
+                } else {
+                    ""
+                }
             );
 
             if let Some(args) = &prog.args {
@@ -701,6 +708,9 @@ pub async fn launch_programs(programs: Vec<ProgramToLaunch>) -> Result<(), Strin
                     ps_script.push_str(&format!(" -ArgumentList '{}'", escaped_args));
                 }
             }
+            ps_script.push_str(
+                "; if (-not $?) { exit 1 } } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+            );
 
             println!(
                 "[GameLauncher] Launching target via shell: {}",
