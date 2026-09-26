@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::collections::BTreeMap;
 
@@ -11,6 +11,7 @@ const BACKUP_DIR: &str = "_SSMT_Graphics_Backup";
 const JOURNAL: &str = "journal.json";
 const FILES: [&str; 2] = ["ReShade.ini", "ReShadePreset.ini"];
 const MAX_CONFIG_SIZE: u64 = 16 * 1024 * 1024;
+const MAX_ASSET_SIZE: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,6 +50,22 @@ fn safe_file_name(name: &str) -> bool {
 
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn hash_asset(path: &Path) -> Result<String, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_ASSET_SIZE {
+        return Err(format!("graphics asset exceeds 1 GiB: {}", path.display()));
+    }
+    let mut file = file;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 { break; }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn link_target_matches(actual: &Path, expected: &Path) -> bool {
@@ -200,7 +217,7 @@ pub fn stage(
     if fs::symlink_metadata(&addon_dir).is_ok() {
         return Err(format!("managed add-on directory already exists: {}", addon_dir.display()));
     }
-    let mut addons = BTreeMap::<String, (PathBuf, Vec<u8>)>::new();
+    let mut addons = BTreeMap::<String, (PathBuf, String)>::new();
     for source in addon_sources {
         let name = source.file_name().and_then(|part| part.to_str()).ok_or_else(|| {
             format!("invalid add-on source name: {}", source.display())
@@ -209,9 +226,9 @@ pub fn stage(
             return Err(format!("invalid add-on source: {}", source.display()));
         }
         let source = source.canonicalize().map_err(|error| error.to_string())?;
-        let bytes = read_limited(&source)?;
-        if let Some((_, previous)) = addons.insert(name.to_string(), (source, bytes.clone())) {
-            if previous != bytes {
+        let digest = hash_asset(&source)?;
+        if let Some((_, previous)) = addons.insert(name.to_string(), (source, digest.clone())) {
+            if previous != digest {
                 return Err(format!("conflicting add-on file: {name}"));
             }
         }
@@ -249,9 +266,9 @@ pub fn stage(
     let journal = Journal {
         version: 1,
         files: rows.into_iter().map(|(_, row, _)| row).collect(),
-        addon_files: addons.iter().map(|(name, (source, bytes))| AddonRecord {
+        addon_files: addons.iter().map(|(name, (source, digest))| AddonRecord {
             name: name.clone(),
-            applied_hash: hash(bytes),
+            applied_hash: digest.clone(),
             source: Some(source.clone()),
         }).collect(),
     };
@@ -281,6 +298,9 @@ pub fn stage(
                 return Err(format!("failed to link add-on safely: {}", target.display()));
             }
             fs::copy(source, &target).map_err(|error| error.to_string())?;
+            if hash_asset(&target)? != addons[name].1 {
+                return Err(format!("copied add-on checksum mismatch: {}", target.display()));
+            }
         }
         Ok(())
     }) {
@@ -300,6 +320,7 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
     let mut originals = Vec::new();
     let mut temporary_files = Vec::new();
     let mut recovered = Vec::new();
+    let mut recovered_addons = Vec::new();
     let mut owned_addons = Vec::new();
     for (index, row) in journal.files.iter().enumerate() {
         let target = root.join(&row.name);
@@ -386,25 +407,36 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.to_string()),
         }
-        let bytes = read_limited(&target)?;
-        let digest = hash(&bytes);
+        let digest = hash_asset(&target)?;
         if digest != row.applied_hash {
             let path = root.join(format!("{}.ssmt-recovered-{}.bak", row.name, &digest[..16]));
-            if regular_file_or_missing(&path)? && read_limited(&path)? != bytes {
+            if regular_file_or_missing(&path)? && hash_asset(&path)? != digest {
                 return Err(format!(
                     "graphics recovery file already has different content: {}",
                     path.display()
                 ));
             }
-            recovered.push((path, bytes.clone()));
+            recovered_addons.push((target.clone(), path));
         }
-        owned_addons.push((target, Some(bytes)));
+        owned_addons.push((target, Some(digest)));
     }
     for (path, bytes) in recovered {
         if !regular_file_or_missing(&path)? {
             write_atomic(&path, &bytes)?;
         }
         eprintln!("[GraphicsStack] Preserved game-edited config at {}", path.display());
+    }
+    for (source, saved) in recovered_addons {
+        if !regular_file_or_missing(&saved)? {
+            let temp = temporary_path(&saved);
+            if regular_file_or_missing(&temp)? {
+                return Err(format!("pending graphics asset recovery: {}", temp.display()));
+            }
+            fs::copy(&source, &temp).map_err(|error| error.to_string())?;
+            OpenOptions::new().write(true).open(&temp).and_then(|file| file.sync_all()).map_err(|error| error.to_string())?;
+            fs::rename(&temp, &saved).map_err(|error| error.to_string())?;
+        }
+        eprintln!("[GraphicsStack] Preserved changed add-on at {}", saved.display());
     }
     for temp in temporary_files {
         fs::remove_file(temp).map_err(|error| error.to_string())?;
@@ -423,7 +455,7 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
     }
     for (target, observed) in owned_addons {
         if let Some(observed) = observed {
-            if !regular_file_or_missing(&target)? || read_limited(&target)? != observed {
+            if !regular_file_or_missing(&target)? || hash_asset(&target)? != observed {
                 return Err(format!("managed add-on changed during restore: {}", target.display()));
             }
         } else {
@@ -545,6 +577,18 @@ mod tests {
         let log_digest = hash(b"log data");
         let saved_log = root.join(format!("addon.log.ssmt-recovered-{}.bak", &log_digest[..16]));
         assert_eq!(fs::read(saved_log).unwrap(), b"log data");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stages_runtime_larger_than_config_limit_without_buffering_it() {
+        let (root, exe) = fixture();
+        let runtime = root.join("nvngx_dlssnr.dll");
+        File::create(&runtime).unwrap().set_len(MAX_CONFIG_SIZE + 1).unwrap();
+        stage(&exe, "managed", "preset", &[runtime.clone()]).unwrap();
+        assert_eq!(fs::metadata(root.join(MANAGED_ADDON_DIR).join("nvngx_dlssnr.dll")).unwrap().len(), MAX_CONFIG_SIZE + 1);
+        assert!(restore(&exe).unwrap());
+        assert_eq!(fs::metadata(runtime).unwrap().len(), MAX_CONFIG_SIZE + 1);
         fs::remove_dir_all(root).unwrap();
     }
 }

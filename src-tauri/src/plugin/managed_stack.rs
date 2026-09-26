@@ -568,6 +568,7 @@ pub fn prepare(
     }
     if let Some(host) = host {
         let game_root = game_executable.parent().ok_or("game executable has no parent")?;
+        let manifest_root = state.manifest_path.parent().and_then(Path::parent).ok_or("invalid DLSS5 manifest path")?;
         for name in &host.config.addon_names {
             if Path::new(name).file_name().and_then(|part| part.to_str()) != Some(name)
                 || name.contains(['/', '\\', ':'])
@@ -575,6 +576,14 @@ pub fn prepare(
                 return Err(format!("invalid DLSS5 add-on name: {name}"));
             }
             addon_sources.push(game_root.join(name));
+        }
+        // Add-ons resolve their runtime and configuration beside the loaded DLL.
+        // Link only files that the Swapper manifest claims for this game instance.
+        for name in ["nvngx_dlssnr.dll", "nvngx_dlss.dll", "dlss5-feed.cfg"] {
+            let path = game_root.join(name);
+            if state.added_files.iter().chain(state.replaced_files.iter()).any(|relative| manifest_root.join(relative) == path) {
+                addon_sources.push(path);
+            }
         }
     }
     managed_reshade_journal::stage(
