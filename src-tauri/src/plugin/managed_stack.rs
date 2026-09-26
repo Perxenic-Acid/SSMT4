@@ -210,6 +210,36 @@ fn check_capabilities(value: &Value, product: &str, flags: &[&str]) -> Result<()
     Ok(())
 }
 
+fn check_hoyoshade_adapter(injector: &Path) -> Result<(), String> {
+    let capabilities = run_json(injector, &["--ssmt-capabilities"], Duration::from_secs(5))?;
+    check_capabilities(
+        &capabilities,
+        "HoYoShade",
+        &["managedConfig", "preservesGameAddons"],
+    )?;
+    let status = run_json(injector, &["--ssmt-status"], Duration::from_secs(5))?;
+    if status.get("protocolVersion").and_then(Value::as_u64) != Some(1)
+        || status.get("product").and_then(Value::as_str) != Some("HoYoShade")
+    {
+        return Err("HoYoShade status interface version does not match protocol 1".to_string());
+    }
+    if status.get("ready").and_then(Value::as_bool) != Some(true) {
+        return Err(format!(
+            "HoYoShade adapted installation is incomplete: {}",
+            status
+                .get("missing")
+                .and_then(Value::as_array)
+                .map(|missing| missing
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or_else(|| "unknown missing resource".to_string())
+        ));
+    }
+    Ok(())
+}
+
 fn node_program() -> PathBuf {
     PathBuf::from("node")
 }
@@ -397,12 +427,7 @@ pub fn inspect(
     if !injector.is_file() || !cli.is_file() {
         return Err("adapted injector or Swapper CLI is missing".to_string());
     }
-    let hoyo_cap = run_json(&injector, &["--ssmt-capabilities"], Duration::from_secs(5))?;
-    check_capabilities(
-        &hoyo_cap,
-        "HoYoShade",
-        &["managedConfig", "preservesGameAddons"],
-    )?;
+    check_hoyoshade_adapter(&injector)?;
     let cli_path = cli.to_string_lossy();
     let swapper_cap = run_json(
         &node_program(),
@@ -596,16 +621,7 @@ pub fn install_route(
         );
     }
     let hoyo = dependency_path(registry, HOYOSHADE_PLUGIN_ID, HOYOSHADE_DEPENDENCY_ID)?;
-    let caps = run_json(
-        &hoyo.join("inject.exe"),
-        &["--ssmt-capabilities"],
-        Duration::from_secs(5),
-    )?;
-    check_capabilities(
-        &caps,
-        "HoYoShade",
-        &["managedConfig", "preservesGameAddons"],
-    )?;
+    check_hoyoshade_adapter(&hoyo.join("inject.exe"))?;
     let payload = dependency_path(registry, DLSS5_PLUGIN_ID, DLSS5_PAYLOAD_DEPENDENCY_ID)?;
     let cli = adapter_cli(registry)?;
     let mut system = System::new();
