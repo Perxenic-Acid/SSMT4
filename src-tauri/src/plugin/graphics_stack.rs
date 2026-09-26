@@ -145,6 +145,7 @@ mod tests {
                 uses_proxy: false,
                 added_files: Vec::new(),
                 replaced_files: Vec::new(),
+                external_host: None,
             }),
         }
     }

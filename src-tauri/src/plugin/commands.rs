@@ -5,6 +5,7 @@ use super::graphics_stack::{
 };
 use super::hoyoshade::{HoYoShadeBridge, HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
 use super::logging::PluginLogWriter;
+use super::managed_stack::{self, ManagedStackStatus};
 use super::package_installer::install_ssmtpkg;
 use super::registry::{ExternalDependencyState, PluginRegistry};
 use super::settings::PluginSettingsStore;
@@ -32,6 +33,8 @@ pub struct Dlss5GameStateSnapshot {
     pub uses_proxy: Option<bool>,
     pub manifest_path: Option<String>,
     pub reason: Option<String>,
+    pub managed_host: Option<bool>,
+    pub owner: Option<String>,
 }
 
 impl From<&Dlss5State> for Dlss5GameStateSnapshot {
@@ -44,6 +47,8 @@ impl From<&Dlss5State> for Dlss5GameStateSnapshot {
                 uses_proxy: None,
                 manifest_path: None,
                 reason: None,
+                managed_host: None,
+                owner: None,
             },
             Dlss5State::Managed(managed) => Self {
                 state: "managed",
@@ -58,6 +63,11 @@ impl From<&Dlss5State> for Dlss5GameStateSnapshot {
                 uses_proxy: Some(managed.uses_proxy),
                 manifest_path: Some(managed.manifest_path.to_string_lossy().into_owned()),
                 reason: None,
+                managed_host: Some(managed.external_host.is_some()),
+                owner: managed
+                    .external_host
+                    .as_ref()
+                    .map(|host| host.owner.clone()),
             },
             Dlss5State::Broken {
                 manifest_path,
@@ -69,6 +79,8 @@ impl From<&Dlss5State> for Dlss5GameStateSnapshot {
                 uses_proxy: None,
                 manifest_path: Some(manifest_path.to_string_lossy().into_owned()),
                 reason: Some(reason.clone()),
+                managed_host: None,
+                owner: None,
             },
         }
     }
@@ -86,6 +98,7 @@ pub struct GraphicsLaunchInspection {
 #[serde(rename_all = "snake_case")]
 pub enum GraphicsLaunchDecision {
     ContinueThisLaunch,
+    PrepareManagedStack,
     #[serde(rename = "suppress_hoyoshade_this_launch")]
     SuppressHoYoShadeThisLaunch,
 }
@@ -103,6 +116,11 @@ fn should_launch_hoyoshade(
         CompatibilityLevel::Compatible => Ok(true),
         CompatibilityLevel::Warning
             if decision == Some(GraphicsLaunchDecision::ContinueThisLaunch) =>
+        {
+            Ok(true)
+        }
+        CompatibilityLevel::RequiresManagedStack
+            if decision == Some(GraphicsLaunchDecision::PrepareManagedStack) =>
         {
             Ok(true)
         }
@@ -175,6 +193,24 @@ pub fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStat
     Ok(Dlss5GameStateSnapshot::from(&inspect_game_executable(
         &game_executable,
     )))
+}
+
+#[tauri::command]
+pub fn inspect_managed_graphics_stack(
+    game_executable: String,
+) -> Result<ManagedStackStatus, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let executable = PathBuf::from(game_executable);
+    match inspect_game_executable(&executable) {
+        Dlss5State::Managed(state) => managed_stack::inspect(&registry, &executable, &state),
+        Dlss5State::Broken { reason, .. } => Err(reason),
+        Dlss5State::NotManaged => Err("DLSS5 is not installed for this game".to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn restore_managed_graphics_stack(game_executable: String) -> Result<bool, String> {
+    managed_stack::restore(&PathBuf::from(game_executable))
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -388,10 +424,26 @@ pub fn prepare_hoyoshade_launch(
     bridge
         .validate_external_directory(dependency_path)
         .map_err(|error| error.to_string())?;
+    let managed = graphics_decision == Some(GraphicsLaunchDecision::PrepareManagedStack);
+    if managed {
+        match inspect_game_executable(&game_executable) {
+            Dlss5State::Managed(state) => {
+                managed_stack::prepare(&registry, &game_executable, &state)?
+            }
+            Dlss5State::Broken { reason, .. } => return Err(reason),
+            Dlss5State::NotManaged => {
+                return Err("DLSS5 is not installed for this game".to_string())
+            }
+        }
+    }
     let injector = dependency_path.join("inject.exe");
     Ok(Some(PluginLaunchProgram {
         path: injector.to_string_lossy().into_owned(),
-        args: process_name.to_string(),
+        args: if managed {
+            format!("--ssmt-managed-config {process_name}")
+        } else {
+            process_name.to_string()
+        },
         work_dir: dependency_path.to_string_lossy().into_owned(),
         run_as_administrator: true,
     }))
@@ -551,6 +603,8 @@ mod tests {
                 uses_proxy: Some(true),
                 manifest_path: None,
                 reason: None,
+                managed_host: Some(false),
+                owner: None,
             },
             resolution: GraphicsStackResolution {
                 level: CompatibilityLevel::Warning,

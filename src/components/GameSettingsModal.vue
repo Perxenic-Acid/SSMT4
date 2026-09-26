@@ -36,6 +36,49 @@ const emit = defineEmits<{
 const config = reactive<GameConfig>(GameConfigManager.defaultGameConfig());
 let loadConfigRequestId = 0;
 
+interface Dlss5StateSnapshot {
+  state: 'not_managed' | 'managed' | 'broken';
+  route: string | null;
+  managedHost: boolean | null;
+  owner: string | null;
+  reason: string | null;
+}
+const dlss5State = ref<Dlss5StateSnapshot | null>(null);
+const graphicsStatusError = ref('');
+const availableGraphicsRoutes = ref<string[]>([]);
+let graphicsRequestId = 0;
+let graphicsTimer: ReturnType<typeof setTimeout> | undefined;
+
+const refreshGraphicsState = async () => {
+  const target = (config.targetExePath || '').trim();
+  const requestId = ++graphicsRequestId;
+  dlss5State.value = null;
+  graphicsStatusError.value = '';
+  availableGraphicsRoutes.value = [];
+  if (!target || !props.modelValue) return;
+  try {
+    const state = await invoke<Dlss5StateSnapshot>('inspect_dlss5_game_state', { gameExecutable: target });
+    if (requestId !== graphicsRequestId) return;
+    dlss5State.value = state;
+    if (state.state === 'broken') graphicsStatusError.value = state.reason || '';
+    if (state.state === 'managed' && state.managedHost) {
+      try {
+        const status = await invoke<{ availableRoutes: string[] }>('inspect_managed_graphics_stack', { gameExecutable: target });
+        if (requestId === graphicsRequestId) availableGraphicsRoutes.value = status.availableRoutes;
+      } catch (error) {
+        if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
+      }
+    }
+  } catch (error) {
+    if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
+  }
+};
+
+watch(() => [props.modelValue, config.targetExePath], () => {
+  if (graphicsTimer) clearTimeout(graphicsTimer);
+  graphicsTimer = setTimeout(() => void refreshGraphicsState(), 350);
+});
+
 
 const isLoading = ref(false);
 const isDllReleaseLoading = ref(false);
@@ -1295,6 +1338,20 @@ defineExpose({
                       </svg>
                     </button>
                   </el-tooltip>
+                </div>
+
+                <div class="settings-field-label">{{ t('gameSettingsModal.fields.graphicsStack') }}</div>
+                <div class="settings-path-row">
+                  <span class="settings-path-input" style="height:auto;min-height:34px;padding:7px 10px;overflow-wrap:anywhere">
+                    {{ dlss5State?.state === 'managed'
+                      ? t('gameSettingsModal.fields.graphicsManagedState', { route: dlss5State.route || '—', owner: dlss5State.owner || 'DLSS5-Swapper' })
+                      : dlss5State?.state === 'broken'
+                        ? t('gameSettingsModal.fields.graphicsBrokenState')
+                        : t('gameSettingsModal.fields.graphicsNotManagedState') }}
+                    <span v-if="availableGraphicsRoutes.length"> · {{ t('gameSettingsModal.fields.graphicsRoutes', { routes: availableGraphicsRoutes.join(', ') }) }}</span>
+                    <span v-if="graphicsStatusError" style="color:var(--el-color-danger)"> · {{ graphicsStatusError }}</span>
+                  </span>
+                  <el-button size="small" @click="refreshGraphicsState">{{ t('gameSettingsModal.actions.refreshGraphicsState') }}</el-button>
                 </div>
 
                 <div class="settings-field-label">

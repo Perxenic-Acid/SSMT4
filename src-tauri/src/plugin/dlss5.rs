@@ -32,6 +32,28 @@ pub struct Dlss5ManagedState {
     // 这些路径始终相对于传入的游戏目录；解析器不会访问它们指向的文件。
     pub added_files: Vec<PathBuf>,
     pub replaced_files: Vec<PathBuf>,
+    pub external_host: Option<Dlss5ExternalHost>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dlss5ExternalHost {
+    pub protocol_version: u32,
+    pub owner: String,
+    pub config: Dlss5ExternalHostConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dlss5ExternalHostConfig {
+    #[serde(default)]
+    pub game_ini: String,
+    #[serde(default)]
+    pub preset: String,
+    #[serde(default)]
+    pub addon_names: Vec<String>,
+    #[serde(default)]
+    pub preset_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +76,8 @@ struct Dlss5Manifest {
     added: Vec<String>,
     #[serde(default)]
     replaced: Vec<Dlss5Replacement>,
+    #[serde(default, rename = "externalReShadeHost")]
+    external_re_shade_host: Option<Dlss5ExternalHost>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +178,35 @@ fn inspect(
         .iter()
         .map(|item| validated_relative_path(&item.rel, "replaced.rel"))
         .collect::<Result<Vec<_>, _>>()?;
+    if let Some(host) = &manifest.external_re_shade_host {
+        if host.protocol_version != 1 || host.owner != "SSMT" {
+            return Err("unsupported DLSS5 external ReShade host protocol or owner".to_string());
+        }
+        if host.config.game_ini.len() > 4 * 1024 * 1024
+            || host.config.preset.len() > 4 * 1024 * 1024
+        {
+            return Err("DLSS5 external host configuration is too large".to_string());
+        }
+        for name in &host.config.addon_names {
+            super::validate_package_relative_path(name)
+                .map_err(|_| format!("invalid DLSS5 external host add-on: {name}"))?;
+            if Path::new(name).components().count() != 1
+                || !name.to_ascii_lowercase().ends_with(".addon64")
+            {
+                return Err(format!("invalid DLSS5 external host add-on: {name}"));
+            }
+        }
+        if added_files.iter().chain(replaced_files.iter()).any(|file| {
+            file.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.eq_ignore_ascii_case("ReShade.ini")
+                        || name.eq_ignore_ascii_case("ReShadePreset.ini")
+                })
+        }) {
+            return Err("DLSS5 manifest claims SSMT-owned ReShade configuration".to_string());
+        }
+    }
     let route = match manifest.route.as_deref() {
         Some(value) if value.eq_ignore_ascii_case("native") => Dlss5Route::Native,
         Some(value) if value.eq_ignore_ascii_case("feeder") => Dlss5Route::Feeder,
@@ -181,6 +234,7 @@ fn inspect(
         uses_proxy,
         added_files,
         replaced_files,
+        external_host: manifest.external_re_shade_host,
     }))
 }
 
@@ -367,6 +421,34 @@ mod tests {
         };
         assert!(state.uses_reshade);
         assert!(!state.uses_proxy);
+    }
+
+    #[test]
+    fn recognizes_ssmt_host_and_rejects_shared_file_claims() {
+        let game = TestGame::new();
+        let mut value = manifest("feeder");
+        value["added"] = json!(["Game/dlss5-feed.addon64"]);
+        value["replaced"] = json!([]);
+        value["externalReShadeHost"] = json!({
+            "protocolVersion": 1,
+            "owner": "SSMT",
+            "config": { "gameIni": "[GENERAL]\n", "preset": "Techniques=Feed\n",
+                "addonNames": ["dlss5-feed.addon64"] }
+        });
+        game.write_manifest(&value);
+        let Dlss5State::Managed(state) = game.inspect() else {
+            panic!("expected managed host");
+        };
+        assert_eq!(
+            state.external_host.unwrap().config.addon_names,
+            vec!["dlss5-feed.addon64"]
+        );
+
+        value["added"] = json!(["Game/ReShade.ini"]);
+        game.write_manifest(&value);
+        assert!(
+            matches!(game.inspect(), Dlss5State::Broken { reason, .. } if reason.contains("SSMT-owned"))
+        );
     }
 
     #[test]

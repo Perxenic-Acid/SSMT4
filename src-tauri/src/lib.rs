@@ -151,6 +151,8 @@ pub fn run() {
             plugin::commands::prepare_hoyoshade_launch,
             plugin::commands::inspect_graphics_launch,
             plugin::commands::inspect_dlss5_game_state,
+            plugin::commands::inspect_managed_graphics_stack,
+            plugin::commands::restore_managed_graphics_stack,
             plugin::commands::install_plugin_package,
             plugin::commands::get_plugin_setting,
             plugin::commands::set_plugin_setting,

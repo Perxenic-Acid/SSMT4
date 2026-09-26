@@ -73,10 +73,13 @@ const catalog: CatalogEntry[] = [
     name: 'DLSS 5 Swapper Integration',
     description: '把 DLSS 5 Swapper 作为外部管理器集成到 SSMT。',
     author: 'SSMT',
-    version: '0.1.0',
+    version: '0.2.0',
     supportedGames: ['GIMI', 'HIMI', 'SRMI', 'ZZMI'],
-    permissions: ['process.spawn', 'filesystem.read'],
-    externalDependencies: [{ id: 'dlss5-swapper', requiredFiles: ['DLSS5-Swapper.exe'] }],
+    permissions: ['process.spawn', 'filesystem.read', 'filesystem.write'],
+    externalDependencies: [
+      { id: 'dlss5-swapper', requiredFiles: ['DLSS5-Swapper.exe'] },
+      { id: 'dlss5-adapter', requiredFiles: ['src/ssmt-cli.js', 'src/core/apply.js'] },
+    ],
     packageSize: 16_384,
     screenshots: [],
     changelog: [],
@@ -151,6 +154,22 @@ const installFromFile = async () => {
   } catch (error) {
     console.error('Failed to install plugin package:', error)
     ElMessage.error(t('pluginMarketplace.messages.installFailed', { error: String(error) }))
+  } finally {
+    loading.value = false
+  }
+}
+
+const configureDependency = async (pluginId: string, dependencyId: string) => {
+  const selected = await openDialog({ directory: true, multiple: false })
+  if (typeof selected !== 'string') return
+  loading.value = true
+  try {
+    installed.value = await invoke<InstalledPlugin[]>('set_plugin_external_dependency_path', {
+      pluginId, dependencyId, path: selected,
+    })
+    ElMessage.success(t('pluginMarketplace.messages.dependencySaved'))
+  } catch (error) {
+    ElMessage.error(t('pluginMarketplace.messages.dependencySaveFailed', { error: String(error) }))
   } finally {
     loading.value = false
   }
@@ -302,6 +321,8 @@ onMounted(refreshInstalled)
           <div v-for="dependency in selectedEntry.externalDependencies" :key="dependency.id" class="dependency-row">
             <div class="dependency-heading"><strong>{{ dependency.id }}</strong><span v-if="installedById.get(selectedEntry.id)?.externalDependencies[dependency.id]" class="dependency-status" :class="dependencyStatusClass(installedById.get(selectedEntry.id)!.externalDependencies[dependency.id].status)">{{ dependencyStatusLabel(installedById.get(selectedEntry.id)!.externalDependencies[dependency.id].status) }}</span></div>
             <span class="dependency-files">{{ dependency.requiredFiles.join(' · ') }}</span>
+            <span v-if="installedById.get(selectedEntry.id)?.externalDependencies[dependency.id]?.path" class="dependency-files">{{ installedById.get(selectedEntry.id)!.externalDependencies[dependency.id].path }}</span>
+            <el-button v-if="installedById.get(selectedEntry.id)" size="small" :disabled="loading" @click="configureDependency(selectedEntry.id, dependency.id)">{{ t('pluginMarketplace.actions.chooseDependencyPath') }}</el-button>
           </div>
         </div>
 

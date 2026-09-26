@@ -37,6 +37,7 @@ interface PluginLaunchProgram {
 
 type GraphicsLaunchDecision =
     | "continue_this_launch"
+    | "prepare_managed_stack"
     | "suppress_hoyoshade_this_launch";
 
 type GraphicsCompatibilityLevel =
@@ -51,6 +52,12 @@ interface GraphicsLaunchInspection {
         level: GraphicsCompatibilityLevel;
         issues: Array<{ code: string; message: string }>;
     };
+}
+
+interface ManagedStackStatus {
+    route: string;
+    availableRoutes: string[];
+    swapperOwner: string;
 }
 
 type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
@@ -69,6 +76,49 @@ export class LaunchGame {
         }
 
         const message = issues[0]?.message || t("launchGame.messages.graphicsConflict");
+        if (level === "requires_managed_stack") {
+            let status: ManagedStackStatus;
+            try {
+                status = await invoke<ManagedStackStatus>("inspect_managed_graphics_stack", {
+                    gameExecutable: targetExe,
+                });
+            } catch (error) {
+                try {
+                    await ElMessageBox.confirm(
+                        `${message}\n\n${String(error)}`,
+                        t("launchGame.messages.graphicsStackTitle"),
+                        {
+                            confirmButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                            cancelButtonText: t("launchGame.common.cancel"),
+                            type: "warning",
+                        },
+                    );
+                    return "suppress_hoyoshade_this_launch";
+                } catch {
+                    return null;
+                }
+            }
+            try {
+                await ElMessageBox.confirm(
+                    t("launchGame.messages.graphicsManagedReady", {
+                        route: status.route,
+                        routes: status.availableRoutes.join(", "),
+                        owner: status.swapperOwner,
+                    }),
+                    t("launchGame.messages.graphicsStackTitle"),
+                    {
+                        confirmButtonText: t("launchGame.messages.graphicsPrepareManaged"),
+                        cancelButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                        distinguishCancelAndClose: true,
+                        showClose: true,
+                        type: "warning",
+                    },
+                );
+                return "prepare_managed_stack";
+            } catch (action) {
+                return action === "cancel" ? "suppress_hoyoshade_this_launch" : null;
+            }
+        }
         if (level === "warning") {
             try {
                 await ElMessageBox.confirm(message, t("launchGame.messages.graphicsStackTitle"), {
@@ -482,6 +532,8 @@ export class LaunchGame {
         onNeedsDllUpdate?: () => Promise<boolean | void>,
         ctrlPressed = false,
     ): Promise<void> {
+        let managedStagedTarget: string | null = null;
+        let launchSubmitted = false;
         try {
             const pureMode =
                 appSettings.gameLaunchMode === "always-pure" ||
@@ -580,6 +632,9 @@ export class LaunchGame {
                       graphicsDecision,
                   })
                 : null;
+            if (hoyoshade && graphicsDecision === "prepare_managed_stack") {
+                managedStagedTarget = targetExe;
+            }
 
             if (hoyoshade) {
                 // HoYoShade's injector waits for the target process itself, so it
@@ -648,6 +703,7 @@ export class LaunchGame {
 
             // Execute programs sequentially via Rust tool method
             await invoke("launch_programs", { programs });
+            launchSubmitted = true;
             ElMessage.success(t("launchGame.messages.launchFlowExecuted"));
         } catch (e: unknown) {
             const errorText = String(e);
@@ -662,6 +718,16 @@ export class LaunchGame {
                     confirmButtonText: t("launchGame.common.confirm"),
                 },
             );
+        } finally {
+            if (managedStagedTarget && !launchSubmitted) {
+                try {
+                    await invoke("restore_managed_graphics_stack", {
+                        gameExecutable: managedStagedTarget,
+                    });
+                } catch (error) {
+                    ElMessage.error(t("launchGame.messages.graphicsRestoreFailed", { error: String(error) }));
+                }
+            }
         }
     }
 
