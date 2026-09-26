@@ -277,7 +277,6 @@ export const buildCapabilityTools = (ctx: CapabilityContext): CapabilityTool[] =
       'getLaunchProgramGroupLabel',
       'getProcessNameFromPath',
       'isD3d11BusyError',
-      'notifyD3d11CopyFailure',
     ]),
     ...registerAuto('GlobalConfig', '全局配置', '全局设置读写', GlobalConfig as unknown as Record<string, unknown>),
     ...registerAuto('AppSelfUpdate', '应用更新', '检查/下载/安装应用更新', AppSelfUpdate as unknown as Record<string, unknown>),

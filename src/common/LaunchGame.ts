@@ -242,21 +242,6 @@ export class LaunchGame {
         return `${errorText}\n\n${t("launchGame.messages.d3d11BusyHint")}`;
     }
 
-    private static notifyD3d11CopyFailure(error: unknown, label: string): void {
-        const message = t("launchGame.messages.d3d11CopySkippedContinue", {
-            mode: label,
-            error: String(error),
-        });
-
-        ElMessage({
-            message,
-            type: "error",
-            duration: 8000,
-            showClose: true,
-            offset: 48,
-        });
-    }
-
     private static async buildConfiguredPrograms(
         programsConfig: LaunchProgramConfig[] | undefined,
         phase: LaunchProgramPhase,
@@ -375,9 +360,11 @@ export class LaunchGame {
         let targetExe = (migotoCfg.targetExePath || "").trim();
         const isConfiguredTargetValid =
             targetExe.length > 0 && (await exists(targetExe));
+        const useShell = launchTargetProgram && !!migotoCfg.useShell;
         const configuredLauncher = (migotoCfg.launcherExePath || "").trim();
-        const isConfiguredLauncherValid =
-            configuredLauncher.length > 0 && (await exists(configuredLauncher));
+        const isConfiguredLauncherValid = !useShell || (
+            configuredLauncher.length > 0 && (await exists(configuredLauncher))
+        );
         const gamePreset = (migotoCfg.gamePreset || "").trim().toUpperCase();
         const supportsGameDiscovery = [
             "GIMI",
@@ -570,6 +557,7 @@ export class LaunchGame {
 
             if (
                 launchTargetProgram &&
+                useShell &&
                 launcherExePath &&
                 !(await exists(launcherExePath))
             ) {
@@ -682,8 +670,7 @@ export class LaunchGame {
             const shouldWaitForTargetProcess =
                 launchTargetProgram &&
                 !!targetProcessName &&
-                ((!pureMode && !useShell && !launcherExePath) ||
-                    postLaunchPrograms.length > 0);
+                ((!pureMode && !useShell) || postLaunchPrograms.length > 0);
 
             if (shouldWaitForTargetProcess) {
                 programs.push({
@@ -813,17 +800,7 @@ export class LaunchGame {
                             { file, error: String(e) },
                         );
                         console.error(msg);
-                        ElMessageBox.alert(
-                            msg,
-                            t("launchGame.messages.copyFailedTitle"),
-                            {
-                                type: "error",
-                                confirmButtonText: t(
-                                    "launchGame.common.confirm",
-                                ),
-                            },
-                        );
-                        return;
+                        throw new Error(msg);
                     }
                 }
             }
@@ -858,17 +835,7 @@ export class LaunchGame {
                             { file: "Run.exe", error: String(e) },
                         );
                         console.error(msg);
-                        ElMessageBox.alert(
-                            msg,
-                            t("launchGame.messages.copyFailedTitle"),
-                            {
-                                type: "error",
-                                confirmButtonText: t(
-                                    "launchGame.common.confirm",
-                                ),
-                            },
-                        );
-                        return;
+                        throw new Error(msg);
                     }
                 }
             }
@@ -877,23 +844,6 @@ export class LaunchGame {
                 gameName,
                 migotoPath,
                 config,
-                {
-                    continueOnCopyFailure: true,
-                    onCopyFailure: (error, context) => {
-                        debugWarn(
-                            "GameLauncher",
-                            "Failed to refresh migoto DLL before launch. Continuing launch flow.",
-                            {
-                                mode: context.mode,
-                                sourcePath: context.sourcePath,
-                                destPath: context.destPath,
-                                dllLabel: context.dllLabel,
-                                error,
-                            },
-                        );
-                        this.notifyD3d11CopyFailure(error, context.dllLabel);
-                    },
-                },
             );
 
             if (useUpx) {

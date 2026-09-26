@@ -1,5 +1,5 @@
 import { join } from '@tauri-apps/api/path'
-import { exists, remove, writeTextFile, copyFile } from '@tauri-apps/plugin-fs'
+import { exists, remove, writeTextFile, copyFile, rename } from '@tauri-apps/plugin-fs'
 import { D3dxIniManager } from './D3dxIniManager'
 import { ResourceManager } from './ResourceManager'
 import { PathHelper } from '../helper/PathHelper'
@@ -71,11 +71,6 @@ export interface SpecificIbDumpOptions {
 export interface SpecificIbDumpResult {
   restoreAnalyseOptions: string
   logicName: string
-}
-
-export interface ApplyD3d11ModeOptions {
-  continueOnCopyFailure?: boolean
-  onCopyFailure?: (error: unknown, context: { mode: D3d11Mode; sourcePath: string; destPath: string; dllLabel: string }) => void
 }
 
 const normalizeSpecificIbDumpLogicName = (logicName: unknown, gamePreset: unknown): string => {
@@ -155,7 +150,7 @@ export class MigotoManager {
     return exists(d3dxPath)
   }
 
-  static async applyD3d11ModeToMigotoDir(gameName: string, migotoDir: string, config?: GameConfig, options?: ApplyD3d11ModeOptions): Promise<D3d11Mode> {
+  static async applyD3d11ModeToMigotoDir(gameName: string, migotoDir: string, config?: GameConfig): Promise<D3d11Mode> {
     const effectiveConfig = config || await ResourceManager.loadGameConfig(gameName)
     const dllSource = await ResourceManager.resolveMigotoDllSource(effectiveConfig)
     const mode = dllSource.mode
@@ -166,16 +161,35 @@ export class MigotoManager {
       throw new Error(t('migotoManager.messages.d3d11SourceMissingForMode', { mode: dllSource.label, path: sourcePath }))
     }
 
+    const stagingPath = `${destPath}.ssmt-staging-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const backupPath = `${destPath}.ssmt-backup-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    let backupCreated = false
+
     try {
+      // Stage beside the destination so the final rename stays on the same
+      // volume. Keep the existing DLL available until the staged copy is ready.
+      await copyFile(sourcePath, stagingPath)
+
       if (await exists(destPath)) {
-        await remove(destPath)
+        await rename(destPath, backupPath)
+        backupCreated = true
       }
 
-      await copyFile(sourcePath, destPath)
+      await rename(stagingPath, destPath)
+
+      if (backupCreated && await exists(backupPath)) {
+        await remove(backupPath)
+      }
     } catch (error) {
-      if (options?.continueOnCopyFailure) {
-        options.onCopyFailure?.(error, { mode, sourcePath, destPath, dllLabel: dllSource.label })
-        return mode
+      try {
+        if (await exists(stagingPath)) {
+          await remove(stagingPath)
+        }
+        if (backupCreated && !(await exists(destPath)) && await exists(backupPath)) {
+          await rename(backupPath, destPath)
+        }
+      } catch (restoreError) {
+        throw new Error(`${String(error)}; failed to restore the previous ${dllSource.label}: ${String(restoreError)}`)
       }
 
       throw error
@@ -219,6 +233,10 @@ export class MigotoManager {
     const dllSource = await ResourceManager.resolveMigotoDllSource(cfg)
     lines = D3dxIniManager.setIniValue(lines, 'Loader', 'module', dllSource.targetFileName)
 
+    // Upstream packages use `loader` as an XXMI-only allowlist. SSMT validates
+    // the exact target path and does not require that external launcher.
+    lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'loader')
+
     if (cfg.targetExePath && cfg.targetExePath.trim()) {
       lines = D3dxIniManager.setIniValue(lines, 'Loader', 'target', cfg.targetExePath)
     }
@@ -228,8 +246,8 @@ export class MigotoManager {
       lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch')
       lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch_args')
     } else {
-      const launchTarget = (cfg.launcherExePath && cfg.launcherExePath.trim())
-        ? cfg.launcherExePath.trim()
+      const launchTarget = (cfg.targetExePath && cfg.targetExePath.trim())
+        ? cfg.targetExePath.trim()
         : ''
 
       // Extra DLL injection in Run.exe only happens on the launch-and-inject path.
