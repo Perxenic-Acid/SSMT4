@@ -1469,6 +1469,10 @@
     },
     "messages": {
       "configureMigotoPathFirst": "请先在游戏设置中配置 3Dmigoto 安装路径，或检查设置页面缓存目录",
+      "graphicsStackTitle": "图形栈启动检查",
+      "graphicsConflict": "当前图形组件无法同时启动。",
+      "graphicsContinue": "本次仍然启动",
+      "graphicsSuppressHoYoShade": "本次不加载 HoYoShade",
       "migotoDirectoryRestoring": "3DMigoto 目录无效，正在恢复到私有目录并获取网络包：{path}",
       "migotoDirectoryRestoreFailed": "未能恢复 3DMigoto 网络包，启动已取消",
       "targetProcessPathNotConfigured": "未配置游戏目标进程路径，请先设置目标进程路径",

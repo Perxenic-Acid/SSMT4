@@ -35,9 +35,67 @@ interface PluginLaunchProgram {
     runAsAdministrator: boolean;
 }
 
+type GraphicsLaunchDecision =
+    | "continue_this_launch"
+    | "suppress_hoyoshade_this_launch";
+
+type GraphicsCompatibilityLevel =
+    | "compatible"
+    | "warning"
+    | "requires_managed_stack"
+    | "conflict";
+
+interface GraphicsLaunchInspection {
+    hoyoshadeRequested: boolean;
+    resolution: {
+        level: GraphicsCompatibilityLevel;
+        issues: Array<{ code: string; message: string }>;
+    };
+}
+
 type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
 
 export class LaunchGame {
+    private static async preflightGraphicsLaunch(
+        targetExe: string,
+    ): Promise<GraphicsLaunchDecision | null> {
+        const inspection = await invoke<GraphicsLaunchInspection>(
+            "inspect_graphics_launch",
+            { gameExecutable: targetExe },
+        );
+        const { level, issues } = inspection.resolution;
+        if (!inspection.hoyoshadeRequested || level === "compatible") {
+            return "continue_this_launch";
+        }
+
+        const message = issues[0]?.message || t("launchGame.messages.graphicsConflict");
+        if (level === "warning") {
+            try {
+                await ElMessageBox.confirm(message, t("launchGame.messages.graphicsStackTitle"), {
+                    confirmButtonText: t("launchGame.messages.graphicsContinue"),
+                    cancelButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                    distinguishCancelAndClose: true,
+                    showClose: true,
+                    type: "warning",
+                });
+                return "continue_this_launch";
+            } catch (action) {
+                return action === "cancel" ? "suppress_hoyoshade_this_launch" : null;
+            }
+        }
+
+        try {
+            await ElMessageBox.confirm(message, t("launchGame.messages.graphicsStackTitle"), {
+                confirmButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                cancelButtonText: t("launchGame.common.cancel"),
+                type: "warning",
+            });
+            return "suppress_hoyoshade_this_launch";
+        } catch {
+            return null;
+        }
+    }
+
     private static formatProgramSummary(program: ProgramToLaunch): string {
         return [
             `path=${program.path || "<wait-only>"}`,
@@ -254,10 +312,12 @@ export class LaunchGame {
         pureMode: boolean,
         onNeedsConfigureProcessPath?: () => void,
         onNeedsPackageUpdate?: () => Promise<boolean | void> | boolean | void,
+        onGraphicsPreflight?: (targetExe: string) => Promise<GraphicsLaunchDecision | null>,
     ): Promise<{
         migotoDir: string;
         config: GameConfig;
         targetExe: string;
+        graphicsDecision: GraphicsLaunchDecision;
     } | null> {
         const config = await ResourceManager.loadGameConfig(gameName);
         const migotoCfg = config ?? ({} as GameConfig);
@@ -278,36 +338,6 @@ export class LaunchGame {
         ].includes(gamePreset);
 
         let configChanged = false;
-        let configuredMigotoDir = (migotoCfg.installDir || "").trim();
-        const configuredD3dxIni = configuredMigotoDir
-            ? await join(configuredMigotoDir, "d3dx.ini")
-            : "";
-        const isMigotoDirValid =
-            configuredMigotoDir.length > 0 &&
-            (await exists(configuredMigotoDir)) &&
-            (await exists(configuredD3dxIni));
-        if (!isMigotoDirValid) {
-            const cacheRoot = await GlobalConfig.SSMT4CustomCacheFolder();
-            configuredMigotoDir = await join(cacheRoot, "3Dmigoto", gameName);
-            migotoCfg.installDir = configuredMigotoDir;
-            configChanged = true;
-            await ResourceManager.saveGameConfig(gameName, migotoCfg);
-            configChanged = false;
-
-            ElMessage.info(
-                t("launchGame.messages.migotoDirectoryRestoring", {
-                    path: configuredMigotoDir,
-                }),
-            );
-            const updateHandled = await onNeedsPackageUpdate?.();
-            const restoredD3dxIni = await join(configuredMigotoDir, "d3dx.ini");
-            if (updateHandled === false || !(await exists(restoredD3dxIni))) {
-                ElMessage.warning(
-                    t("launchGame.messages.migotoDirectoryRestoreFailed"),
-                );
-                return null;
-            }
-        }
 
         if (
             launchTargetProgram &&
@@ -346,10 +376,6 @@ export class LaunchGame {
             }
         }
 
-        if (configChanged) {
-            await ResourceManager.saveGameConfig(gameName, migotoCfg);
-        }
-
         if (launchTargetProgram && !targetExe) {
             ElMessage.warning(
                 t("launchGame.messages.targetProcessPathNotConfigured"),
@@ -361,6 +387,44 @@ export class LaunchGame {
         if (launchTargetProgram && !(await exists(targetExe))) {
             ElMessage.error(t("launchGame.messages.targetProcessFileNotFound"));
             return null;
+        }
+
+        const graphicsDecision = launchTargetProgram && onGraphicsPreflight
+            ? await onGraphicsPreflight(targetExe)
+            : "continue_this_launch";
+        if (!graphicsDecision) return null;
+
+        if (configChanged) {
+            await ResourceManager.saveGameConfig(gameName, migotoCfg);
+        }
+
+        let configuredMigotoDir = (migotoCfg.installDir || "").trim();
+        const configuredD3dxIni = configuredMigotoDir
+            ? await join(configuredMigotoDir, "d3dx.ini")
+            : "";
+        const isMigotoDirValid =
+            configuredMigotoDir.length > 0 &&
+            (await exists(configuredMigotoDir)) &&
+            (await exists(configuredD3dxIni));
+        if (!isMigotoDirValid) {
+            const cacheRoot = await GlobalConfig.SSMT4CustomCacheFolder();
+            configuredMigotoDir = await join(cacheRoot, "3Dmigoto", gameName);
+            migotoCfg.installDir = configuredMigotoDir;
+            await ResourceManager.saveGameConfig(gameName, migotoCfg);
+
+            ElMessage.info(
+                t("launchGame.messages.migotoDirectoryRestoring", {
+                    path: configuredMigotoDir,
+                }),
+            );
+            const updateHandled = await onNeedsPackageUpdate?.();
+            const restoredD3dxIni = await join(configuredMigotoDir, "d3dx.ini");
+            if (updateHandled === false || !(await exists(restoredD3dxIni))) {
+                ElMessage.warning(
+                    t("launchGame.messages.migotoDirectoryRestoreFailed"),
+                );
+                return null;
+            }
         }
 
         if (
@@ -407,7 +471,7 @@ export class LaunchGame {
             }
         }
 
-        return { migotoDir, config: migotoCfg, targetExe };
+        return { migotoDir, config: migotoCfg, targetExe, graphicsDecision };
     }
 
     static async launch(
@@ -434,10 +498,11 @@ export class LaunchGame {
                 pureMode,
                 onNeedsConfigureProcessPath,
                 onNeedsUpdate,
+                (targetExe) => this.preflightGraphicsLaunch(targetExe),
             );
             if (!preflight) return;
 
-            const { migotoDir, config, targetExe } = preflight;
+            const { migotoDir, config, targetExe, graphicsDecision } = preflight;
             await this.ensureSSMTRuntimeFiles(migotoDir, config.gamePreset);
             const launchTargetProgram = config.launchTargetProgram !== false;
             const launcherExePath = (config.launcherExePath || "").trim();
@@ -512,6 +577,7 @@ export class LaunchGame {
             const hoyoshade = launchTargetProgram && targetExe
                 ? await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
                       gameExecutable: targetExe,
+                      graphicsDecision,
                   })
                 : null;
 

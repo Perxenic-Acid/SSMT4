@@ -81,6 +81,25 @@ pub fn inspect_game_directory(game_directory: &Path) -> Dlss5State {
     }
 }
 
+pub fn inspect_game_executable(game_executable: &Path) -> Dlss5State {
+    let Some(game_directory) = game_executable.parent() else {
+        return Dlss5State::Broken {
+            manifest_path: game_executable
+                .join(DLSS5_BACKUP_DIRECTORY)
+                .join(DLSS5_MANIFEST_FILE),
+            reason: "game executable has no parent directory".to_string(),
+        };
+    };
+    // Swapper 的 gameDir 可以是 EXE 所在目录的祖先，不能只检查 EXE 的父目录。
+    for directory in game_directory.ancestors() {
+        match inspect_game_directory(directory) {
+            Dlss5State::NotManaged => {}
+            state => return state,
+        }
+    }
+    Dlss5State::NotManaged
+}
+
 fn inspect(
     game_directory: &Path,
     manifest_path: &Path,
@@ -264,6 +283,23 @@ mod tests {
         assert_eq!(game.inspect(), Dlss5State::NotManaged);
         fs::create_dir_all(game.root.join(DLSS5_BACKUP_DIRECTORY)).unwrap();
         assert_eq!(game.inspect(), Dlss5State::NotManaged);
+    }
+
+    #[test]
+    fn finds_manifest_in_ancestor_of_game_executable() {
+        let game = TestGame::new();
+        game.write_manifest(&manifest("feeder"));
+        let nested = game.root.join("Game");
+        fs::create_dir_all(&nested).unwrap();
+        let executable = nested.join("Client.exe");
+        fs::write(&executable, b"fixture").unwrap();
+        assert!(matches!(
+            inspect_game_executable(&executable),
+            Dlss5State::Managed(Dlss5ManagedState {
+                route: Dlss5Route::Feeder,
+                ..
+            })
+        ));
     }
 
     #[test]

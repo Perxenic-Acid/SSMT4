@@ -1,10 +1,15 @@
+use super::dlss5::{inspect_game_executable, Dlss5Route, Dlss5State};
+use super::graphics_stack::{
+    CompatibilityLevel, GameGraphicsState, GraphicsLaunchContributions, GraphicsStackResolution,
+    GraphicsStackResolver,
+};
 use super::hoyoshade::{HoYoShadeBridge, HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
 use super::logging::PluginLogWriter;
 use super::package_installer::install_ssmtpkg;
 use super::registry::{ExternalDependencyState, PluginRegistry};
 use super::settings::PluginSettingsStore;
 use super::PluginManifest;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -16,6 +21,160 @@ pub struct PluginLaunchProgram {
     pub args: String,
     pub work_dir: String,
     pub run_as_administrator: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dlss5GameStateSnapshot {
+    pub state: &'static str,
+    pub route: Option<String>,
+    pub uses_reshade: Option<bool>,
+    pub uses_proxy: Option<bool>,
+    pub manifest_path: Option<String>,
+    pub reason: Option<String>,
+}
+
+impl From<&Dlss5State> for Dlss5GameStateSnapshot {
+    fn from(value: &Dlss5State) -> Self {
+        match value {
+            Dlss5State::NotManaged => Self {
+                state: "not_managed",
+                route: None,
+                uses_reshade: None,
+                uses_proxy: None,
+                manifest_path: None,
+                reason: None,
+            },
+            Dlss5State::Managed(managed) => Self {
+                state: "managed",
+                route: Some(match &managed.route {
+                    Dlss5Route::Native => "native".to_string(),
+                    Dlss5Route::Feeder => "feeder".to_string(),
+                    Dlss5Route::RenoDx => "renodx".to_string(),
+                    Dlss5Route::OptiScaler => "optiscaler".to_string(),
+                    Dlss5Route::Unknown(route) => route.clone(),
+                }),
+                uses_reshade: Some(managed.uses_reshade),
+                uses_proxy: Some(managed.uses_proxy),
+                manifest_path: Some(managed.manifest_path.to_string_lossy().into_owned()),
+                reason: None,
+            },
+            Dlss5State::Broken {
+                manifest_path,
+                reason,
+            } => Self {
+                state: "broken",
+                route: None,
+                uses_reshade: None,
+                uses_proxy: None,
+                manifest_path: Some(manifest_path.to_string_lossy().into_owned()),
+                reason: Some(reason.clone()),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicsLaunchInspection {
+    pub hoyoshade_requested: bool,
+    pub dlss5: Dlss5GameStateSnapshot,
+    pub resolution: GraphicsStackResolution,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphicsLaunchDecision {
+    ContinueThisLaunch,
+    #[serde(rename = "suppress_hoyoshade_this_launch")]
+    SuppressHoYoShadeThisLaunch,
+}
+
+fn should_launch_hoyoshade(
+    inspection: &GraphicsLaunchInspection,
+    decision: Option<GraphicsLaunchDecision>,
+) -> Result<bool, String> {
+    if !inspection.hoyoshade_requested
+        || decision == Some(GraphicsLaunchDecision::SuppressHoYoShadeThisLaunch)
+    {
+        return Ok(false);
+    }
+    match inspection.resolution.level {
+        CompatibilityLevel::Compatible => Ok(true),
+        CompatibilityLevel::Warning
+            if decision == Some(GraphicsLaunchDecision::ContinueThisLaunch) =>
+        {
+            Ok(true)
+        }
+        _ => Err(inspection
+            .resolution
+            .issues
+            .first()
+            .map(|issue| issue.message.clone())
+            .unwrap_or_else(|| "graphics stack preflight rejected the launch".to_string())),
+    }
+}
+
+fn inspect_graphics_for_executable(
+    registry: &PluginRegistry,
+    game_executable: &std::path::Path,
+) -> Result<GraphicsLaunchInspection, String> {
+    if !game_executable.is_file() {
+        return Err(format!(
+            "game executable does not exist: {}",
+            game_executable.display()
+        ));
+    }
+    let process_name = game_executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "game executable has no file name".to_string())?;
+    let hoyoshade_requested = registry
+        .find(HOYOSHADE_PLUGIN_ID)
+        .filter(|plugin| plugin.enabled)
+        .map(|plugin| {
+            HoYoShadeBridge::from_installed(plugin)
+                .map(|bridge| bridge.supports_process(process_name))
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let state = GameGraphicsState {
+        dlss5: inspect_game_executable(game_executable),
+    };
+    let resolution = GraphicsStackResolver::resolve(
+        &state,
+        GraphicsLaunchContributions {
+            hoyoshade: hoyoshade_requested,
+        },
+    );
+    Ok(GraphicsLaunchInspection {
+        hoyoshade_requested,
+        dlss5: Dlss5GameStateSnapshot::from(&state.dlss5),
+        resolution,
+    })
+}
+
+#[tauri::command]
+pub fn inspect_graphics_launch(
+    game_executable: String,
+) -> Result<GraphicsLaunchInspection, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    inspect_graphics_for_executable(&registry, &PathBuf::from(game_executable))
+}
+
+#[tauri::command]
+pub fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStateSnapshot, String> {
+    let game_executable = PathBuf::from(game_executable);
+    if !game_executable.is_file() {
+        return Err(format!(
+            "game executable does not exist: {}",
+            game_executable.display()
+        ));
+    }
+    Ok(Dlss5GameStateSnapshot::from(&inspect_game_executable(
+        &game_executable,
+    )))
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -196,8 +355,14 @@ pub fn set_plugin_external_dependency_path(
 #[tauri::command]
 pub fn prepare_hoyoshade_launch(
     game_executable: String,
+    graphics_decision: Option<GraphicsLaunchDecision>,
 ) -> Result<Option<PluginLaunchProgram>, String> {
     let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let game_executable = PathBuf::from(game_executable);
+    let inspection = inspect_graphics_for_executable(&registry, &game_executable)?;
+    if !should_launch_hoyoshade(&inspection, graphics_decision)? {
+        return Ok(None);
+    }
     let Some(plugin) = registry
         .find(HOYOSHADE_PLUGIN_ID)
         .filter(|plugin| plugin.enabled)
@@ -205,7 +370,6 @@ pub fn prepare_hoyoshade_launch(
         return Ok(None);
     };
     let bridge = HoYoShadeBridge::from_installed(plugin).map_err(|error| error.to_string())?;
-    let game_executable = PathBuf::from(game_executable);
     let process_name = game_executable
         .file_name()
         .and_then(|name| name.to_str())
@@ -221,11 +385,8 @@ pub fn prepare_hoyoshade_launch(
         .path
         .as_ref()
         .ok_or_else(|| "HoYoShade path is not configured".to_string())?;
-    let game_directory = game_executable
-        .parent()
-        .ok_or_else(|| "game executable has no parent directory".to_string())?;
     bridge
-        .deploy_reshade_ini(dependency_path, game_directory)
+        .validate_external_directory(dependency_path)
         .map_err(|error| error.to_string())?;
     let injector = dependency_path.join("inject.exe");
     Ok(Some(PluginLaunchProgram {
@@ -302,7 +463,14 @@ pub fn set_plugin_setting(
 
 #[cfg(test)]
 mod tests {
-    use super::{capabilities_for_permissions, lifecycle_status, PluginLifecycleStatus};
+    use super::{
+        capabilities_for_permissions, lifecycle_status, should_launch_hoyoshade,
+        Dlss5GameStateSnapshot, GraphicsLaunchDecision, GraphicsLaunchInspection,
+        PluginLifecycleStatus,
+    };
+    use crate::plugin::graphics_stack::{
+        CompatibilityLevel, GraphicsCompatibilityIssue, GraphicsStackResolution,
+    };
     use crate::plugin::registry::{
         ExternalDependencyState, ExternalDependencyStatus, InstalledPlugin,
     };
@@ -370,5 +538,58 @@ mod tests {
             lifecycle_status(&plugin),
             PluginLifecycleStatus::ExternalDependencyMissing
         ));
+    }
+
+    #[test]
+    fn launch_gate_requires_confirmation_and_never_bypasses_managed_stack() {
+        let mut inspection = GraphicsLaunchInspection {
+            hoyoshade_requested: true,
+            dlss5: Dlss5GameStateSnapshot {
+                state: "managed",
+                route: Some("optiscaler".to_string()),
+                uses_reshade: Some(false),
+                uses_proxy: Some(true),
+                manifest_path: None,
+                reason: None,
+            },
+            resolution: GraphicsStackResolution {
+                level: CompatibilityLevel::Warning,
+                issues: vec![GraphicsCompatibilityIssue {
+                    level: CompatibilityLevel::Warning,
+                    components: Vec::new(),
+                    code: "warning".to_string(),
+                    message: "confirm first".to_string(),
+                    possible_actions: Vec::new(),
+                }],
+            },
+        };
+        assert!(should_launch_hoyoshade(&inspection, None).is_err());
+        assert_eq!(
+            should_launch_hoyoshade(
+                &inspection,
+                Some(GraphicsLaunchDecision::ContinueThisLaunch)
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            should_launch_hoyoshade(
+                &inspection,
+                Some(GraphicsLaunchDecision::SuppressHoYoShadeThisLaunch)
+            ),
+            Ok(false)
+        );
+
+        inspection.resolution.level = CompatibilityLevel::RequiresManagedStack;
+        assert!(should_launch_hoyoshade(
+            &inspection,
+            Some(GraphicsLaunchDecision::ContinueThisLaunch)
+        )
+        .is_err());
+        inspection.resolution.level = CompatibilityLevel::Conflict;
+        assert!(should_launch_hoyoshade(
+            &inspection,
+            Some(GraphicsLaunchDecision::ContinueThisLaunch)
+        )
+        .is_err());
     }
 }

@@ -1,5 +1,6 @@
 use super::dlss5::{Dlss5Route, Dlss5State, DLSS5_PLUGIN_ID};
 use super::hoyoshade::HOYOSHADE_PLUGIN_ID;
+use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameGraphicsState {
@@ -11,7 +12,8 @@ pub struct GraphicsLaunchContributions {
     pub hoyoshade: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompatibilityLevel {
     Compatible,
     // 允许用户确认后进入由 SSMT 协调的启动流程。
@@ -21,16 +23,19 @@ pub enum CompatibilityLevel {
     Conflict,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GraphicsConflictAction {
     PrepareManagedStack,
     ContinueThisLaunch,
+    #[serde(rename = "suppress_hoyoshade_this_launch")]
     SuppressHoYoShadeThisLaunch,
     OpenDlss5Swapper,
     CancelLaunch,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphicsCompatibilityIssue {
     pub level: CompatibilityLevel,
     pub components: Vec<String>,
@@ -39,7 +44,8 @@ pub struct GraphicsCompatibilityIssue {
     pub possible_actions: Vec<GraphicsConflictAction>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphicsStackResolution {
     pub level: CompatibilityLevel,
     pub issues: Vec<GraphicsCompatibilityIssue>,

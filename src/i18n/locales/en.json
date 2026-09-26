@@ -1469,6 +1469,10 @@
     },
     "messages": {
       "configureMigotoPathFirst": "Please configure the 3Dmigoto install path in game settings first, or check the cache directory in settings",
+      "graphicsStackTitle": "Graphics stack preflight",
+      "graphicsConflict": "The current graphics integrations cannot be launched together.",
+      "graphicsContinue": "Continue this launch",
+      "graphicsSuppressHoYoShade": "Skip HoYoShade this launch",
       "migotoDirectoryRestoring": "The 3DMigoto directory is invalid. Restoring it to private storage and fetching the package: {path}",
       "migotoDirectoryRestoreFailed": "The 3DMigoto package could not be restored. Launch was cancelled",
       "targetProcessPathNotConfigured": "Target process path is not configured. Please set it first",
