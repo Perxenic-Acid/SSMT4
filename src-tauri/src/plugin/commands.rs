@@ -5,7 +5,7 @@ use super::graphics_stack::{
 };
 use super::hoyoshade::{HoYoShadeBridge, HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
 use super::logging::PluginLogWriter;
-use super::managed_stack::{self, ManagedStackStatus};
+use super::managed_stack::{self, Dlss5RouteScan, ManagedStackStatus};
 use super::package_installer::install_ssmtpkg;
 use super::registry::{ExternalDependencyState, PluginRegistry};
 use super::settings::PluginSettingsStore;
@@ -211,6 +211,44 @@ pub fn inspect_managed_graphics_stack(
 #[tauri::command]
 pub fn restore_managed_graphics_stack(game_executable: String) -> Result<bool, String> {
     managed_stack::restore(&PathBuf::from(game_executable))
+}
+
+#[tauri::command]
+pub fn inspect_dlss5_route_options(
+    game_executable: String,
+    api_override: String,
+) -> Result<Dlss5RouteScan, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    managed_stack::inspect_routes(&registry, &PathBuf::from(game_executable), &api_override)
+}
+
+#[tauri::command]
+pub fn install_managed_dlss5_route(
+    game_executable: String,
+    route: String,
+    api_override: String,
+    anti_cheat_acknowledged: bool,
+) -> Result<Dlss5RouteScan, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    managed_stack::install_route(
+        &registry,
+        &PathBuf::from(game_executable),
+        &route,
+        &api_override,
+        anti_cheat_acknowledged,
+    )
+}
+
+#[tauri::command]
+pub fn restore_dlss5_install(game_executable: String) -> Result<(), String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    managed_stack::restore_swapper(&registry, &PathBuf::from(game_executable))
+}
+
+#[tauri::command]
+pub fn open_dlss5_swapper() -> Result<(), String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    managed_stack::open_swapper(&registry)
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

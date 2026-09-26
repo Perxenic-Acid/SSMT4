@@ -43,9 +43,22 @@ interface Dlss5StateSnapshot {
   owner: string | null;
   reason: string | null;
 }
+interface Dlss5RouteScan {
+  routes: string[];
+  api: string;
+  apiLabel: string;
+  installedRoute: string | null;
+  managedHost: boolean;
+  owner: string | null;
+  antiCheatWarning: boolean;
+}
 const dlss5State = ref<Dlss5StateSnapshot | null>(null);
 const graphicsStatusError = ref('');
 const availableGraphicsRoutes = ref<string[]>([]);
+const graphicsRouteScan = ref<Dlss5RouteScan | null>(null);
+const graphicsApiOverride = ref('auto');
+const graphicsSelectedRoute = ref('');
+const graphicsActionBusy = ref(false);
 let graphicsRequestId = 0;
 let graphicsTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -55,26 +68,79 @@ const refreshGraphicsState = async () => {
   dlss5State.value = null;
   graphicsStatusError.value = '';
   availableGraphicsRoutes.value = [];
+  graphicsRouteScan.value = null;
   if (!target || !props.modelValue) return;
   try {
     const state = await invoke<Dlss5StateSnapshot>('inspect_dlss5_game_state', { gameExecutable: target });
     if (requestId !== graphicsRequestId) return;
     dlss5State.value = state;
     if (state.state === 'broken') graphicsStatusError.value = state.reason || '';
-    if (state.state === 'managed' && state.managedHost) {
-      try {
-        const status = await invoke<{ availableRoutes: string[] }>('inspect_managed_graphics_stack', { gameExecutable: target });
-        if (requestId === graphicsRequestId) availableGraphicsRoutes.value = status.availableRoutes;
-      } catch (error) {
-        if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
+    try {
+      const routes = await invoke<Dlss5RouteScan>('inspect_dlss5_route_options', {
+        gameExecutable: target, apiOverride: graphicsApiOverride.value,
+      });
+      if (requestId === graphicsRequestId) {
+        graphicsRouteScan.value = routes;
+        availableGraphicsRoutes.value = routes.routes;
+        if (!routes.routes.includes(graphicsSelectedRoute.value)) graphicsSelectedRoute.value = routes.routes[0] || '';
       }
+    } catch (error) {
+      if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
     }
   } catch (error) {
     if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
   }
 };
 
-watch(() => [props.modelValue, config.targetExePath], () => {
+const installSelectedDlss5Route = async () => {
+  const gameExecutable = (config.targetExePath || '').trim();
+  const route = graphicsSelectedRoute.value;
+  if (!gameExecutable || !route) return;
+  if (route === 'optiscaler') {
+    try { await invoke('open_dlss5_swapper'); }
+    catch (error) { ElMessage.error(String(error)); }
+    return;
+  }
+  graphicsActionBusy.value = true;
+  try {
+    let antiCheatAcknowledged = false;
+    if (graphicsRouteScan.value?.antiCheatWarning) {
+      try {
+        await ElMessageBox.confirm(t('gameSettingsModal.messages.graphicsAntiCheatConfirm'),
+          t('gameSettingsModal.fields.graphicsStack'), { type: 'warning' });
+      } catch { return; }
+      antiCheatAcknowledged = true;
+    }
+    await invoke('install_managed_dlss5_route', {
+      gameExecutable, route, apiOverride: graphicsApiOverride.value, antiCheatAcknowledged,
+    });
+    ElMessage.success(t('gameSettingsModal.messages.graphicsInstalled', { route }));
+    await refreshGraphicsState();
+  } catch (error) {
+    graphicsStatusError.value = String(error);
+    ElMessage.error(String(error));
+  } finally {
+    graphicsActionBusy.value = false;
+  }
+};
+
+const restoreDlss5Route = async () => {
+  const gameExecutable = (config.targetExePath || '').trim();
+  if (!gameExecutable) return;
+  graphicsActionBusy.value = true;
+  try {
+    await invoke('restore_dlss5_install', { gameExecutable });
+    ElMessage.success(t('gameSettingsModal.messages.graphicsRestored'));
+    await refreshGraphicsState();
+  } catch (error) {
+    graphicsStatusError.value = String(error);
+    ElMessage.error(String(error));
+  } finally {
+    graphicsActionBusy.value = false;
+  }
+};
+
+watch(() => [props.modelValue, config.targetExePath, graphicsApiOverride.value], () => {
   if (graphicsTimer) clearTimeout(graphicsTimer);
   graphicsTimer = setTimeout(() => void refreshGraphicsState(), 350);
 });
@@ -1352,6 +1418,22 @@ defineExpose({
                     <span v-if="graphicsStatusError" style="color:var(--el-color-danger)"> · {{ graphicsStatusError }}</span>
                   </span>
                   <el-button size="small" @click="refreshGraphicsState">{{ t('gameSettingsModal.actions.refreshGraphicsState') }}</el-button>
+                </div>
+                <div class="settings-path-row" style="flex-wrap:wrap">
+                  <el-select v-model="graphicsApiOverride" size="small" style="width:140px" :aria-label="t('gameSettingsModal.fields.graphicsApi')">
+                    <el-option value="auto" :label="t('gameSettingsModal.fields.graphicsApiAuto')" />
+                    <el-option value="d3d11" label="DirectX 11" />
+                    <el-option value="d3d12" label="DirectX 12" />
+                  </el-select>
+                  <el-select v-model="graphicsSelectedRoute" size="small" style="width:150px" :aria-label="t('gameSettingsModal.fields.graphicsRoute')" :disabled="!availableGraphicsRoutes.length">
+                    <el-option v-for="route in availableGraphicsRoutes" :key="route" :value="route" :label="route" />
+                  </el-select>
+                  <el-button size="small" type="primary" :loading="graphicsActionBusy" :disabled="!graphicsSelectedRoute" @click="installSelectedDlss5Route">
+                    {{ graphicsSelectedRoute === 'optiscaler' ? t('gameSettingsModal.actions.openSwapper') : dlss5State?.state === 'managed' && !dlss5State.managedHost ? t('gameSettingsModal.actions.migrateGraphicsRoute') : t('gameSettingsModal.actions.installGraphicsRoute') }}
+                  </el-button>
+                  <el-button v-if="dlss5State?.state === 'managed'" size="small" :loading="graphicsActionBusy" @click="restoreDlss5Route">
+                    {{ t('gameSettingsModal.actions.restoreGraphicsRoute') }}
+                  </el-button>
                 </div>
 
                 <div class="settings-field-label">

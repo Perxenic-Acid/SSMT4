@@ -113,6 +113,9 @@ fn merge_value(section: &str, key: &str, left: &str, right: &str) -> Result<Stri
                 }
             }
         }
+        if key_lower == "techniques" || key_lower == "techniquesorting" {
+            return Ok(list_union(right, left));
+        }
         return Ok(list_union(left, right));
     }
     Err(IniConflict {
@@ -243,7 +246,7 @@ mod tests {
         assert!(result.game_ini.contains("PresetPath=.\\ReShadePreset.ini"));
         assert!(result
             .preset_ini
-            .contains("Techniques=HoYo@hoyo.fx,DLSS5_Feed@DLSS5_Feed.fx"));
+            .contains("Techniques=DLSS5_Feed@DLSS5_Feed.fx,HoYo@hoyo.fx"));
     }
 
     #[test]

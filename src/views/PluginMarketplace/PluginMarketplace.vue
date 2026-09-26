@@ -79,6 +79,7 @@ const catalog: CatalogEntry[] = [
     externalDependencies: [
       { id: 'dlss5-swapper', requiredFiles: ['DLSS5-Swapper.exe'] },
       { id: 'dlss5-adapter', requiredFiles: ['src/ssmt-cli.js', 'src/core/apply.js'] },
+      { id: 'dlss5-payload', requiredFiles: ['streamline/nvngx_dlssnr.dll'] },
     ],
     packageSize: 16_384,
     screenshots: [],

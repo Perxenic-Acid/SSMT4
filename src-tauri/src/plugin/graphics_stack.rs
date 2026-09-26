@@ -81,11 +81,11 @@ impl GraphicsStackResolver {
                     ],
                 ),
                 Dlss5Route::OptiScaler => (
-                    CompatibilityLevel::Warning,
-                    "hoyoshade_dlss5_optiscaler_unverified",
-                    "OptiScaler 代理与 HoYoShade 注入的联动尚未通过真实游戏验证。".to_string(),
+                    CompatibilityLevel::RequiresManagedStack,
+                    "hoyoshade_dlss5_optiscaler_managed_required",
+                    "OptiScaler 代理与 HoYoShade 注入的联动需要 SSMT 托管配置及保留游戏文件的注入模式。".to_string(),
                     vec![
-                        GraphicsConflictAction::ContinueThisLaunch,
+                        GraphicsConflictAction::PrepareManagedStack,
                         GraphicsConflictAction::SuppressHoYoShadeThisLaunch,
                         GraphicsConflictAction::OpenDlss5Swapper,
                         GraphicsConflictAction::CancelLaunch,
@@ -181,16 +181,16 @@ mod tests {
     }
 
     #[test]
-    fn optiscaler_requires_explicit_warning_choice() {
+    fn optiscaler_requires_managed_injection() {
         let resolution = resolve(&managed(Dlss5Route::OptiScaler), true);
-        assert_eq!(resolution.level, CompatibilityLevel::Warning);
+        assert_eq!(resolution.level, CompatibilityLevel::RequiresManagedStack);
         assert_eq!(
             resolution.issues[0].code,
-            "hoyoshade_dlss5_optiscaler_unverified"
+            "hoyoshade_dlss5_optiscaler_managed_required"
         );
         assert!(resolution.issues[0]
             .possible_actions
-            .contains(&GraphicsConflictAction::ContinueThisLaunch));
+            .contains(&GraphicsConflictAction::PrepareManagedStack));
     }
 
     #[test]

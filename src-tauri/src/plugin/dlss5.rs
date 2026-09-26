@@ -118,6 +118,23 @@ pub fn inspect_game_executable(game_executable: &Path) -> Dlss5State {
     for directory in game_directory.ancestors() {
         match inspect_game_directory(directory) {
             Dlss5State::NotManaged => {}
+            Dlss5State::Managed(state) => {
+                let installed_executable = directory.join(&state.game_executable);
+                let installed_parts: Vec<_> = installed_executable.components().collect();
+                let requested_parts: Vec<_> = game_executable.components().collect();
+                if installed_parts.len() == requested_parts.len()
+                    && installed_parts
+                        .iter()
+                        .zip(requested_parts)
+                        .all(|(left, right)| {
+                            left.as_os_str()
+                                .to_string_lossy()
+                                .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+                        })
+                {
+                    return Dlss5State::Managed(state);
+                }
+            }
             state => return state,
         }
     }
@@ -354,6 +371,17 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn ignores_manifest_for_a_different_executable() {
+        let game = TestGame::new();
+        game.write_manifest(&manifest("feeder"));
+        let nested = game.root.join("Game");
+        fs::create_dir_all(&nested).unwrap();
+        let executable = nested.join("Launcher.exe");
+        fs::write(&executable, b"fixture").unwrap();
+        assert_eq!(inspect_game_executable(&executable), Dlss5State::NotManaged);
     }
 
     #[test]

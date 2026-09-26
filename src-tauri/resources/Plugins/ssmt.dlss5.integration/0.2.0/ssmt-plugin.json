@@ -30,6 +30,11 @@
       "id": "dlss5-adapter",
       "type": "directory",
       "requiredFiles": ["src/ssmt-cli.js", "src/core/apply.js"]
+    },
+    {
+      "id": "dlss5-payload",
+      "type": "directory",
+      "requiredFiles": ["streamline/nvngx_dlssnr.dll"]
     }
   ],
   "permissions": ["process.spawn", "filesystem.read", "filesystem.write"]
