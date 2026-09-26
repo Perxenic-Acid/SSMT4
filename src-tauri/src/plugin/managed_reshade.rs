@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+pub const MANAGED_ADDON_DIR: &str = "_SSMT_Graphics_Addons";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedReShadeConfig {
     pub game_ini: String,
@@ -77,7 +79,6 @@ fn merge_value(section: &str, key: &str, left: &str, right: &str) -> Result<Stri
     }
     let (_, key_lower) = norm(section, key);
     if [
-        "addonpath",
         "effectsearchpaths",
         "texturesearchpaths",
         "preprocessordefinitions",
@@ -132,7 +133,8 @@ fn set_entry(text: &mut String, section: &str, key: &str, value: &str) {
     let wanted_section = section.to_ascii_lowercase();
     let mut current_section = String::new();
     let mut insert_at = if section.is_empty() { Some(0) } else { None };
-    for (index, line) in lines.iter_mut().enumerate() {
+    let mut matching = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             if current_section == wanted_section {
@@ -145,21 +147,46 @@ fn set_entry(text: &mut String, section: &str, key: &str, value: &str) {
         } else if current_section == wanted_section {
             if let Some((found_key, _)) = trimmed.split_once('=') {
                 if found_key.trim().eq_ignore_ascii_case(key) {
-                    *line = format!("{key}={value}");
-                    *text = lines.join(newline) + newline;
-                    return;
+                    matching.push(index);
                 }
             }
             insert_at = Some(index + 1);
         }
     }
-    if let Some(index) = insert_at {
+    if let Some(first) = matching.first().copied() {
+        lines[first] = format!("{key}={value}");
+        for index in matching.into_iter().skip(1).rev() {
+            lines.remove(index);
+        }
+    } else if let Some(index) = insert_at {
         lines.insert(index, format!("{key}={value}"));
     } else {
         lines.push(format!("[{section}]"));
         lines.push(format!("{key}={value}"));
     }
     *text = lines.join(newline) + newline;
+}
+
+fn normalize_document(text: &str) -> Result<String, IniConflict> {
+    let mut values = BTreeMap::<(String, String), Entry>::new();
+    for entry in entries(text) {
+        let identity = norm(&entry.section, &entry.key);
+        if let Some(previous) = values.get_mut(&identity) {
+            previous.value = merge_value(
+                &entry.section,
+                &entry.key,
+                &previous.value,
+                &entry.value,
+            )?;
+        } else {
+            values.insert(identity, entry);
+        }
+    }
+    let mut result = text.to_string();
+    for entry in values.values() {
+        set_entry(&mut result, &entry.section, &entry.key, &entry.value);
+    }
+    Ok(result)
 }
 
 fn get_entry(text: &str, section: &str, key: &str) -> Option<String> {
@@ -170,8 +197,11 @@ fn get_entry(text: &str, section: &str, key: &str) -> Option<String> {
 }
 
 fn merge_document(hoyo: &str, dlss: &str) -> Result<String, IniConflict> {
-    let mut result = hoyo.to_string();
-    for entry in entries(dlss) {
+    let mut result = normalize_document(hoyo)?;
+    for entry in entries(&normalize_document(dlss)?) {
+        if norm(&entry.section, &entry.key) == norm("ADDON", "AddonPath") {
+            continue;
+        }
         let next = match get_entry(&result, &entry.section, &entry.key) {
             Some(old) => merge_value(&entry.section, &entry.key, &old, &entry.value)?,
             None => entry.value,
@@ -198,12 +228,11 @@ pub fn compose(
         ".\\ReShadePreset.ini",
     );
     let mut game_ini = merge_document(&hoyo_ini, dlss_ini)?;
-    let addon_paths = get_entry(&game_ini, "ADDON", "AddonPath").unwrap_or_default();
     set_entry(
         &mut game_ini,
         "ADDON",
         "AddonPath",
-        &list_union(&addon_paths, ".\\"),
+        &format!(".\\{MANAGED_ADDON_DIR}"),
     );
     if let Some(disabled) = get_entry(&game_ini, "ADDON", "DisabledAddons") {
         let retained = disabled
@@ -238,7 +267,7 @@ mod tests {
             "Techniques=HoYo@hoyo.fx\n", "Techniques=DLSS5_Feed@DLSS5_Feed.fx\n",
             &["renodx-dlss5.addon64".into()],
         ).unwrap();
-        assert!(result.game_ini.contains("AddonPath=C:\\HoYo\\Addons\\,.\\"));
+        assert!(result.game_ini.contains("AddonPath=.\\_SSMT_Graphics_Addons"));
         assert!(result
             .game_ini
             .contains("EffectSearchPaths=C:\\HoYo\\Shaders\\**,.\\reshade-shaders\\Shaders\\**"));
@@ -274,5 +303,36 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.key, "PreprocessorDefinitions");
+    }
+
+    #[test]
+    fn collapses_duplicate_addon_path_before_host_merge() {
+        let result = compose(
+            "[ADDON]\nAddonPath=C:\\HoYo\\Addons\\\nDisabledAddons=other\nAddonPath=C:\\HoYo\\Addons\\\n",
+            "[ADDON]\nAddonPath=.\\\n",
+            "",
+            "",
+            &[],
+        )
+        .unwrap();
+        let addon_lines = result
+            .game_ini
+            .lines()
+            .filter(|line| line.starts_with("AddonPath="))
+            .collect::<Vec<_>>();
+        assert_eq!(addon_lines, ["AddonPath=.\\_SSMT_Graphics_Addons"]);
+    }
+
+    #[test]
+    fn rejects_conflicting_duplicate_scalar_keys() {
+        let error = compose(
+            "[DEPTH]\nUseAspectRatioHeuristics=1\nUseAspectRatioHeuristics=0\n",
+            "",
+            "",
+            "",
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(error.key, "UseAspectRatioHeuristics");
     }
 }

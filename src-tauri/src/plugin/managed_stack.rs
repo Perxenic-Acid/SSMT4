@@ -237,7 +237,27 @@ fn check_hoyoshade_adapter(injector: &Path) -> Result<(), String> {
                 .unwrap_or_else(|| "unknown missing resource".to_string())
         ));
     }
+    let reshade_version = status
+        .get("reshadeVersion")
+        .and_then(Value::as_str)
+        .ok_or("HoYoShade adapter did not report its ReShade version")?;
+    if !supports_dlss5_addon_api(reshade_version) {
+        return Err(format!(
+            "HoYoShade ReShade {reshade_version} is too old for DLSS5 Add-ons; 6.8.0 or newer is required"
+        ));
+    }
     Ok(())
+}
+
+fn supports_dlss5_addon_api(version: &str) -> bool {
+    let parts = version
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>();
+    match parts {
+        Ok(parts) if parts.len() == 4 => (parts[0], parts[1], parts[2]) >= (6, 8, 0),
+        _ => false,
+    }
 }
 
 fn node_program() -> PathBuf {
@@ -534,7 +554,35 @@ pub fn prepare(
         host.map_or(&[][..], |host| host.config.addon_names.as_slice()),
     )
     .map_err(|error| error.to_string())?;
-    managed_reshade_journal::stage(game_executable, &composed.game_ini, &composed.preset_ini)?;
+    let mut addon_sources = Vec::new();
+    let hoyo_addons = hoyo.join("reshade-shaders/Addons");
+    let addon_dir_meta = fs::symlink_metadata(&hoyo_addons).map_err(|error| error.to_string())?;
+    if !addon_dir_meta.is_dir() || addon_dir_meta.file_type().is_symlink() {
+        return Err(format!("invalid HoYoShade add-on directory: {}", hoyo_addons.display()));
+    }
+    for entry in fs::read_dir(&hoyo_addons).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.is_file() {
+            addon_sources.push(path);
+        }
+    }
+    if let Some(host) = host {
+        let game_root = game_executable.parent().ok_or("game executable has no parent")?;
+        for name in &host.config.addon_names {
+            if Path::new(name).file_name().and_then(|part| part.to_str()) != Some(name)
+                || name.contains(['/', '\\', ':'])
+            {
+                return Err(format!("invalid DLSS5 add-on name: {name}"));
+            }
+            addon_sources.push(game_root.join(name));
+        }
+    }
+    managed_reshade_journal::stage(
+        game_executable,
+        &composed.game_ini,
+        &composed.preset_ini,
+        &addon_sources,
+    )?;
     if let Err(error) = watch_game_exit(game_executable.to_path_buf()) {
         let _ = managed_reshade_journal::restore(game_executable);
         return Err(error);
@@ -712,5 +760,12 @@ mod tests {
             &["managedConfig", "preservesGameAddons"]
         )
         .is_err());
+    }
+
+    #[test]
+    fn requires_reshade_version_with_addon_api_20() {
+        assert!(!supports_dlss5_addon_api("6.5.1.2008"));
+        assert!(supports_dlss5_addon_api("6.8.0.2155"));
+        assert!(!supports_dlss5_addon_api("unknown"));
     }
 }
