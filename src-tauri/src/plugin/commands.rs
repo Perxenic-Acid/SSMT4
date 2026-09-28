@@ -1,4 +1,4 @@
-use super::dlss5::{inspect_game_executable, Dlss5Route, Dlss5State};
+use super::dlss5::{inspect_game_executable, Dlss5Route, Dlss5State, DLSS5_PLUGIN_ID};
 use super::graphics_stack::{
     CompatibilityLevel, GameGraphicsState, GraphicsLaunchContributions, GraphicsStackResolution,
     GraphicsStackResolver,
@@ -7,7 +7,7 @@ use super::hoyoshade::{HoYoShadeBridge, HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGI
 use super::logging::PluginLogWriter;
 use super::managed_stack::{self, Dlss5RouteScan, ManagedStackStatus};
 use super::package_installer::install_ssmtpkg;
-use super::registry::{ExternalDependencyState, PluginRegistry};
+use super::registry::{ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
 use super::settings::PluginSettingsStore;
 use super::PluginManifest;
 use serde::{Deserialize, Serialize};
@@ -158,8 +158,17 @@ fn inspect_graphics_for_executable(
         })
         .transpose()?
         .unwrap_or(false);
+    // 只有两个集成都已安装并在插件页启用，才读取 DLSS5 的游戏文件。
+    // 普通启动以及单独启用 HoYoShade 时不应受外部安装记录影响。
+    let dlss5_enabled = registry
+        .find(DLSS5_PLUGIN_ID)
+        .is_some_and(|plugin| plugin.enabled);
     let state = GameGraphicsState {
-        dlss5: inspect_game_executable(game_executable),
+        dlss5: if hoyoshade_requested && dlss5_enabled {
+            inspect_game_executable(game_executable)
+        } else {
+            Dlss5State::NotManaged
+        },
     };
     let resolution = GraphicsStackResolver::resolve(
         &state,
@@ -174,11 +183,48 @@ fn inspect_graphics_for_executable(
     })
 }
 
+fn installed_plugin_registry_at(plugins_root: PathBuf) -> Result<Option<PluginRegistry>, String> {
+    // The plugin page may have created a state file without installing a package.
+    // In that case ordinary launch must not parse plugin state or create files.
+    let Ok(ids) = fs::read_dir(&plugins_root) else {
+        return Ok(None);
+    };
+    for id in ids.flatten() {
+        let Ok(versions) = fs::read_dir(id.path()) else {
+            continue;
+        };
+        if versions
+            .flatten()
+            .any(|version| version.path().join(MANIFEST_FILE_NAME).is_file())
+        {
+            return PluginRegistry::new(plugins_root)
+                .map(Some)
+                .map_err(|error| error.to_string());
+        }
+    }
+    Ok(None)
+}
+
+fn installed_plugin_registry() -> Result<Option<PluginRegistry>, String> {
+    installed_plugin_registry_at(crate::config::path_manager::PathManager::ssmt_plugins_folder())
+}
+
 #[tauri::command]
 pub fn inspect_graphics_launch(
     game_executable: String,
 ) -> Result<GraphicsLaunchInspection, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let Some(registry) = installed_plugin_registry()? else {
+        return Ok(GraphicsLaunchInspection {
+            hoyoshade_requested: false,
+            dlss5: Dlss5GameStateSnapshot::from(&Dlss5State::NotManaged),
+            resolution: GraphicsStackResolver::resolve(
+                &GameGraphicsState {
+                    dlss5: Dlss5State::NotManaged,
+                },
+                GraphicsLaunchContributions::default(),
+            ),
+        });
+    };
     inspect_graphics_for_executable(&registry, &PathBuf::from(game_executable))
 }
 
@@ -365,14 +411,15 @@ fn capabilities_for_permissions(permissions: &[super::PluginPermission]) -> Vec<
 
 #[tauri::command]
 pub fn plugin_registry_snapshot() -> Result<Vec<InstalledPluginSnapshot>, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
-    Ok(snapshot(&registry))
+    installed_plugin_registry().map(|registry| registry.as_ref().map(snapshot).unwrap_or_default())
 }
 
 #[tauri::command]
 pub fn plugin_ui_routes() -> Result<Vec<PluginUiRouteSnapshot>, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
-    let routes = ui_routes(&registry);
+    let routes = installed_plugin_registry()?
+        .as_ref()
+        .map(ui_routes)
+        .unwrap_or_default();
     let mut seen = HashSet::new();
     for route in &routes {
         if !seen.insert(route.route.as_str()) {
@@ -432,7 +479,9 @@ pub fn prepare_hoyoshade_launch(
     game_executable: String,
     graphics_decision: Option<GraphicsLaunchDecision>,
 ) -> Result<Option<PluginLaunchProgram>, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let Some(registry) = installed_plugin_registry()? else {
+        return Ok(None);
+    };
     let game_executable = PathBuf::from(game_executable);
     let inspection = inspect_graphics_for_executable(&registry, &game_executable)?;
     if !should_launch_hoyoshade(&inspection, graphics_decision)? {
@@ -465,6 +514,12 @@ pub fn prepare_hoyoshade_launch(
         .map_err(|error| error.to_string())?;
     let managed = graphics_decision == Some(GraphicsLaunchDecision::PrepareManagedStack);
     if managed {
+        if !registry
+            .find(DLSS5_PLUGIN_ID)
+            .is_some_and(|plugin| plugin.enabled)
+        {
+            return Err("DLSS5 integration plugin is not enabled".to_string());
+        }
         match inspect_game_executable(&game_executable) {
             Dlss5State::Managed(state) => {
                 managed_stack::prepare(&registry, &game_executable, &state)?;
@@ -494,7 +549,9 @@ pub fn prepare_hoyoshade_launch(
 
 #[tauri::command]
 pub fn prepare_plugin_host_config(runtime_directory: String) -> Result<Option<String>, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let Some(registry) = installed_plugin_registry()? else {
+        return Ok(None);
+    };
     let config = registry.generate_plugin_host_config();
 
     if config.plugins.is_empty() {
@@ -589,21 +646,24 @@ pub fn set_plugin_setting(
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities_for_permissions, lifecycle_status, should_launch_hoyoshade,
-        Dlss5GameStateSnapshot, GraphicsLaunchDecision, GraphicsLaunchInspection,
-        PluginLifecycleStatus,
+        capabilities_for_permissions, inspect_graphics_for_executable, installed_plugin_registry_at,
+        lifecycle_status,
+        should_launch_hoyoshade, Dlss5GameStateSnapshot, GraphicsLaunchDecision,
+        GraphicsLaunchInspection, PluginLifecycleStatus,
     };
     use crate::plugin::graphics_stack::{
         CompatibilityLevel, GraphicsCompatibilityIssue, GraphicsStackResolution,
     };
     use crate::plugin::registry::{
-        ExternalDependencyState, ExternalDependencyStatus, InstalledPlugin,
+        ExternalDependencyState, ExternalDependencyStatus, InstalledPlugin, PluginRegistry,
     };
     use crate::plugin::{
         PluginCompatibility, PluginContributions, PluginManifest, PluginPermission,
     };
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn maps_declared_permissions_to_scoped_capabilities() {
@@ -617,6 +677,52 @@ mod tests {
             capabilities,
             vec!["filesystem.read", "launch.start", "plugin.settings"]
         );
+    }
+
+    #[test]
+    fn no_downloaded_plugins_ignore_even_a_broken_dlss5_install() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-no-plugin-graphics-{}-{nonce}",
+            std::process::id()
+        ));
+        let game = root.join("game");
+        fs::create_dir_all(game.join("_DLSS5_Backup")).unwrap();
+        let executable = game.join("YuanShen.exe");
+        fs::write(&executable, b"fixture").unwrap();
+        fs::write(game.join("_DLSS5_Backup/manifest.json"), b"invalid JSON").unwrap();
+
+        let registry = PluginRegistry::new(root.join("plugins")).unwrap();
+        let inspection = inspect_graphics_for_executable(&registry, &executable).unwrap();
+        assert!(!inspection.hoyoshade_requested);
+        assert_eq!(inspection.dlss5.state, "not_managed");
+        assert_eq!(inspection.resolution.level, CompatibilityLevel::Compatible);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_plugin_install_does_not_read_stale_state_or_create_registry() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-empty-plugin-launch-{}-{nonce}",
+            std::process::id()
+        ));
+        let plugins = root.join("plugins");
+        assert!(installed_plugin_registry_at(plugins.clone()).unwrap().is_none());
+        assert!(!plugins.exists());
+
+        fs::create_dir_all(&plugins).unwrap();
+        fs::write(plugins.join("registry-state.json"), b"invalid JSON").unwrap();
+        assert!(installed_plugin_registry_at(plugins.clone()).unwrap().is_none());
+        assert_eq!(fs::read(plugins.join("registry-state.json")).unwrap(), b"invalid JSON");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

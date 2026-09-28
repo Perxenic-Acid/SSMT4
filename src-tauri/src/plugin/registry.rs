@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MANIFEST_FILE_NAME: &str = "ssmt-plugin.json";
+pub(crate) const MANIFEST_FILE_NAME: &str = "ssmt-plugin.json";
 const STATE_FILE_NAME: &str = "registry-state.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

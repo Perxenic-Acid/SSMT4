@@ -117,6 +117,9 @@ fn dependency_path(
     let plugin = registry
         .find(plugin_id)
         .ok_or_else(|| format!("plugin not installed: {plugin_id}"))?;
+    if !plugin.enabled {
+        return Err(format!("plugin is disabled: {plugin_id}"));
+    }
     let state = plugin
         .external_dependencies
         .get(dependency_id)

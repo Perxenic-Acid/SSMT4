@@ -609,6 +609,10 @@ export class LaunchGame {
                 return;
             }
 
+            if (!pureDirectTarget) {
+                await MigotoManager.patchD3dxForLaunch(gameName);
+            }
+
             const preLaunchPrograms = launchTargetProgram
                 ? await this.buildConfiguredPrograms(
                       config.preLaunchPrograms,
@@ -640,6 +644,9 @@ export class LaunchGame {
                       runtimeDirectory: migotoDir,
                   })
                 : null;
+            if (effectivePluginHostConfig) {
+                await this.ensureSSMTPluginHostFile(migotoDir);
+            }
             if (hoyoshade && graphicsDecision === "prepare_managed_stack") {
                 managedStagedTarget = targetExe;
             }
@@ -655,11 +662,10 @@ export class LaunchGame {
                 });
             }
 
-            // Runtime 明确要求 ReShade 与 3DMigoto 同时加载时使用 150ms 延迟。
-            // 仅在本次启动确实包含 HoYoShade 时覆盖，其他启动路径保留原配置。
-            if (!pureDirectTarget) {
+            // 仅在本次启动确实包含 HoYoShade 时覆盖用户的原始延迟配置。
+            if (hoyoshade) {
                 await MigotoManager.patchD3dxForLaunch(gameName, {
-                    dllInitializationDelay: hoyoshade ? 150 : undefined,
+                    dllInitializationDelay: 150,
                 });
             }
 
@@ -769,18 +775,6 @@ export class LaunchGame {
 
         await copyFile(runSourcePath, runTargetPath);
 
-        const pluginHostSourcePath = await join(
-            resourcesDir,
-            "SSMT-PluginHost.dll",
-        );
-        const pluginHostTargetPath = await join(
-            migotoDir,
-            "SSMT-PluginHost.dll",
-        );
-        if (await exists(pluginHostSourcePath)) {
-            await copyFile(pluginHostSourcePath, pluginHostTargetPath);
-        }
-
         // SSMT-Player-Tweaks.dll is only meaningful for GIMI (Genshin).
         // For other presets do not require/copy it; if a stale copy exists in
         // this game directory, remove it so Run.exe does not inject it.
@@ -818,6 +812,15 @@ export class LaunchGame {
         }
 
         await copyFile(dllSourcePath, dllTargetPath);
+    }
+
+    private static async ensureSSMTPluginHostFile(migotoDir: string): Promise<void> {
+        const resourcesDir = await GlobalConfig.SSMTResourcesFolder();
+        const source = await join(resourcesDir, "SSMT-PluginHost.dll");
+        if (!(await exists(source))) {
+            throw new Error(`Missing optional runtime plugin host: ${source}`);
+        }
+        await copyFile(source, await join(migotoDir, "SSMT-PluginHost.dll"));
     }
 
     private static async prepareGameEnvironment(
