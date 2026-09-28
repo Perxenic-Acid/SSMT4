@@ -426,13 +426,20 @@ export class LaunchGame {
             return null;
         }
 
-        const graphicsDecision = launchTargetProgram && onGraphicsPreflight
+        const pureDirectLaunch = pureMode && launchTargetProgram;
+        const graphicsDecision = !pureDirectLaunch && launchTargetProgram && onGraphicsPreflight
             ? await onGraphicsPreflight(targetExe)
             : "continue_this_launch";
         if (!graphicsDecision) return null;
 
         if (configChanged) {
             await ResourceManager.saveGameConfig(gameName, migotoCfg);
+        }
+
+        // A pure launch must not depend on, prepare, or mutate the 3DMigoto
+        // runtime. It is intentionally just the configured game executable.
+        if (pureDirectLaunch) {
+            return { migotoDir: "", config: migotoCfg, targetExe, graphicsDecision };
         }
 
         let configuredMigotoDir = (migotoCfg.installDir || "").trim();
@@ -525,10 +532,15 @@ export class LaunchGame {
             const pureMode =
                 appSettings.gameLaunchMode === "always-pure" ||
                 (appSettings.gameLaunchMode === "ctrl-pure" && ctrlPressed);
-            const libsReady = await this.ensureXXMILibsReady(
-                gameName,
-                onNeedsDllUpdate,
-            );
+            const pureDirectLaunch =
+                pureMode &&
+                (await ResourceManager.loadGameConfig(gameName))?.launchTargetProgram !== false;
+            const libsReady = pureDirectLaunch
+                ? true
+                : await this.ensureXXMILibsReady(
+                      gameName,
+                      onNeedsDllUpdate,
+                  );
             if (!libsReady) return;
 
             const preflight = await this.prepareLaunch(
@@ -542,11 +554,15 @@ export class LaunchGame {
             if (!preflight) return;
 
             const { migotoDir, config, targetExe, graphicsDecision } = preflight;
-            await this.ensureSSMTRuntimeFiles(migotoDir, config.gamePreset);
             const launchTargetProgram = config.launchTargetProgram !== false;
+            const pureDirectTarget = pureMode && launchTargetProgram;
+            if (!pureDirectTarget) {
+                await this.ensureSSMTRuntimeFiles(migotoDir, config.gamePreset);
+            }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
             const useShell = launchTargetProgram && (config.useShell || false);
+            const useRunInjector = !pureMode || !launchTargetProgram;
 
             if (launchTargetProgram && useShell && !launcherExePath) {
                 ElMessage.warning(
@@ -570,7 +586,7 @@ export class LaunchGame {
             }
 
             // Check 3Dmigoto Integrity
-            const safe = await MigotoManager.check3DmigotoIntegrity(gameName);
+            const safe = pureDirectTarget || await MigotoManager.check3DmigotoIntegrity(gameName);
             if (!safe) {
                 try {
                     await ElMessageBox.confirm(
@@ -593,8 +609,6 @@ export class LaunchGame {
                 return;
             }
 
-            await MigotoManager.patchD3dxForLaunch(gameName);
-
             const preLaunchPrograms = launchTargetProgram
                 ? await this.buildConfiguredPrograms(
                       config.preLaunchPrograms,
@@ -614,10 +628,16 @@ export class LaunchGame {
             // Construct programs list
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
 
-            const hoyoshade = launchTargetProgram && targetExe
+            const hoyoshade = !pureDirectTarget && launchTargetProgram && targetExe
                 ? await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
                       gameExecutable: targetExe,
                       graphicsDecision,
+                  })
+                : null;
+            // Runtime plugins are injected by Run.exe, including configured-target mode.
+            const effectivePluginHostConfig = useRunInjector
+                ? await invoke<string | null>("prepare_plugin_host_config", {
+                      runtimeDirectory: migotoDir,
                   })
                 : null;
             if (hoyoshade && graphicsDecision === "prepare_managed_stack") {
@@ -635,11 +655,26 @@ export class LaunchGame {
                 });
             }
 
-            if (!pureMode || !launchTargetProgram) {
+            // Runtime 明确要求 ReShade 与 3DMigoto 同时加载时使用 150ms 延迟。
+            // 仅在本次启动确实包含 HoYoShade 时覆盖，其他启动路径保留原配置。
+            if (!pureDirectTarget) {
+                await MigotoManager.patchD3dxForLaunch(gameName, {
+                    dllInitializationDelay: hoyoshade ? 150 : undefined,
+                });
+            }
+
+            if (useRunInjector) {
                 // 1. Default flow launches Run.exe first.
                 programs.push({
                     path: await join(migotoDir, "Run.exe"),
                     workDir: migotoDir,
+                    args: effectivePluginHostConfig
+                        ? `--plugin-host-config "${effectivePluginHostConfig.replace(/"/g, '\\"')}"`
+                        : undefined,
+                    // Run.exe 带有 requireAdministrator manifest。SSMT 未提权时，
+                    // Start-Process 必须显式使用 RunAs，否则 Windows 会返回
+                    // ERROR_ELEVATION_REQUIRED，HoYoShade 也会一直等待不存在的进程。
+                    runAsAdministrator: true,
                     waitForProcessName: useShell ? "Run.exe" : undefined,
                     waitTimeoutSecs: useShell ? 30 : undefined,
                 });
@@ -733,6 +768,18 @@ export class LaunchGame {
         }
 
         await copyFile(runSourcePath, runTargetPath);
+
+        const pluginHostSourcePath = await join(
+            resourcesDir,
+            "SSMT-PluginHost.dll",
+        );
+        const pluginHostTargetPath = await join(
+            migotoDir,
+            "SSMT-PluginHost.dll",
+        );
+        if (await exists(pluginHostSourcePath)) {
+            await copyFile(pluginHostSourcePath, pluginHostTargetPath);
+        }
 
         // SSMT-Player-Tweaks.dll is only meaningful for GIMI (Genshin).
         // For other presets do not require/copy it; if a stale copy exists in

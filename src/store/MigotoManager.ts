@@ -222,7 +222,10 @@ export class MigotoManager {
    * 将当前配置写入d3dx.ini
    * @param gameName 
    */
-  static async patchD3dxForLaunch(gameName: string): Promise<void> {
+  static async patchD3dxForLaunch(
+    gameName: string,
+    options: { dllInitializationDelay?: number } = {},
+  ): Promise<void> {
     const gameConfig = await ResourceManager.loadGameConfig(gameName)
     const cfg = gameConfig || {}
     const migotoDir = await this.resolveMigotoDir(gameName, cfg)
@@ -277,11 +280,19 @@ export class MigotoManager {
       )
     }
 
-    if (typeof cfg.delay === 'number') {
-      lines = D3dxIniManager.setIniValue(lines, 'System', 'dll_initialization_delay', String(cfg.delay))
+    const dllInitializationDelay = typeof options.dllInitializationDelay === 'number'
+      ? options.dllInitializationDelay
+      : cfg.delay
+    if (typeof dllInitializationDelay === 'number') {
+      lines = D3dxIniManager.setIniValue(
+        lines,
+        'System',
+        'dll_initialization_delay',
+        String(dllInitializationDelay),
+      )
     }
 
-  lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'hunting', normalizeHuntingMode(cfg.huntingMode))
+    lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'hunting', normalizeHuntingMode(cfg.huntingMode))
     lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'marking_actions', 'clipboard asm hlsl')
 
     if (typeof cfg.autoExitSeconds === 'number') {

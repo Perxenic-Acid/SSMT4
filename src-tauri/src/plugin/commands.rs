@@ -13,6 +13,7 @@ use super::PluginManifest;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize)]
@@ -463,24 +464,25 @@ pub fn prepare_hoyoshade_launch(
         .validate_external_directory(dependency_path)
         .map_err(|error| error.to_string())?;
     let managed = graphics_decision == Some(GraphicsLaunchDecision::PrepareManagedStack);
-    let wait_for_local_dxgi = if managed {
+    if managed {
         match inspect_game_executable(&game_executable) {
             Dlss5State::Managed(state) => {
                 managed_stack::prepare(&registry, &game_executable, &state)?;
-                matches!(state.route, super::dlss5::Dlss5Route::OptiScaler)
+                // 提权后的 Unity 进程不一定能枚举 OptiScaler 代理，且崩铁可能
+                // 通过 D3D12 路径加载它。等待精确的 `dxgi.dll` 模块会把本来
+                // 可用的 HoYoShade 注入变成超时；托管注入器已经会等待目标进程，
+                // 不需要这个不稳定的模块门槛。
             }
             Dlss5State::Broken { reason, .. } => return Err(reason),
             Dlss5State::NotManaged => {
                 return Err("DLSS5 is not installed for this game".to_string())
             }
         }
-    } else { false };
+    }
     let injector = dependency_path.join("inject.exe");
     Ok(Some(PluginLaunchProgram {
         path: injector.to_string_lossy().into_owned(),
-        args: if wait_for_local_dxgi {
-            format!("--ssmt-managed-config-after-dxgi {process_name}")
-        } else if managed {
+        args: if managed {
             format!("--ssmt-managed-config {process_name}")
         } else {
             process_name.to_string()
@@ -488,6 +490,36 @@ pub fn prepare_hoyoshade_launch(
         work_dir: dependency_path.to_string_lossy().into_owned(),
         run_as_administrator: true,
     }))
+}
+
+#[tauri::command]
+pub fn prepare_plugin_host_config(runtime_directory: String) -> Result<Option<String>, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let config = registry.generate_plugin_host_config();
+
+    if config.plugins.is_empty() {
+        return Ok(None);
+    }
+
+    let runtime_directory = PathBuf::from(runtime_directory);
+    if !runtime_directory.is_dir() {
+        return Err(format!(
+            "3DMigoto runtime directory does not exist: {}",
+            runtime_directory.display()
+        ));
+    }
+
+    let config_path = runtime_directory.join("SSMT-PluginHost.json");
+    let content = serde_json::to_vec_pretty(&config)
+        .map_err(|error| format!("failed to serialize PluginHost config: {error}"))?;
+    fs::write(&config_path, content).map_err(|error| {
+        format!(
+            "failed to write PluginHost config {}: {error}",
+            config_path.display()
+        )
+    })?;
+
+    Ok(Some(config_path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
