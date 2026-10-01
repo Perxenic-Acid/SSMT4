@@ -587,4 +587,30 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn runtime_config_follows_any_enabled_plugin_subset() {
+        let root = temp_root("combinations");
+        let ids = ["ssmt.alpha", "ssmt.beta", "ssmt.gamma"];
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        for id in ids {
+            let source = fixture_package(&root.join(id), id, "1.0.0");
+            registry.install_directory_package(&source).unwrap();
+        }
+
+        for mask in 0..(1 << ids.len()) {
+            for (index, id) in ids.iter().enumerate() {
+                registry.set_enabled(id, mask & (1 << index) != 0).unwrap();
+            }
+            let config = registry.generate_plugin_host_config();
+            let expected = ids
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, id)| format!("{id}/1.0.0/native/example.dll"))
+                .collect::<Vec<_>>();
+            assert_eq!(config.plugins, expected, "enabled subset: {mask:03b}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

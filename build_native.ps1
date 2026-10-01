@@ -7,7 +7,9 @@ param(
 
     [switch]$DeployToTestRuntime,
 
-    [string]$TestRuntimeDir
+    [string]$TestRuntimeDir,
+
+    [string]$TestGamePreset = 'GIMI'
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +21,7 @@ $DistDir = Join-Path $NativeDir "dist\$Configuration"
 $ResourceDir = Join-Path $RepoRoot "src-tauri\resources"
 if ($DeployToTestRuntime) {
     . (Join-Path $RepoRoot 'runtime\TestEnvironment.ps1')
-    $TestRuntimeDir = Resolve-TestRuntimeDirectory $TestRuntimeDir
+    $TestRuntimeDir = Resolve-TestRuntimeDirectory -TestRuntimeDir $TestRuntimeDir -GamePreset $TestGamePreset
 }
 
 $CargoProfile = if ($Configuration -eq "Release") {
