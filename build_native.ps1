@@ -5,7 +5,9 @@ param(
 
     [switch]$BuildTestPlugin,
 
-    [switch]$DeployToTestRuntime
+    [switch]$DeployToTestRuntime,
+
+    [string]$TestRuntimeDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,9 +17,10 @@ $NativeDir = Join-Path $RepoRoot "native"
 $BuildDir = Join-Path $NativeDir "build"
 $DistDir = Join-Path $NativeDir "dist\$Configuration"
 $ResourceDir = Join-Path $RepoRoot "src-tauri\resources"
-$TestRuntimeDir = Join-Path `
-    $env:USERPROFILE `
-    "Desktop\SSMT3\SSMTDefaultCacheFolder\3Dmigoto\GIMI"
+if ($DeployToTestRuntime) {
+    . (Join-Path $RepoRoot 'runtime\TestEnvironment.ps1')
+    $TestRuntimeDir = Resolve-TestRuntimeDirectory $TestRuntimeDir
+}
 
 $CargoProfile = if ($Configuration -eq "Release") {
     "release"
