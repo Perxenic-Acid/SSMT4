@@ -75,3 +75,5 @@ BlenderPlugin/
 
 .tmp-*/
 .tmp-*
+docs/graphics-stack-rhi-integration.md
+docs/SSMT4-鸣潮修复-20261002.zip
