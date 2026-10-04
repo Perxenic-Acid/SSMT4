@@ -2,6 +2,7 @@ pub mod extract_services;
 
 pub mod ailimit;
 pub mod apmi2;
+pub mod cami;
 pub mod efmi3;
 pub mod gf2;
 pub mod gimi;

@@ -27,6 +27,10 @@
     {
       "GameName": "EFMI",
       "Show": true
+    },
+    {
+      "GameName": "CAMI",
+      "Show": true
     }
   ]
 }
