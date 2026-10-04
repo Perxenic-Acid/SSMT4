@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { AsyncComponentLoader, Component } from 'vue'
+import { AppStateManager } from '../store/AppStateManager'
 
 export interface PluginUiRouteSnapshot {
   pluginId: string
@@ -25,7 +26,9 @@ export const registerFirstPartyPluginComponent = (
 }
 
 export const loadPluginUiRoutes = async (): Promise<PluginUiRouteSnapshot[]> => {
-  const routes = await invoke<PluginUiRouteSnapshot[]>('plugin_ui_routes')
+  const routes = await invoke<PluginUiRouteSnapshot[]>('plugin_ui_routes', {
+    gameName: AppStateManager.appSettings.CurrentGameName,
+  })
   return routes.filter((route) => firstPartyComponents.has(`${route.pluginId}:${route.pageId}`))
 }
 

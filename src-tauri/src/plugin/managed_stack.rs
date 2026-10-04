@@ -117,7 +117,11 @@ fn dependency_path(
     let plugin = registry
         .find(plugin_id)
         .ok_or_else(|| format!("plugin not installed: {plugin_id}"))?;
-    if !plugin.enabled {
+    // DLSS5 使用 HoYoShade 的注入器作为托管 ReShade 宿主；这不等于启用
+    // HoYoShade 的效果贡献。仅在本游戏启用 DLSS5 时允许读取该已安装宿主。
+    let used_as_dlss5_host = plugin_id == HOYOSHADE_PLUGIN_ID
+        && registry.find(DLSS5_PLUGIN_ID).is_some_and(|dlss5| dlss5.enabled);
+    if !plugin.enabled && !used_as_dlss5_host {
         return Err(format!("plugin is disabled: {plugin_id}"));
     }
     let state = plugin
@@ -534,10 +538,27 @@ fn read_config(path: &Path, required: bool) -> Result<String, String> {
     fs::read_to_string(path).map_err(|error| format!("cannot read {}: {error}", path.display()))
 }
 
+fn missing_managed_assets(state: &Dlss5ManagedState) -> Result<Vec<PathBuf>, String> {
+    let game_dir = state.manifest_path.parent().and_then(Path::parent)
+        .ok_or("invalid DLSS5 manifest location")?;
+    let mut missing = Vec::new();
+    for relative in state.added_files.iter().chain(&state.replaced_files) {
+        let path = game_dir.join(relative);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return Err(format!("unsafe DLSS5 managed file: {}", path.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing.push(path),
+            Err(error) => return Err(format!("cannot inspect DLSS5 managed file {}: {error}", path.display())),
+        }
+    }
+    Ok(missing)
+}
+
 pub fn prepare(
     registry: &PluginRegistry,
     game_executable: &Path,
     state: &Dlss5ManagedState,
+    include_hoyoshade_effects: bool,
 ) -> Result<(), String> {
     inspect(registry, game_executable, state)?;
     let mut system = System::new();
@@ -545,9 +566,35 @@ pub fn prepare(
     if is_target_running(&system, game_executable) {
         return Err("game is already running; managed configuration cannot be staged".to_string());
     }
+    let missing = missing_managed_assets(state)?;
+    let repaired_state = if missing.is_empty() {
+        None
+    } else {
+        let names = missing.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ");
+        let route = route_name(state)?;
+        install_route(registry, game_executable, route, "auto", false)
+            .map_err(|error| format!("DLSS5 files are missing ({names}); automatic repair failed: {error}"))?;
+        let repaired = match inspect_game_executable(game_executable) {
+            Dlss5State::Managed(repaired) if route_name(&repaired)? == route => repaired,
+            _ => return Err("DLSS5 repair did not leave a valid managed installation".to_string()),
+        };
+        let remaining = missing_managed_assets(&repaired)?;
+        if !remaining.is_empty() {
+            return Err(format!("DLSS5 repair left missing files: {}",
+                remaining.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ")));
+        }
+        inspect(registry, game_executable, &repaired)?;
+        eprintln!("[GraphicsStack] Repaired missing DLSS5 files for {}: {names}", game_executable.display());
+        Some(repaired)
+    };
+    let state = repaired_state.as_ref().unwrap_or(state);
     let hoyo = dependency_path(registry, HOYOSHADE_PLUGIN_ID, HOYOSHADE_DEPENDENCY_ID)?;
     let base_ini = read_config(&hoyo.join("ReShade.ini"), true)?;
-    let base_preset = read_config(&hoyo.join("Presets/Mod OFF.ini"), false)?;
+    let base_preset = if include_hoyoshade_effects {
+        read_config(&hoyo.join("Presets/Mod OFF.ini"), false)?
+    } else {
+        String::new()
+    };
     let host = state.external_host.as_ref();
     let composed = managed_reshade::compose(
         &base_ini,
@@ -563,10 +610,12 @@ pub fn prepare(
     if !addon_dir_meta.is_dir() || addon_dir_meta.file_type().is_symlink() {
         return Err(format!("invalid HoYoShade add-on directory: {}", hoyo_addons.display()));
     }
-    for entry in fs::read_dir(&hoyo_addons).map_err(|error| error.to_string())? {
-        let path = entry.map_err(|error| error.to_string())?.path();
-        if path.is_file() {
-            addon_sources.push(path);
+    if include_hoyoshade_effects {
+        for entry in fs::read_dir(&hoyo_addons).map_err(|error| error.to_string())? {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            if path.is_file() {
+                addon_sources.push(path);
+            }
         }
     }
     if let Some(host) = host {
@@ -754,7 +803,31 @@ pub fn install_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::dlss5::Dlss5Route;
     use serde_json::json;
+
+    #[test]
+    fn detects_files_missing_from_managed_installation() {
+        let root = std::env::temp_dir().join(format!("ssmt-dlss5-missing-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(root.join("_DLSS5_Backup")).unwrap();
+        fs::write(root.join("present.addon64"), b"present").unwrap();
+        let state = Dlss5ManagedState {
+            route: Dlss5Route::Feeder,
+            manifest_path: root.join("_DLSS5_Backup/manifest.json"),
+            game_executable: PathBuf::from("Game.exe"),
+            game_api: "dxgi".into(),
+            uses_reshade: true,
+            uses_proxy: false,
+            added_files: vec![PathBuf::from("present.addon64"), PathBuf::from("missing.addon64")],
+            replaced_files: Vec::new(),
+            external_host: None,
+        };
+        assert_eq!(missing_managed_assets(&state).unwrap(), vec![root.join("missing.addon64")]);
+        fs::write(root.join("missing.addon64"), b"repaired").unwrap();
+        assert!(missing_managed_assets(&state).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn requires_matching_version_and_capabilities() {

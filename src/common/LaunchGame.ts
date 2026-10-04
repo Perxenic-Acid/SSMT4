@@ -17,6 +17,7 @@ export interface ProgramToLaunch {
     path: string;
     args?: string;
     workDir?: string;
+    postLaunchDelayMs?: number;
     waitForProcessName?: string;
     waitTimeoutSecs?: number;
     waitOnly?: boolean;
@@ -33,6 +34,7 @@ interface PluginLaunchProgram {
     args: string;
     workDir: string;
     runAsAdministrator: boolean;
+    postLaunchDelayMs: number;
 }
 
 type GraphicsLaunchDecision =
@@ -48,6 +50,8 @@ type GraphicsCompatibilityLevel =
 
 interface GraphicsLaunchInspection {
     hoyoshadeRequested: boolean;
+    dlss5Requested: boolean;
+    hostRequested: boolean;
     resolution: {
         level: GraphicsCompatibilityLevel;
         issues: Array<{ code: string; message: string }>;
@@ -64,14 +68,15 @@ type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
 
 export class LaunchGame {
     private static async preflightGraphicsLaunch(
+        gameName: string,
         targetExe: string,
     ): Promise<GraphicsLaunchDecision | null> {
         const inspection = await invoke<GraphicsLaunchInspection>(
             "inspect_graphics_launch",
-            { gameExecutable: targetExe },
+            { gameName, gameExecutable: targetExe },
         );
         const { level, issues } = inspection.resolution;
-        if (!inspection.hoyoshadeRequested || level === "compatible") {
+        if (!inspection.hostRequested || level === "compatible") {
             return "continue_this_launch";
         }
 
@@ -80,9 +85,14 @@ export class LaunchGame {
             let status: ManagedStackStatus;
             try {
                 status = await invoke<ManagedStackStatus>("inspect_managed_graphics_stack", {
+                    gameName,
                     gameExecutable: targetExe,
                 });
             } catch (error) {
+                if (inspection.dlss5Requested) {
+                    ElMessage.error(`${message}\n${String(error)}`);
+                    return null;
+                }
                 try {
                     await ElMessageBox.confirm(
                         `${message}\n\n${String(error)}`,
@@ -94,6 +104,26 @@ export class LaunchGame {
                         },
                     );
                     return "suppress_hoyoshade_this_launch";
+                } catch {
+                    return null;
+                }
+            }
+            if (inspection.dlss5Requested) {
+                try {
+                    await ElMessageBox.confirm(
+                        t("launchGame.messages.graphicsManagedReady", {
+                            route: status.route,
+                            routes: status.availableRoutes.join(", "),
+                            owner: status.swapperOwner,
+                        }),
+                        t("launchGame.messages.graphicsStackTitle"),
+                        {
+                            confirmButtonText: t("launchGame.messages.graphicsPrepareManaged"),
+                            cancelButtonText: t("launchGame.common.cancel"),
+                            type: "warning",
+                        },
+                    );
+                    return "prepare_managed_stack";
                 } catch {
                     return null;
                 }
@@ -549,7 +579,7 @@ export class LaunchGame {
                 pureMode,
                 onNeedsConfigureProcessPath,
                 onNeedsUpdate,
-                (targetExe) => this.preflightGraphicsLaunch(targetExe),
+                (targetExe) => this.preflightGraphicsLaunch(gameName, targetExe),
             );
             if (!preflight) return;
 
@@ -557,7 +587,7 @@ export class LaunchGame {
             const launchTargetProgram = config.launchTargetProgram !== false;
             const pureDirectTarget = pureMode && launchTargetProgram;
             if (!pureDirectTarget) {
-                await this.ensureSSMTRuntimeFiles(migotoDir, config.gamePreset);
+                await this.ensureSSMTRuntimeFiles(migotoDir, gameName, config.gamePreset);
             }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
@@ -634,6 +664,7 @@ export class LaunchGame {
 
             const hoyoshade = !pureDirectTarget && launchTargetProgram && targetExe
                 ? await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
+                      gameName,
                       gameExecutable: targetExe,
                       graphicsDecision,
                   })
@@ -641,6 +672,7 @@ export class LaunchGame {
             // Runtime plugins are injected by Run.exe, including configured-target mode.
             const effectivePluginHostConfig = useRunInjector
                 ? await invoke<string | null>("prepare_plugin_host_config", {
+                      gameName,
                       runtimeDirectory: migotoDir,
                   })
                 : null;
@@ -659,6 +691,7 @@ export class LaunchGame {
                     args: hoyoshade.args,
                     workDir: hoyoshade.workDir,
                     runAsAdministrator: hoyoshade.runAsAdministrator,
+                    postLaunchDelayMs: hoyoshade.postLaunchDelayMs,
                 });
             }
 
@@ -761,6 +794,7 @@ export class LaunchGame {
 
     private static async ensureSSMTRuntimeFiles(
         migotoDir: string,
+        gameName: string,
         gamePreset?: string,
     ): Promise<void> {
         const resourcesDir = await GlobalConfig.SSMTResourcesFolder();
@@ -775,9 +809,8 @@ export class LaunchGame {
 
         await copyFile(runSourcePath, runTargetPath);
 
-        // SSMT-Player-Tweaks.dll is only meaningful for GIMI (Genshin).
-        // For other presets do not require/copy it; if a stale copy exists in
-        // this game directory, remove it so Run.exe does not inject it.
+        // Run.exe 会注入同目录中的 Player Tweaks。只在本游戏明确启用时部署，
+        // 否则移除旧副本，避免插件市场的禁用状态与实际注入不一致。
         const isGimi = (gamePreset || "").trim().toUpperCase() === "GIMI";
         const dllSourcePath = await join(
             resourcesDir,
@@ -798,7 +831,14 @@ export class LaunchGame {
             }
         };
 
-        if (!isGimi) {
+        const playerTweaksEnabled = isGimi && await invoke<boolean>(
+            "bundled_player_tweaks_enabled_for_game",
+            { gameName, gamePreset: gamePreset || "" },
+        ).catch((error) => {
+            console.warn("Failed to read bundled plugin selection:", error);
+            return false;
+        });
+        if (!playerTweaksEnabled) {
             await removeStaleDll();
             return;
         }

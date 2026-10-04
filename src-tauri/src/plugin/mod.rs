@@ -12,6 +12,7 @@ pub mod launch_barrier;
 pub mod launch_coordinator;
 pub mod launch_event_bus;
 pub mod logging;
+pub mod official_release;
 pub mod managed_reshade;
 pub mod managed_reshade_journal;
 pub mod managed_stack;
@@ -19,6 +20,7 @@ pub mod marketplace;
 pub mod package_installer;
 pub mod process_forwarder;
 pub mod registry;
+pub mod resource_cache;
 pub mod settings;
 
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -248,6 +250,14 @@ impl fmt::Display for PluginManifestError {
 impl std::error::Error for PluginManifestError {}
 
 impl PluginManifest {
+    pub fn is_app_scoped(&self) -> bool {
+        self.compatibility.games.is_empty()
+            && !self.contributions.ui_pages.is_empty()
+            && self.contributions.runtime_plugins.is_empty()
+            && self.contributions.launcher_adapters.is_empty()
+            && self.contributions.external_managers.is_empty()
+    }
+
     pub fn from_json_str(raw: &str) -> Result<Self, PluginManifestError> {
         let manifest = serde_json::from_str::<Self>(raw)
             .map_err(|error| PluginManifestError::Json(error.to_string()))?;
@@ -558,7 +568,18 @@ fn validate_package_path(field: &'static str, path: &str) -> Result<(), PluginMa
     }
 
     for segment in path.replace('\\', "/").split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." || segment.contains(':') {
+        let stem = segment.split('.').next().unwrap_or_default().to_ascii_uppercase();
+        let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (stem.len() == 4
+                && (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+        if segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.ends_with(['.', ' '])
+            || segment.chars().any(|character| character < ' ' || "<>:\"|?*".contains(character))
+            || reserved
+        {
             return Err(PluginManifestError::InvalidPath {
                 field,
                 path: path.to_string(),
@@ -578,6 +599,25 @@ fn normalize_version_requirement(requirement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_windows_aliases_in_package_paths() {
+        for path in ["CON.txt", "tools/COM1.dll", "module. ", "a<file>.dll", "dir/name:stream"] {
+            assert!(validate_package_relative_path(path).is_err(), "{path}");
+        }
+        assert!(validate_package_relative_path("native/example.dll").is_ok());
+    }
+
+    #[test]
+    fn app_page_without_game_contributions_uses_app_scope() {
+        let mut manifest = valid_manifest();
+        assert!(!manifest.is_app_scoped());
+        manifest.contributions.runtime_plugins.clear();
+        manifest.contributions.launcher_adapters.clear();
+        assert!(manifest.is_app_scoped());
+        manifest.compatibility.games.push("GIMI".into());
+        assert!(!manifest.is_app_scoped());
+    }
 
     fn valid_manifest() -> PluginManifest {
         PluginManifest::from_json_str(

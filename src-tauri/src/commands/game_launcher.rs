@@ -31,6 +31,7 @@ pub struct ProgramToLaunch {
     pub wait_timeout_secs: Option<u64>,
     pub wait_only: Option<bool>,
     pub run_as_administrator: Option<bool>,
+    pub post_launch_delay_ms: Option<u64>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -741,6 +742,12 @@ pub async fn launch_programs(programs: Vec<ProgramToLaunch>) -> Result<(), Strin
                 );
                 eprintln!("[GameLauncher] {}", detailed_error);
                 return Err(detailed_error);
+            }
+
+            if let Some(delay_ms) = prog.post_launch_delay_ms.filter(|delay| *delay > 0) {
+                let delay_ms = delay_ms.min(10_000);
+                println!("[GameLauncher] Waiting {delay_ms} ms after launching {}", prog.path);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
         }
 

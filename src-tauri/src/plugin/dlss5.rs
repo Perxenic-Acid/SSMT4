@@ -212,6 +212,13 @@ fn inspect(
             {
                 return Err(format!("invalid DLSS5 external host add-on: {name}"));
             }
+            let expected = game_executable.parent().unwrap_or(Path::new("")).join(name);
+            if !added_files.iter().chain(&replaced_files).any(|file| {
+                file.to_string_lossy().replace('\\', "/")
+                    .eq_ignore_ascii_case(&expected.to_string_lossy().replace('\\', "/"))
+            }) {
+                return Err(format!("DLSS5 external host add-on is not tracked by the installation: {name}"));
+            }
         }
         if added_files.iter().chain(replaced_files.iter()).any(|file| {
             file.file_name()
@@ -472,7 +479,11 @@ mod tests {
             vec!["dlss5-feed.addon64"]
         );
 
-        value["added"] = json!(["Game/ReShade.ini"]);
+        value["added"] = json!([]);
+        game.write_manifest(&value);
+        assert!(matches!(game.inspect(), Dlss5State::Broken { reason, .. } if reason.contains("not tracked")));
+
+        value["added"] = json!(["Game/dlss5-feed.addon64", "Game/ReShade.ini"]);
         game.write_manifest(&value);
         assert!(
             matches!(game.inspect(), Dlss5State::Broken { reason, .. } if reason.contains("SSMT-owned"))

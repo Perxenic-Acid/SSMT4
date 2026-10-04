@@ -6,15 +6,19 @@ use super::graphics_stack::{
 use super::hoyoshade::{HoYoShadeBridge, HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
 use super::logging::PluginLogWriter;
 use super::managed_stack::{self, Dlss5RouteScan, ManagedStackStatus};
-use super::package_installer::install_ssmtpkg;
+use super::package_installer::{inspect_ssmtpkg, install_verified_ssmtpkg, PackageInspection};
+use super::official_release;
+use super::marketplace::MarketplaceEntry;
 use super::registry::{ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
 use super::settings::PluginSettingsStore;
-use super::PluginManifest;
+use super::{PluginCompatibility, PluginContributions, PluginManifest, PluginPermission};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +27,7 @@ pub struct PluginLaunchProgram {
     pub args: String,
     pub work_dir: String,
     pub run_as_administrator: bool,
+    pub post_launch_delay_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,6 +41,41 @@ pub struct Dlss5GameStateSnapshot {
     pub reason: Option<String>,
     pub managed_host: Option<bool>,
     pub owner: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dlss5LastRunStatus {
+    pub verdict: &'static str,
+    pub reason: &'static str,
+    pub observed_at_ms: Option<u128>,
+}
+
+fn inspect_dlss5_last_run_log(path: &std::path::Path) -> Result<Dlss5LastRunStatus, String> {
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let observed_at_ms = metadata.modified().ok().and_then(|time| {
+        time.duration_since(UNIX_EPOCH).ok().map(|duration| duration.as_millis())
+    });
+    // ReShade.log 可非常大；只读取最后 1 MiB，避免设置页扫描整份日志。
+    const MAX_LOG_BYTES: u64 = 1024 * 1024;
+    file.seek(SeekFrom::Start(metadata.len().saturating_sub(MAX_LOG_BYTES)))
+        .map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    let log = String::from_utf8_lossy(&bytes);
+    let (verdict, reason) = if log.contains("[DLSS 5 Feed] stopped: Direct3D 11 multithread protection is unavailable") {
+        ("inactive", "d3d11_interposer_race")
+    } else if log.contains("[DLSS 5 Feed] stopped:") {
+        ("inactive", "feeder_stopped")
+    } else if log.contains("NR-VERDICT state=ENGAGED") {
+        ("engaged", "nr_evaluated")
+    } else if log.contains("NO DLSS CREATE SEEN") {
+        ("inactive", "no_dlss_create")
+    } else {
+        ("unknown", "no_nr_evidence")
+    };
+    Ok(Dlss5LastRunStatus { verdict, reason, observed_at_ms })
 }
 
 impl From<&Dlss5State> for Dlss5GameStateSnapshot {
@@ -91,6 +131,8 @@ impl From<&Dlss5State> for Dlss5GameStateSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct GraphicsLaunchInspection {
     pub hoyoshade_requested: bool,
+    pub dlss5_requested: bool,
+    pub host_requested: bool,
     pub dlss5: Dlss5GameStateSnapshot,
     pub resolution: GraphicsStackResolution,
 }
@@ -108,7 +150,7 @@ fn should_launch_hoyoshade(
     inspection: &GraphicsLaunchInspection,
     decision: Option<GraphicsLaunchDecision>,
 ) -> Result<bool, String> {
-    if !inspection.hoyoshade_requested
+    if !inspection.host_requested
         || decision == Some(GraphicsLaunchDecision::SuppressHoYoShadeThisLaunch)
     {
         return Ok(false);
@@ -158,26 +200,30 @@ fn inspect_graphics_for_executable(
         })
         .transpose()?
         .unwrap_or(false);
-    // 只有两个集成都已安装并在插件页启用，才读取 DLSS5 的游戏文件。
-    // 普通启动以及单独启用 HoYoShade 时不应受外部安装记录影响。
+    // 只有启用了 DLSS5 才读取其游戏文件，普通启动不受外部安装记录影响。
     let dlss5_enabled = registry
         .find(DLSS5_PLUGIN_ID)
         .is_some_and(|plugin| plugin.enabled);
     let state = GameGraphicsState {
-        dlss5: if hoyoshade_requested && dlss5_enabled {
+        dlss5: if dlss5_enabled {
             inspect_game_executable(game_executable)
         } else {
             Dlss5State::NotManaged
         },
     };
+    let host_requested = hoyoshade_requested
+        || (dlss5_enabled && matches!(state.dlss5, Dlss5State::Managed(_) | Dlss5State::Broken { .. }));
     let resolution = GraphicsStackResolver::resolve(
         &state,
         GraphicsLaunchContributions {
             hoyoshade: hoyoshade_requested,
+            dlss5: dlss5_enabled,
         },
     );
     Ok(GraphicsLaunchInspection {
         hoyoshade_requested,
+        dlss5_requested: dlss5_enabled,
+        host_requested,
         dlss5: Dlss5GameStateSnapshot::from(&state.dlss5),
         resolution,
     })
@@ -211,11 +257,14 @@ fn installed_plugin_registry() -> Result<Option<PluginRegistry>, String> {
 
 #[tauri::command]
 pub fn inspect_graphics_launch(
+    game_name: String,
     game_executable: String,
 ) -> Result<GraphicsLaunchInspection, String> {
     let Some(registry) = installed_plugin_registry()? else {
         return Ok(GraphicsLaunchInspection {
             hoyoshade_requested: false,
+            dlss5_requested: false,
+            host_requested: false,
             dlss5: Dlss5GameStateSnapshot::from(&Dlss5State::NotManaged),
             resolution: GraphicsStackResolver::resolve(
                 &GameGraphicsState {
@@ -225,7 +274,7 @@ pub fn inspect_graphics_launch(
             ),
         });
     };
-    inspect_graphics_for_executable(&registry, &PathBuf::from(game_executable))
+    inspect_graphics_for_executable(&registry.for_game(&game_name), &PathBuf::from(game_executable))
 }
 
 #[tauri::command]
@@ -243,10 +292,39 @@ pub fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStat
 }
 
 #[tauri::command]
+pub fn inspect_dlss5_last_run(game_executable: String) -> Result<Dlss5LastRunStatus, String> {
+    let executable = PathBuf::from(game_executable);
+    if !executable.is_file() {
+        return Err(format!("game executable does not exist: {}", executable.display()));
+    }
+    let managed = match inspect_game_executable(&executable) {
+        Dlss5State::Managed(state) => state,
+        _ => return Ok(Dlss5LastRunStatus { verdict: "unknown", reason: "no_log", observed_at_ms: None }),
+    };
+    let log = executable.parent().ok_or("game executable has no parent directory")?.join("ReShade.log");
+    if !log.is_file() {
+        return Ok(Dlss5LastRunStatus {
+            verdict: "unknown",
+            reason: "no_log",
+            observed_at_ms: None,
+        });
+    }
+    let log_modified = fs::metadata(&log).and_then(|metadata| metadata.modified()).map_err(|error| error.to_string())?;
+    let manifest_modified = fs::metadata(&managed.manifest_path).and_then(|metadata| metadata.modified()).map_err(|error| error.to_string())?;
+    if log_modified < manifest_modified {
+        return Ok(Dlss5LastRunStatus { verdict: "unknown", reason: "log_precedes_install", observed_at_ms: None });
+    }
+    inspect_dlss5_last_run_log(&log)
+}
+
+#[tauri::command]
 pub fn inspect_managed_graphics_stack(
+    game_name: String,
     game_executable: String,
 ) -> Result<ManagedStackStatus, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
     let executable = PathBuf::from(game_executable);
     match inspect_game_executable(&executable) {
         Dlss5State::Managed(state) => managed_stack::inspect(&registry, &executable, &state),
@@ -262,21 +340,27 @@ pub fn restore_managed_graphics_stack(game_executable: String) -> Result<bool, S
 
 #[tauri::command]
 pub fn inspect_dlss5_route_options(
+    game_name: String,
     game_executable: String,
     api_override: String,
 ) -> Result<Dlss5RouteScan, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
     managed_stack::inspect_routes(&registry, &PathBuf::from(game_executable), &api_override)
 }
 
 #[tauri::command]
 pub fn install_managed_dlss5_route(
+    game_name: String,
     game_executable: String,
     route: String,
     api_override: String,
     anti_cheat_acknowledged: bool,
 ) -> Result<Dlss5RouteScan, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
     managed_stack::install_route(
         &registry,
         &PathBuf::from(game_executable),
@@ -287,14 +371,18 @@ pub fn install_managed_dlss5_route(
 }
 
 #[tauri::command]
-pub fn restore_dlss5_install(game_executable: String) -> Result<(), String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+pub fn restore_dlss5_install(game_name: String, game_executable: String) -> Result<(), String> {
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
     managed_stack::restore_swapper(&registry, &PathBuf::from(game_executable))
 }
 
 #[tauri::command]
-pub fn open_dlss5_swapper() -> Result<(), String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+pub fn open_dlss5_swapper(game_name: String) -> Result<(), String> {
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
     managed_stack::open_swapper(&registry)
 }
 
@@ -317,6 +405,76 @@ pub struct InstalledPluginSnapshot {
     pub enabled: bool,
     pub lifecycle_status: PluginLifecycleStatus,
     pub external_dependencies: BTreeMap<String, ExternalDependencyState>,
+    pub bundled: bool,
+    pub official: bool,
+    pub app_scoped: bool,
+}
+
+const PLAYER_TWEAKS_ID: &str = "ssmt.player-tweaks";
+const PLAYER_TWEAKS_FILE: &str = "SSMT-Player-Tweaks.dll";
+
+fn player_tweaks_available() -> bool {
+    crate::config::path_manager::PathManager::ssmt_resources_folder()
+        .join(PLAYER_TWEAKS_FILE)
+        .is_file()
+}
+
+fn game_preset(game_name: &str) -> Option<String> {
+    let config = crate::config::path_manager::PathManager::global_config_games_game_folder(game_name)
+        .join("Config.json");
+    let raw = fs::read_to_string(config).ok()?;
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()?
+        .get("gamePreset")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn bundled_player_tweaks_snapshot(
+    registry: &PluginRegistry,
+    game_name: &str,
+) -> Option<InstalledPluginSnapshot> {
+    if !player_tweaks_available() {
+        return None;
+    }
+    let compatible = game_preset(game_name)
+        .is_some_and(|preset| preset.eq_ignore_ascii_case("GIMI"));
+    let enabled = compatible && registry.game_enabled(game_name, PLAYER_TWEAKS_ID);
+    Some(InstalledPluginSnapshot {
+        manifest: PluginManifest {
+            schema_version: 1,
+            id: PLAYER_TWEAKS_ID.to_string(),
+            name: "SSMT Player Tweaks".to_string(),
+            version: "0.0.0".to_string(),
+            author: "SSMT".to_string(),
+            compatibility: PluginCompatibility {
+                ssmt: ">=4.x".to_string(),
+                platforms: vec!["windows-x64".to_string()],
+                games: vec!["GIMI".to_string()],
+            },
+            contributions: PluginContributions::default(),
+            external_dependencies: Vec::new(),
+            permissions: vec![PluginPermission::NativeInject],
+        },
+        enabled,
+        lifecycle_status: if compatible {
+            if enabled { PluginLifecycleStatus::Enabled } else { PluginLifecycleStatus::Disabled }
+        } else {
+            PluginLifecycleStatus::Incompatible
+        },
+        external_dependencies: BTreeMap::new(),
+        bundled: true,
+        official: true,
+        app_scoped: false,
+    })
+}
+
+fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<InstalledPluginSnapshot> {
+    let mut plugins = snapshot(&registry.for_game(game_name));
+    if let Some(bundled) = bundled_player_tweaks_snapshot(registry, game_name) {
+        plugins.push(bundled);
+    }
+    plugins
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -345,6 +503,9 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
             enabled: plugin.enabled,
             lifecycle_status: lifecycle_status(plugin),
             external_dependencies: plugin.external_dependencies.clone(),
+            bundled: false,
+            official: plugin.official,
+            app_scoped: plugin.manifest.is_app_scoped(),
         })
         .collect()
 }
@@ -415,10 +576,15 @@ pub fn plugin_registry_snapshot() -> Result<Vec<InstalledPluginSnapshot>, String
 }
 
 #[tauri::command]
-pub fn plugin_ui_routes() -> Result<Vec<PluginUiRouteSnapshot>, String> {
+pub fn plugin_registry_snapshot_for_game(game_name: String) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    Ok(snapshot_for_game(&registry, &game_name))
+}
+
+#[tauri::command]
+pub fn plugin_ui_routes(game_name: String) -> Result<Vec<PluginUiRouteSnapshot>, String> {
     let routes = installed_plugin_registry()?
-        .as_ref()
-        .map(ui_routes)
+        .map(|registry| ui_routes(&registry.for_game(&game_name)))
         .unwrap_or_default();
     let mut seen = HashSet::new();
     for route in &routes {
@@ -433,8 +599,10 @@ pub fn plugin_ui_routes() -> Result<Vec<PluginUiRouteSnapshot>, String> {
 }
 
 #[tauri::command]
-pub fn plugin_capabilities(plugin_id: String) -> Result<PluginCapabilitiesSnapshot, String> {
-    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+pub fn plugin_capabilities(plugin_id: String, game_name: String) -> Result<PluginCapabilitiesSnapshot, String> {
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
     let plugin = registry
         .find(&plugin_id)
         .ok_or_else(|| format!("plugin not found: {plugin_id}"))?;
@@ -448,16 +616,39 @@ pub fn plugin_capabilities(plugin_id: String) -> Result<PluginCapabilitiesSnapsh
 }
 
 #[tauri::command]
-pub fn set_plugin_enabled(
+pub fn set_plugin_enabled_for_game(
+    game_name: String,
     id: String,
     enabled: bool,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
-    let mut registry =
-        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
-    registry
-        .set_enabled(&id, enabled)
-        .map_err(|error| error.to_string())?;
-    Ok(snapshot(&registry))
+    let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    if id == PLAYER_TWEAKS_ID {
+        if !player_tweaks_available() {
+            return Err("bundled Player Tweaks DLL is unavailable".to_string());
+        }
+        if !game_preset(&game_name).is_some_and(|preset| preset.eq_ignore_ascii_case("GIMI")) {
+            return Err("Player Tweaks only supports GIMI".to_string());
+        }
+        registry.set_bundled_game_enabled(&game_name, &id, enabled)
+    } else {
+        if registry.find(&id).is_some_and(|plugin| plugin.manifest.is_app_scoped()) {
+            registry.set_enabled(&id, enabled)
+        } else {
+            registry.set_game_enabled(&game_name, &id, enabled)
+        }
+    }
+    .map_err(|error| error.to_string())?;
+    Ok(snapshot_for_game(&registry, &game_name))
+}
+
+#[tauri::command]
+pub fn bundled_player_tweaks_enabled_for_game(game_name: String, game_preset: String) -> bool {
+    if !game_preset.eq_ignore_ascii_case("GIMI") || !player_tweaks_available() {
+        return false;
+    }
+    PluginRegistry::from_default_location()
+        .map(|registry| registry.game_enabled(&game_name, PLAYER_TWEAKS_ID))
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -476,10 +667,11 @@ pub fn set_plugin_external_dependency_path(
 
 #[tauri::command]
 pub fn prepare_hoyoshade_launch(
+    game_name: String,
     game_executable: String,
     graphics_decision: Option<GraphicsLaunchDecision>,
 ) -> Result<Option<PluginLaunchProgram>, String> {
-    let Some(registry) = installed_plugin_registry()? else {
+    let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name)) else {
         return Ok(None);
     };
     let game_executable = PathBuf::from(game_executable);
@@ -489,7 +681,7 @@ pub fn prepare_hoyoshade_launch(
     }
     let Some(plugin) = registry
         .find(HOYOSHADE_PLUGIN_ID)
-        .filter(|plugin| plugin.enabled)
+        .filter(|plugin| plugin.enabled || inspection.dlss5_requested)
     else {
         return Ok(None);
     };
@@ -522,7 +714,7 @@ pub fn prepare_hoyoshade_launch(
         }
         match inspect_game_executable(&game_executable) {
             Dlss5State::Managed(state) => {
-                managed_stack::prepare(&registry, &game_executable, &state)?;
+                managed_stack::prepare(&registry, &game_executable, &state, inspection.hoyoshade_requested)?;
                 // 提权后的 Unity 进程不一定能枚举 OptiScaler 代理，且崩铁可能
                 // 通过 D3D12 路径加载它。等待精确的 `dxgi.dll` 模块会把本来
                 // 可用的 HoYoShade 注入变成超时；托管注入器已经会等待目标进程，
@@ -544,12 +736,14 @@ pub fn prepare_hoyoshade_launch(
         },
         work_dir: dependency_path.to_string_lossy().into_owned(),
         run_as_administrator: true,
+        // 注入器先安装进程监视，再由 Run.exe 创建游戏；给外部注入器留出启动时间。
+        post_launch_delay_ms: 2_000,
     }))
 }
 
 #[tauri::command]
-pub fn prepare_plugin_host_config(runtime_directory: String) -> Result<Option<String>, String> {
-    let Some(registry) = installed_plugin_registry()? else {
+pub fn prepare_plugin_host_config(game_name: String, runtime_directory: String) -> Result<Option<String>, String> {
+    let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name)) else {
         return Ok(None);
     };
     let config = registry.generate_plugin_host_config();
@@ -581,12 +775,49 @@ pub fn prepare_plugin_host_config(runtime_directory: String) -> Result<Option<St
 
 #[tauri::command]
 pub fn install_plugin_package(
+    app: tauri::AppHandle,
     archive_path: String,
+    reviewed_sha256: String,
+    disclaimer_accepted: bool,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    if !disclaimer_accepted {
+        return Err("third-party plugin disclaimer must be accepted".into());
+    }
+    let inspection = inspect_ssmtpkg(&PathBuf::from(&archive_path)).map_err(|error| error.to_string())?;
+    if inspection.manifest.id.starts_with("ssmt.") {
+        return Err("ssmt.* is reserved for packages from the Native Release".into());
+    }
+    if inspection.sha256 != reviewed_sha256.to_ascii_lowercase() {
+        return Err("package changed since safety review".into());
+    }
+    if !inspection.manifest.compatibility.supports(&app.package_info().version.to_string(), super::SUPPORTED_PLATFORM, None) {
+        return Err("plugin is incompatible with this SSMT version or platform".into());
+    }
     let mut registry =
         PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
-    install_ssmtpkg(&mut registry, &PathBuf::from(archive_path))
+    install_verified_ssmtpkg(&mut registry, &PathBuf::from(archive_path), &reviewed_sha256)
         .map_err(|error| error.to_string())?;
+    Ok(snapshot(&registry))
+}
+
+#[tauri::command]
+pub fn inspect_plugin_package(archive_path: String) -> Result<PackageInspection, String> {
+    let inspection = inspect_ssmtpkg(&PathBuf::from(archive_path)).map_err(|error| error.to_string())?;
+    if inspection.manifest.id.starts_with("ssmt.") {
+        return Err("ssmt.* is reserved for packages from the Native Release".into());
+    }
+    Ok(inspection)
+}
+
+#[tauri::command]
+pub async fn official_plugin_catalog() -> Result<Vec<MarketplaceEntry>, String> {
+    official_release::official_catalog().await
+}
+
+#[tauri::command]
+pub async fn install_official_plugin(app: tauri::AppHandle, id: String, version: String) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    official_release::install_official(&mut registry, &id, &version, &app.package_info().version.to_string()).await?;
     Ok(snapshot(&registry))
 }
 
@@ -649,7 +880,7 @@ mod tests {
         capabilities_for_permissions, inspect_graphics_for_executable, installed_plugin_registry_at,
         lifecycle_status,
         should_launch_hoyoshade, Dlss5GameStateSnapshot, GraphicsLaunchDecision,
-        GraphicsLaunchInspection, PluginLifecycleStatus,
+        GraphicsLaunchInspection, PluginLifecycleStatus, inspect_dlss5_last_run_log,
     };
     use crate::plugin::graphics_stack::{
         CompatibilityLevel, GraphicsCompatibilityIssue, GraphicsStackResolution,
@@ -664,6 +895,25 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn dlss5_last_run_requires_runtime_evidence() {
+        let dir = std::env::temp_dir().join(format!(
+            "ssmt-dlss5-last-run-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("ReShade.log");
+        fs::write(&log, "addon loaded\n[DLSS 5 Feed] stopped: Direct3D 11 multithread protection is unavailable on this device and a present-path interposer is loaded\n").unwrap();
+        let status = inspect_dlss5_last_run_log(&log).unwrap();
+        assert_eq!(status.verdict, "inactive");
+        assert_eq!(status.reason, "d3d11_interposer_race");
+        fs::write(&log, "addon loaded\nNR-VERDICT state=ENGAGED; successful frames 60\n").unwrap();
+        assert_eq!(inspect_dlss5_last_run_log(&log).unwrap().verdict, "engaged");
+        fs::write(&log, "addon loaded\n").unwrap();
+        assert_eq!(inspect_dlss5_last_run_log(&log).unwrap().verdict, "unknown");
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn maps_declared_permissions_to_scoped_capabilities() {
@@ -746,6 +996,7 @@ mod tests {
             manifest,
             package_root: PathBuf::from("fixture"),
             enabled: false,
+            official: false,
             external_dependencies: BTreeMap::new(),
         };
         assert!(matches!(
@@ -775,6 +1026,8 @@ mod tests {
     fn launch_gate_requires_confirmation_and_never_bypasses_managed_stack() {
         let mut inspection = GraphicsLaunchInspection {
             hoyoshade_requested: true,
+            dlss5_requested: true,
+            host_requested: true,
             dlss5: Dlss5GameStateSnapshot {
                 state: "managed",
                 route: Some("optiscaler".to_string()),

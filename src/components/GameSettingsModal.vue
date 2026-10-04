@@ -46,7 +46,7 @@ const refreshOptionalPluginSections = async () => {
   const requestId = ++pluginAvailabilityRequestId;
   dlss5IntegrationEnabled.value = false;
   try {
-    const plugins = await invoke<Array<{ manifest: { id: string }; enabled: boolean }>>('plugin_registry_snapshot');
+    const plugins = await invoke<Array<{ manifest: { id: string }; enabled: boolean }>>('plugin_registry_snapshot_for_game', { gameName: props.gameName });
     if (requestId === pluginAvailabilityRequestId && props.modelValue) {
       dlss5IntegrationEnabled.value = plugins.some(
         plugin => plugin.manifest.id === 'ssmt.dlss5.integration' && plugin.enabled,
@@ -1323,6 +1323,7 @@ defineExpose({
 
                 <Dlss5GraphicsSettings
                   v-if="dlss5IntegrationEnabled"
+                  :game-name="props.gameName"
                   :target-exe-path="config.targetExePath || ''"
                 />
 

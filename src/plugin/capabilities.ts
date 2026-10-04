@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { AppStateManager } from '../store/AppStateManager'
 
 export type PluginCapability =
   | 'filesystem.read'
@@ -18,7 +19,10 @@ export interface PluginCapabilitiesSnapshot {
 
 /** Capability gate for first-party UI pages. Keep raw Tauri invoke calls in core code. */
 export const createPluginCapabilityClient = async (pluginId: string) => {
-  const snapshot = await invoke<PluginCapabilitiesSnapshot>('plugin_capabilities', { pluginId })
+  const snapshot = await invoke<PluginCapabilitiesSnapshot>('plugin_capabilities', {
+    pluginId,
+    gameName: AppStateManager.appSettings.CurrentGameName,
+  })
   const allowed = new Set<PluginCapability>(snapshot.capabilities)
 
   return {

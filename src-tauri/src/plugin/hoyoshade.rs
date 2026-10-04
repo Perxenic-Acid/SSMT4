@@ -208,6 +208,7 @@ mod tests {
             },
             package_root: root.join("package"),
             enabled: true,
+            official: false,
             external_dependencies: BTreeMap::new(),
         }
     }

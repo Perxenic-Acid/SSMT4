@@ -1,5 +1,8 @@
 use super::registry::{InstalledPlugin, PluginRegistry, PluginRegistryError};
+use super::marketplace::verify_package_sha256;
 use super::{validate_package_relative_path, PluginManifest, PluginManifestError};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -23,6 +26,7 @@ pub enum PackageInstallError {
     InvalidArchive(String),
     ResourceLimit(String),
     DuplicateEntry(String),
+    HashMismatch(String),
 }
 
 impl std::fmt::Display for PackageInstallError {
@@ -42,6 +46,7 @@ impl std::fmt::Display for PackageInstallError {
             Self::DuplicateEntry(path) => {
                 write!(formatter, "duplicate package archive entry: {path}")
             }
+            Self::HashMismatch(detail) => write!(formatter, "package checksum failed: {detail}"),
         }
     }
 }
@@ -96,6 +101,110 @@ pub fn install_ssmtpkg(
     registry
         .install_directory_package(temporary.path())
         .map_err(PackageInstallError::from)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageInspection {
+    pub manifest: PluginManifest,
+    pub sha256: String,
+    pub file_count: usize,
+    pub unpacked_size: u64,
+}
+
+pub fn inspect_ssmtpkg(archive_path: &Path) -> Result<PackageInspection, PackageInstallError> {
+    let metadata = fs::metadata(archive_path)?;
+    if !metadata.is_file() || metadata.len() > MAX_ARCHIVE_BYTES {
+        return Err(PackageInstallError::ResourceLimit("package archive exceeds 512 MiB".into()));
+    }
+    let temporary = TemporaryDirectory::create()?;
+    extract_archive(archive_path, temporary.path())?;
+    let raw = fs::read_to_string(temporary.path().join(MANIFEST_FILE_NAME))
+        .map_err(|error| if error.kind() == io::ErrorKind::NotFound {
+            PackageInstallError::MissingManifest
+        } else {
+            PackageInstallError::Io(error)
+        })?;
+    let manifest = PluginManifest::from_json_str(&raw)?;
+    for runtime in &manifest.contributions.runtime_plugins {
+        require_package_file(temporary.path(), &runtime.path)?;
+    }
+    // UI page paths are metadata keys resolved by the trusted first-party UI registry.
+    for adapter in &manifest.contributions.launcher_adapters {
+        if !adapter.executable.contains("${") {
+            require_package_file(temporary.path(), &adapter.executable)?;
+        }
+    }
+    for manager in &manifest.contributions.external_managers {
+        if !manager.executable.contains("${") {
+            require_package_file(temporary.path(), &manager.executable)?;
+        }
+    }
+    let mut file_count = 0usize;
+    let mut unpacked_size = 0u64;
+    for entry in walk_package_files(temporary.path())? {
+        file_count += 1;
+        unpacked_size += entry.metadata()?.len();
+    }
+    let mut digest = Sha256::new();
+    let mut source = File::open(archive_path)?;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(PackageInspection {
+        manifest,
+        sha256: format!("{:x}", digest.finalize()),
+        file_count,
+        unpacked_size,
+    })
+}
+
+fn require_package_file(root: &Path, relative: &str) -> Result<(), PackageInstallError> {
+    if !root.join(relative).is_file() {
+        return Err(PackageInstallError::InvalidArchive(format!(
+            "declared contribution is missing: {relative}"
+        )));
+    }
+    Ok(())
+}
+
+fn walk_package_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                pending.push(entry.path());
+            } else {
+                files.push(entry.path());
+            }
+        }
+    }
+    Ok(files)
+}
+
+pub fn install_verified_ssmtpkg(
+    registry: &mut PluginRegistry,
+    archive_path: &Path,
+    expected_sha256: &str,
+) -> Result<InstalledPlugin, PackageInstallError> {
+    let metadata = fs::metadata(archive_path)?;
+    if !metadata.is_file() || metadata.len() > MAX_ARCHIVE_BYTES {
+        return Err(PackageInstallError::ResourceLimit("package archive exceeds 512 MiB".into()));
+    }
+    let temporary = TemporaryDirectory::create()?;
+    let staged = temporary.path().join("plugin.ssmtpkg");
+    fs::copy(archive_path, &staged)?;
+    verify_package_sha256(&staged, expected_sha256)
+        .map_err(|error| PackageInstallError::HashMismatch(error.to_string()))?;
+    inspect_ssmtpkg(&staged)?;
+    install_ssmtpkg(registry, &staged)
 }
 
 struct TemporaryDirectory(PathBuf);
@@ -356,6 +465,32 @@ mod tests {
             Err(PackageInstallError::DuplicateEntry(_))
         ));
         assert!(registry.installed().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_rejects_missing_declared_runtime_and_changed_package() {
+        let root = root("inspection");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("plugin.ssmtpkg");
+        let manifest = r#"{
+            "schemaVersion":1,"id":"thirdparty.example","name":"Example","version":"1.0.0","author":"Other",
+            "compatibility":{"ssmt":">=4.0.0","platforms":["windows-x64"]},
+            "contributions":{"runtimePlugins":[{"path":"native/example.dll"}]},"permissions":["native.inject"]
+        }"#;
+        zip_fixture(&archive, &[("ssmt-plugin.json", manifest.as_bytes())]);
+        assert!(matches!(inspect_ssmtpkg(&archive), Err(PackageInstallError::InvalidArchive(_))));
+        zip_fixture(&archive, &[
+            ("ssmt-plugin.json", manifest.as_bytes()),
+            ("native/example.dll", b"fixture"),
+        ]);
+        let inspection = inspect_ssmtpkg(&archive).unwrap();
+        assert_eq!(inspection.manifest.id, "thirdparty.example");
+        assert_eq!(inspection.file_count, 2);
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        assert!(install_verified_ssmtpkg(&mut registry, &archive, &"0".repeat(64)).is_err());
+        assert!(registry.installed().is_empty());
+        install_verified_ssmtpkg(&mut registry, &archive, &inspection.sha256).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }
