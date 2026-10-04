@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, Serialize)]
@@ -358,24 +358,30 @@ pub fn install_managed_dlss5_route(
     api_override: String,
     anti_cheat_acknowledged: bool,
 ) -> Result<Dlss5RouteScan, String> {
-    let registry = PluginRegistry::from_default_location()
-        .map_err(|error| error.to_string())?
-        .for_game(&game_name);
-    managed_stack::install_route(
-        &registry,
-        &PathBuf::from(game_executable),
+    let mut registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?;
+    let executable = PathBuf::from(game_executable);
+    let result = managed_stack::install_route(
+        &registry.for_game(&game_name),
+        &executable,
         &route,
         &api_override,
         anti_cheat_acknowledged,
-    )
+    )?;
+    if let Err(error) = registry.set_managed_game_executable(&game_name, DLSS5_PLUGIN_ID, Some(&executable)) {
+        let rollback = managed_stack::restore_swapper(&registry.for_game(&game_name), &executable);
+        return Err(format!("cannot record DLSS5 installation: {error}; rollback: {rollback:?}"));
+    }
+    Ok(result)
 }
 
 #[tauri::command]
 pub fn restore_dlss5_install(game_name: String, game_executable: String) -> Result<(), String> {
-    let registry = PluginRegistry::from_default_location()
-        .map_err(|error| error.to_string())?
-        .for_game(&game_name);
-    managed_stack::restore_swapper(&registry, &PathBuf::from(game_executable))
+    let mut registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?;
+    managed_stack::restore_swapper(&registry.for_game(&game_name), &PathBuf::from(game_executable))?;
+    registry.set_managed_game_executable(&game_name, DLSS5_PLUGIN_ID, None)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -620,8 +626,30 @@ pub fn set_plugin_enabled_for_game(
     game_name: String,
     id: String,
     enabled: bool,
+    game_executable: Option<String>,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
     let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let cleanup_dlss5 = id == DLSS5_PLUGIN_ID && !enabled
+        && (registry.game_enabled(&game_name, &id)
+            || registry.managed_game_executable(&game_name, &id).is_some());
+    if cleanup_dlss5 {
+        let executable = registry.managed_game_executable(&game_name, &id).map(Path::to_path_buf)
+            .or_else(|| game_executable.as_deref().map(str::trim).filter(|path| !path.is_empty()).map(PathBuf::from))
+            .ok_or("game executable path is required to disable DLSS5 and restore its managed files")?;
+        if !executable.is_file() {
+            return Err(format!("game executable does not exist: {}", executable.display()));
+        }
+        match inspect_game_executable(&executable) {
+            Dlss5State::Managed(state) if state.external_host.is_some() => {
+                managed_stack::restore_swapper(&registry.for_game(&game_name), &executable)?;
+            }
+            Dlss5State::Broken { reason, .. } => {
+                return Err(format!("cannot safely disable DLSS5 before repairing its installation: {reason}"));
+            }
+            // 没有 SSMT 宿主标记的安装可能由玩家自行管理，不能擅自移除。
+            Dlss5State::Managed(_) | Dlss5State::NotManaged => {}
+        }
+    }
     if id == PLAYER_TWEAKS_ID {
         if !player_tweaks_available() {
             return Err("bundled Player Tweaks DLL is unavailable".to_string());
@@ -638,6 +666,10 @@ pub fn set_plugin_enabled_for_game(
         }
     }
     .map_err(|error| error.to_string())?;
+    if cleanup_dlss5 {
+        registry.set_managed_game_executable(&game_name, &id, None)
+            .map_err(|error| error.to_string())?;
+    }
     Ok(snapshot_for_game(&registry, &game_name))
 }
 

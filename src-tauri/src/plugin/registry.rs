@@ -142,6 +142,8 @@ struct RegistryState {
     plugins: BTreeMap<String, PluginSettings>,
     #[serde(default)]
     game_plugins: BTreeMap<String, BTreeMap<String, bool>>,
+    #[serde(default)]
+    managed_game_executables: BTreeMap<String, BTreeMap<String, PathBuf>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -300,6 +302,38 @@ impl PluginRegistry {
             .and_then(|plugins| plugins.get(id))
             .copied()
             .unwrap_or(false)
+    }
+
+    pub fn managed_game_executable(&self, game_name: &str, id: &str) -> Option<&Path> {
+        self.state.managed_game_executables
+            .get(&game_name.trim().to_lowercase())
+            .and_then(|plugins| plugins.get(id))
+            .map(PathBuf::as_path)
+    }
+
+    pub fn set_managed_game_executable(
+        &mut self,
+        game_name: &str,
+        id: &str,
+        executable: Option<&Path>,
+    ) -> Result<(), PluginRegistryError> {
+        let game_name = game_name.trim().to_lowercase();
+        if game_name.is_empty() {
+            return Err(PluginRegistryError::State("game name is required".to_string()));
+        }
+        if let Some(executable) = executable {
+            if !executable.is_absolute() {
+                return Err(PluginRegistryError::State("managed game executable must be absolute".to_string()));
+            }
+            self.state.managed_game_executables.entry(game_name)
+                .or_default().insert(id.to_string(), executable.to_path_buf());
+        } else if let Some(plugins) = self.state.managed_game_executables.get_mut(&game_name) {
+            plugins.remove(id);
+            if plugins.is_empty() {
+                self.state.managed_game_executables.remove(&game_name);
+            }
+        }
+        write_state(&self.state_path, &self.state)
     }
 
     pub fn set_game_enabled(
@@ -757,6 +791,25 @@ mod tests {
         assert!(!registry.game_enabled("SRMI", "ssmt.player-tweaks"));
         assert!(config_for("WWMI").is_empty());
         assert!(config_for("").is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_installation_path_is_scoped_and_persistent() {
+        let root = temp_root("managed-installation");
+        let plugins_root = root.join("Plugins");
+        let executable = root.join("game/GenshinImpact.exe");
+        let mut registry = PluginRegistry::new(&plugins_root).unwrap();
+        registry.set_managed_game_executable("GIMI", "ssmt.dlss5.integration", Some(&executable)).unwrap();
+        drop(registry);
+
+        let mut restarted = PluginRegistry::new(&plugins_root).unwrap();
+        assert_eq!(restarted.managed_game_executable("GIMI", "ssmt.dlss5.integration"), Some(executable.as_path()));
+        assert!(restarted.managed_game_executable("SRMI", "ssmt.dlss5.integration").is_none());
+        restarted.set_managed_game_executable("GIMI", "ssmt.dlss5.integration", None).unwrap();
+        drop(restarted);
+        assert!(PluginRegistry::new(&plugins_root).unwrap()
+            .managed_game_executable("GIMI", "ssmt.dlss5.integration").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 }

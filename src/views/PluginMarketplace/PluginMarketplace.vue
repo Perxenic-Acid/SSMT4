@@ -8,6 +8,7 @@ import { FolderOpened, Refresh, Search, Setting, Document, Delete } from '@eleme
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 import { AppStateManager } from '../../store/AppStateManager'
+import { ResourceManager } from '../../store/ResourceManager'
 
 type DependencyStatus = 'missing' | 'invalid' | 'ready'
 
@@ -281,10 +282,19 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
   const requestId = ++refreshRequestId
   loading.value = true
   try {
+    let gameExecutable: string | null = null
+    if (plugin.manifest.id === 'ssmt.dlss5.integration' && plugin.enabled) {
+      try {
+        gameExecutable = (await ResourceManager.loadGameConfig(gameName)).targetExePath?.trim() || null
+      } catch {
+        // 后端仍可使用安装时记录的游戏路径完成恢复。
+      }
+    }
     const snapshot = await invoke<InstalledPlugin[]>('set_plugin_enabled_for_game', {
       gameName,
       id: plugin.manifest.id,
       enabled: !plugin.enabled,
+      gameExecutable,
     })
     if (requestId === refreshRequestId) installed.value = snapshot
     ElMessage.success(plugin.enabled

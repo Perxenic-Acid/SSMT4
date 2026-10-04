@@ -674,7 +674,11 @@ pub fn restore_swapper(registry: &PluginRegistry, game_executable: &Path) -> Res
         &[&cli_arg, "restore", &game_dir_arg],
         Duration::from_secs(120),
     )?;
-    Ok(())
+    match inspect_game_executable(game_executable) {
+        Dlss5State::NotManaged => Ok(()),
+        Dlss5State::Managed(_) => Err("Swapper reported success but its managed installation remains".to_string()),
+        Dlss5State::Broken { reason, .. } => Err(format!("Swapper restore left a broken installation: {reason}")),
+    }
 }
 
 pub fn open_swapper(registry: &PluginRegistry) -> Result<(), String> {
