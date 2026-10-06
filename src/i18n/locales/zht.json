@@ -77,7 +77,7 @@
     "tabs": {
       "basic": "基礎設定",
       "migoto": "3DMigoto 設定",
-      "dllUpdate": "d3d11.dll更新",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "3Dmigoto Package更新",
       "other": "其他設定"
     },
@@ -125,8 +125,6 @@
       "autoExitSeconds": "自動退出秒數",
       "extraInjectedDll": "額外注入 DLL",
       "options": "其他選項",
-      "dllSource": "d3d11.dll 來源",
-      "dllSourceHint": "Dev 使用 SpectrumQT/XXMI-Libs-Package，Play 使用 Doodle，ssice-a 使用 ssice-a/XXMI-Libs-Package。首次安裝後會快取到本地，後續切換只替換本地快取檔案。NTEMI 預設會強制使用 ssice-a。",
       "currentInstalledDllVersion": "目前已安裝版本",
       "noDllVersionInstalled": "未記錄已安裝版本",
       "availableDllVersions": "可安裝版本列表",
@@ -158,11 +156,6 @@
       "wwmiDisableWoundedFxHint": "啟動前關閉 SkinDamageMode，避免受擊後貼圖異常。"
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev（XXMI-Libs-Package）",
-        "play": "Play（Doodle）",
-        "ssiceA": "ssice-a（XXMI-Libs-Package）"
-      },
       "backgroundUpdateMode": {
         "manual": "手動",
         "auto": "自動"
@@ -460,7 +453,6 @@
       "altF": "啟用 Alt+F 快捷喚起",
       "textureMarkStyle": "貼圖示記風格偏好",
       "previewLighting": "3D 預覽簡易渲染模式",
-      "d3d11Source": "d3d11.dll 來源",
       "launchMode": "啟動方式偏好",
       "huntingMode": "Hunting 顯示模式",
       "showWarnings": "顯示左上角警告",

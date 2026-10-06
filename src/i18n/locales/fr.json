@@ -76,7 +76,7 @@
     "tabs": {
       "basic": "Paramètres de base",
       "migoto": "Paramètres 3DMigoto",
-      "dllUpdate": "Mises à jour de d3d11.dll",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "Mises à jour de 3Dmigoto Package",
       "other": "Autres paramètres"
     },
@@ -124,8 +124,6 @@
       "autoExitSeconds": "Délai avant fermeture automatique (s)",
       "extraInjectedDll": "DLL injectée supplémentaire",
       "options": "Autres options",
-      "dllSource": "Source de d3d11.dll",
-      "dllSourceHint": "Dev utilise SpectrumQT/XXMI-Libs-Package, Play utilise Doodle et ssice-a utilise ssice-a/XXMI-Libs-Package. Après la première installation, la DLL est mise en cache localement ; les changements de mode suivants ne remplacent que ce fichier en cache. Le préréglage NTEMI impose toujours ssice-a.",
       "currentInstalledDllVersion": "Version actuellement installée",
       "noDllVersionInstalled": "Aucune version installée enregistrée",
       "availableDllVersions": "Versions disponibles à l’installation",
@@ -157,11 +155,6 @@
       "wwmiDisableWoundedFxHint": "Définit SkinDamageMode sur Off avant le lancement afin d’éviter les problèmes de texture après avoir subi des dégâts."
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev (XXMI-Libs-Package)",
-        "play": "Play (Doodle)",
-        "ssiceA": "ssice-a (XXMI-Libs-Package)"
-      },
       "backgroundUpdateMode": {
         "manual": "Manuel",
         "auto": "Automatique"
@@ -452,7 +445,6 @@
       "altF": "Activer le raccourci de fenêtre Alt+F",
       "textureMarkStyle": "Style de marquage des textures",
       "previewLighting": "Rendu simple de l’aperçu 3D",
-      "d3d11Source": "Source de d3d11.dll",
       "launchMode": "Méthode de lancement préférée",
       "huntingMode": "Affichage du mode de chasse",
       "showWarnings": "Afficher les avertissements en haut à gauche",

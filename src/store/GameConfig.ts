@@ -6,7 +6,6 @@ import { moveDirectoryToRecycleBin } from "../utils/RecycleBin";
 import { isValidGamePreset, resolveGamePresetByGameName } from "./GamePreset";
 
 export type HuntingMode = '0' | '1' | '2'
-export type D3d11Mode = 'dev' | 'play' | 'ssice-a'
 
 export interface LaunchProgramConfig {
     exePath?: string;
@@ -77,32 +76,6 @@ const normalizeExtraDlls = (value: unknown, legacyExtraDll?: unknown): string[] 
     return legacy ? [legacy] : []
 }
 
-const FORCED_D3D11_MODE_BY_PRESET: Readonly<Record<string, D3d11Mode>> = {
-    NTEMI: 'ssice-a',
-}
-
-export const getForcedD3d11ModeByGamePreset = (gamePreset: unknown): D3d11Mode | null => {
-    const normalizedPreset = typeof gamePreset === 'string' ? gamePreset.trim().toUpperCase() : ''
-    return FORCED_D3D11_MODE_BY_PRESET[normalizedPreset] ?? null
-}
-
-export const normalizeD3d11Mode = (value: unknown, gamePreset?: unknown): D3d11Mode => {
-    const forcedMode = getForcedD3d11ModeByGamePreset(gamePreset)
-    if (forcedMode) {
-        return forcedMode
-    }
-
-    if (value === 'play') {
-        return 'play'
-    }
-
-    if (value === 'ssice-a') {
-        return 'ssice-a'
-    }
-
-    return 'dev'
-}
-
 export type GameConfig = {
     gamePreset?: string;
     logicName?: string;
@@ -110,8 +83,6 @@ export type GameConfig = {
     packageReleaseDescription?: string;
     backgroundType?: string;
     pureMode?: boolean;
-    checkDllUpdateBeforeLaunch?: boolean;
-    allowDllUpdates?: boolean;
     check3DmigotoPackageUpdateBeforeLaunch?: boolean;
     includePrereleaseUpdates?: boolean;
     installDir?: string;
@@ -129,7 +100,6 @@ export type GameConfig = {
      * When false/undefined, GIMI defaults to UPX and preset changes may auto-select UPX.
      */
     useUpxManuallySet?: boolean;
-    d3d11Mode?: D3d11Mode;
     delay?: number;
     autoExitSeconds?: number;
     extraDll?: string;
@@ -205,16 +175,17 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
     }
 
     function normalizeConfig(config: GameConfig): GameConfig {
+        // 旧版本的 DLL 来源与更新开关不再参与启动，也不写回新配置。
+        const { d3d11Mode: _legacyMode, allowDllUpdates: _legacyUpdates,
+            checkDllUpdateBeforeLaunch: _legacyCheck, ...currentConfig } = config
         const extraDlls = normalizeExtraDlls(config.extraDlls, config.extraDll)
         const extraDll = extraDlls[0] || ''
         const useUpxManuallySet = config.useUpxManuallySet === true
         const useUpx = getEffectiveUseUpx(config)
 
         return {
-            ...config,
+            ...currentConfig,
             huntingMode: normalizeHuntingMode(config.huntingMode),
-            d3d11Mode: normalizeD3d11Mode(config.d3d11Mode, config.gamePreset),
-            allowDllUpdates: config.allowDllUpdates !== false,
             launchTargetProgram: config.launchTargetProgram !== false,
             useUpx,
             useUpxManuallySet,
@@ -249,8 +220,6 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             packageReleaseDescription: '',
             backgroundType: 'Image',
             pureMode: false,
-            checkDllUpdateBeforeLaunch: true,
-            allowDllUpdates: true,
             check3DmigotoPackageUpdateBeforeLaunch: true,
             includePrereleaseUpdates: true,
             installDir: '',
@@ -261,7 +230,6 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             showErrorPopup: true,
             autoSetAnalyseOptions: true,
             huntingMode: '2',
-            d3d11Mode: 'dev',
             useShell: false,
             useUpx: false,
             useUpxManuallySet: false,

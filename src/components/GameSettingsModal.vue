@@ -9,7 +9,7 @@ import { ResourceManager, type UpdateInfo } from '../store/ResourceManager';
 import { PathHelper } from '../helper/PathHelper';
 import { GlobalConfig } from '../store/GlobalConfig';
 import { AUTO_UPDATE_SUPPORTED_PRESET_SET, getGamePresetDisplayName, getGamePresetOptions, getGithubRepoByGamePreset } from '../store/GamePreset';
-import { GameConfig, GameConfigManager, getDefaultUseUpxForGamePreset, type D3d11Mode, type LaunchProgramConfig } from '../store/GameConfig';
+import { GameConfig, GameConfigManager, getDefaultUseUpxForGamePreset, type LaunchProgramConfig } from '../store/GameConfig';
 import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { exists, mkdir } from '@tauri-apps/plugin-fs';
 import { useI18n } from 'vue-i18n';
@@ -63,7 +63,6 @@ const isDllReleaseLoading = ref(false);
 const dllReleaseList = ref<UpdateInfo[]>([]);
 const dllReleaseListError = ref('');
 const dllReleaseListLoaded = ref(false);
-const installingDllVersion = ref('');
 const isPackageReleaseLoading = ref(false);
 const autoMatchingExeField = ref<'targetExePath' | 'launcherExePath' | null>(null);
 const packageReleaseList = ref<UpdateInfo[]>([]);
@@ -117,64 +116,7 @@ const tabs = computed(() => [
   { id: 'other', label: t('gameSettingsModal.tabs.other') },
 ]);
 
-const isForcedSsiceADllMode = computed(() => (config.gamePreset || '').trim().toUpperCase() === 'NTEMI');
 const isWWMIPreset = computed(() => (config.gamePreset || '').trim().toUpperCase() === 'WWMI');
-const currentDllMode = computed<D3d11Mode>(() => ResourceManager.getEffectiveD3d11Mode(config));
-const CAPPED_DEV_D3D11_PRESETS = new Set(['IDENTITYV', 'NARAKA', 'NARAKAM']);
-const isCappedDevD3d11Mode = (mode: D3d11Mode): boolean => (
-  mode === 'dev' && CAPPED_DEV_D3D11_PRESETS.has((config.gamePreset || '').trim().toUpperCase())
-);
-const isCappedDevD3d11ModeRestricted = computed(() => isCappedDevD3d11Mode(currentDllMode.value));
-const getStoredDllVersion = (mode: D3d11Mode): string => {
-  if (isCappedDevD3d11Mode(mode)) {
-    return (appSettings.coreVersionIdentityVDev || '').trim();
-  }
-  if (mode === 'play') {
-    return (appSettings.coreVersionPlay || '').trim();
-  }
-
-  if (mode === 'ssice-a') {
-    return (appSettings.coreVersionSsiceA || '').trim();
-  }
-
-  return (appSettings.coreVersionDev || appSettings.coreVersion || '').trim();
-};
-
-const setStoredDllVersion = (mode: D3d11Mode, info: UpdateInfo) => {
-  if (isCappedDevD3d11Mode(mode)) {
-    appSettings.coreVersionIdentityVDev = info.version;
-    appSettings.coreReleaseDescriptionIdentityVDev = info.description;
-  } else if (mode === 'play') {
-    appSettings.coreVersionPlay = info.version;
-    appSettings.coreReleaseDescriptionPlay = info.description;
-  } else if (mode === 'ssice-a') {
-    appSettings.coreVersionSsiceA = info.version;
-    appSettings.coreReleaseDescriptionSsiceA = info.description;
-  } else {
-    appSettings.coreVersionDev = info.version;
-    appSettings.coreReleaseDescriptionDev = info.description;
-  }
-
-  // These legacy fields mirror the shared DLL selection. Capped presets own a
-  // separate cache and must not change the version seen by other games.
-  if (!isCappedDevD3d11Mode(mode)) {
-    appSettings.coreVersion = info.version;
-    appSettings.coreReleaseDescription = info.description;
-  }
-};
-
-const currentCoreVersion = computed(() => getStoredDllVersion(currentDllMode.value));
-const dllSourceOptions = computed(() => {
-  const options = [
-    { value: 'dev' as const, label: t('gameSettingsModal.options.d3d11Source.dev') },
-    { value: 'play' as const, label: t('gameSettingsModal.options.d3d11Source.play') },
-    { value: 'ssice-a' as const, label: t('gameSettingsModal.options.d3d11Source.ssiceA') },
-  ];
-
-  return isForcedSsiceADllMode.value
-    ? options.filter(item => item.value === 'ssice-a')
-    : options;
-});
 const visibleDllReleaseList = computed(() => dllReleaseList.value.slice(0, dllVisibleCount.value));
 const hasMoreDllReleases = computed(() => dllReleaseList.value.length > dllVisibleCount.value);
 const currentPackageVersion = computed(() => (config.packageVersion || '').trim());
@@ -532,49 +474,7 @@ const resetPackageReleaseListState = () => {
   packageVisibleCount.value = PACKAGE_RELEASE_PAGE_SIZE;
 };
 
-const checkD3D11DllUpdate = async (mode: D3d11Mode = currentDllMode.value): Promise<boolean> => {
-  if (config.allowDllUpdates === false) {
-    ElMessage.warning(t('gameSettingsModal.messages.dllUpdatesRejected'));
-    return false;
-  }
-  const unlisten = setupBlurNotification(t('gameSettingsModal.messages.confirmCheckDllUpdate'));
-  try {
-    await ElMessageBox.confirm(
-      t('gameSettingsModal.messages.confirmCheckDllUpdate'),
-      t('gameSettingsModal.messages.checkForUpdatesTitle'),
-      {
-        confirmButtonText: t('gameSettingsModal.common.confirm'),
-        cancelButtonText: t('gameSettingsModal.common.cancel'),
-        type: 'info'
-      }
-    );
-  } catch {
-    return false;
-  } finally {
-    unlisten();
-  }
-
-  try {
-    isLoading.value = true;
-
-    const info = await ResourceManager.getD3d11LatestRelease(
-      mode,
-      appSettings.githubToken,
-      config.includePrereleaseUpdates ?? appSettings.includePrereleaseUpdates,
-      config.gamePreset,
-    );
-
-    return await installDllUpdateFromInfo(info, mode);
-  } catch (e) {
-    console.error(e);
-    ElMessage.error(t('gameSettingsModal.messages.operationFailed', { error: String(e) }));
-    return false;
-  } finally {
-    isLoading.value = false;
-  }
-};
-
-const loadDllReleaseList = async (force = false, mode: D3d11Mode = currentDllMode.value) => {
+const loadDllReleaseList = async (force = false) => {
   if (dllReleaseListLoaded.value && !force) {
     return;
   }
@@ -583,11 +483,9 @@ const loadDllReleaseList = async (force = false, mode: D3d11Mode = currentDllMod
   dllReleaseListError.value = '';
 
   try {
-    const releases = await ResourceManager.getD3d11ReleaseList(
-      mode,
+    const releases = await ResourceManager.getXXMILibsReleaseList(
       appSettings.githubToken,
       config.includePrereleaseUpdates ?? appSettings.includePrereleaseUpdates,
-      config.gamePreset,
     );
 
     dllReleaseList.value = releases;
@@ -602,7 +500,7 @@ const loadDllReleaseList = async (force = false, mode: D3d11Mode = currentDllMod
 };
 
 const refreshDllReleaseList = async () => {
-  await loadDllReleaseList(true, currentDllMode.value);
+  await loadDllReleaseList(true);
 };
 
 const loadMoreDllReleases = () => {
@@ -691,72 +589,6 @@ const installPackageUpdateFromInfo = async (info: UpdateInfo): Promise<boolean> 
     return false;
   } finally {
     isLoading.value = false;
-  }
-};
-
-const installDllUpdateFromInfo = async (info: UpdateInfo, mode: D3d11Mode = currentDllMode.value): Promise<boolean> => {
-  if (config.allowDllUpdates === false) {
-    ElMessage.warning(t('gameSettingsModal.messages.dllUpdatesRejected'));
-    return false;
-  }
-
-  if (!ResourceManager.isD3d11VersionAllowedForMode(info.version, mode, config.gamePreset)) {
-    ElMessage.warning(
-      t('gameSettingsModal.messages.identityVDllVersionBlocked', {
-        version: info.version,
-        maxVersion: ResourceManager.getCappedDevD3d11MaxVersion(),
-      }),
-    );
-    return false;
-  }
-  isLoading.value = false;
-
-  const msg = t('gameSettingsModal.messages.newDllVersionFound', { version: info.version });
-  const unlisten = setupBlurNotification(msg);
-  try {
-    await ElMessageBox.confirm(
-      buildReleaseNotesConfirmMessage('gameSettingsModal.messages.newDllVersionFound', info.version, info.description),
-      t('gameSettingsModal.messages.dllVersionDetailsTitle'),
-      {
-        confirmButtonText: t('gameSettingsModal.common.update'),
-        cancelButtonText: t('gameSettingsModal.common.cancel'),
-        type: 'info'
-      }
-    );
-  } catch {
-    return false;
-  } finally {
-    unlisten();
-  }
-
-  try {
-    isLoading.value = true;
-    await ResourceManager.installD3d11Update(mode, info.download_url, config.gamePreset, info.version);
-    setStoredDllVersion(mode, info);
-
-    ElMessage.success(t('gameSettingsModal.messages.dllUpdateSuccess', { version: info.version }));
-    return true;
-  } catch (e) {
-    console.error(e);
-    ElMessage.error(t('gameSettingsModal.messages.operationFailed', { error: String(e) }));
-    return false;
-  } finally {
-    isLoading.value = false;
-  }
-};
-
-const installSelectedDllVersion = async (info: UpdateInfo): Promise<boolean> => {
-  installingDllVersion.value = info.version;
-  try {
-    const updated = await installDllUpdateFromInfo(info);
-    if (updated) {
-      dllReleaseListError.value = '';
-    }
-    return updated;
-  } finally {
-    if (installingDllVersion.value === info.version) {
-      installingDllVersion.value = '';
-    }
   }
 };
 
@@ -978,8 +810,6 @@ watch(() => props.modelValue, (val) => {
   if (val) {
     activeTab.value = 'basic'; // Reset to first tab
     void refreshOptionalPluginSections();
-    // Release candidates are game-specific (IdentityV/Naraka/NarakaM in particular cap the
-    // Dev DLL at v0.9.2), so never reuse another game's cached list.
     resetDllReleaseListState();
     resetPackageReleaseListState();
     void loadConfig();
@@ -993,7 +823,7 @@ watch(() => props.modelValue, (val) => {
 
 watch(activeTab, (tabId) => {
   if (tabId === 'dllUpdate') {
-    void loadDllReleaseList(false, currentDllMode.value);
+    void loadDllReleaseList(false);
   } else if (tabId === 'packageUpdate') {
     void loadPackageReleaseList(false);
   }
@@ -1015,11 +845,6 @@ watch(
 watch(
   () => config.gamePreset,
   (_newPreset, oldPreset) => {
-    const normalizedMode = ResourceManager.getEffectiveD3d11Mode(config);
-    if (config.d3d11Mode !== normalizedMode) {
-      config.d3d11Mode = normalizedMode;
-    }
-
     // GIMI defaults to UPX until the user has explicitly picked a DLL packing option.
     if (getDefaultUseUpxForGamePreset(_newPreset) && !config.useUpxManuallySet) {
       config.useUpx = true;
@@ -1030,41 +855,11 @@ watch(
       resetPackageReleaseListState();
 
       if (props.modelValue && activeTab.value === 'dllUpdate') {
-        void loadDllReleaseList(true, normalizedMode);
+        void loadDllReleaseList(true);
       }
       if (props.modelValue && activeTab.value === 'packageUpdate') {
         void loadPackageReleaseList(true);
       }
-    }
-  }
-);
-
-watch(
-  () => config.d3d11Mode,
-  (newMode, oldMode) => {
-    const normalizedNewMode = ResourceManager.getEffectiveD3d11Mode({
-      ...config,
-      d3d11Mode: newMode,
-    });
-    const normalizedOldMode = ResourceManager.getEffectiveD3d11Mode({
-      ...config,
-      d3d11Mode: oldMode,
-    });
-
-    if (config.d3d11Mode !== normalizedNewMode) {
-      config.d3d11Mode = normalizedNewMode;
-      return;
-    }
-
-    if (normalizedNewMode === normalizedOldMode) {
-      return;
-    }
-
-    resetDllReleaseListState();
-    void saveConfig();
-
-    if (props.modelValue && activeTab.value === 'dllUpdate') {
-      void loadDllReleaseList(true, normalizedNewMode);
     }
   }
 );
@@ -1078,22 +873,12 @@ defineExpose({
   switchTab: (tabId: string) => {
     activeTab.value = tabId;
   },
-  runDllUpdate: async (mode?: D3d11Mode) => {
-    activeTab.value = 'dllUpdate';
-    await loadConfig();
-    return checkD3D11DllUpdate(mode);
-  },
   runPackageUpdate: async () => {
     // Ensure we are on the right tab visually
     activeTab.value = '3dmigoto';
     await loadConfig();
     // Run the update check
     return check3DMigotoPackageUpdate();
-  },
-  installDllUpdateWithInfo: async (info: UpdateInfo) => {
-    activeTab.value = 'dllUpdate';
-    await loadConfig();
-    return installDllUpdateFromInfo(info);
   },
   installPackageUpdateWithInfo: async (info: UpdateInfo) => {
     activeTab.value = '3dmigoto';
@@ -1102,10 +887,6 @@ defineExpose({
   },
   runPackageUpdateDirect: async () => {
     await loadConfig();
-    const dllUpdated = await checkD3D11DllUpdate();
-    if (!dllUpdated) {
-      return false;
-    }
     return check3DMigotoPackageUpdate();
   }
 });
@@ -1469,10 +1250,6 @@ defineExpose({
                   {{ t('gameSettingsModal.fields.autoSetAnalyseOptions') }}
                 </label>
                 <label class="settings-toggle-label">
-                  <input type="checkbox" v-model="config.checkDllUpdateBeforeLaunch" @change="saveConfig" />
-                  {{ t('gameSettingsModal.fields.checkDllUpdateBeforeLaunch') }}
-                </label>
-                <label class="settings-toggle-label">
                   <input type="checkbox" v-model="config.check3DmigotoPackageUpdateBeforeLaunch" @change="saveConfig" />
                   {{ t('gameSettingsModal.fields.check3DmigotoPackageUpdateBeforeLaunch') }}
                 </label>
@@ -1547,45 +1324,8 @@ defineExpose({
             </div>
 
             <div v-if="activeTab === 'dllUpdate'" class="tab-pane">
-              <div class="settings-toggle-row-inline dll-update-permission">
-                <div class="settings-toggle-row-info">
-                  <span class="settings-toggle-row-title">{{ t('gameSettingsModal.fields.allowDllUpdates') }}</span>
-                  <span class="settings-toggle-row-hint">{{ t('gameSettingsModal.fields.allowDllUpdatesHint') }}</span>
-                </div>
-                <el-checkbox v-model="config.allowDllUpdates" @change="saveConfig">
-                  {{ t('gameSettingsModal.fields.allowDllUpdatesCheckbox') }}
-                </el-checkbox>
-              </div>
-
-              <!-- Capped dev d3d11.dll version cap notice -->
-              <div v-if="isCappedDevD3d11ModeRestricted" class="dll-cap-hint">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="10"/>
-                  <line x1="12" y1="8" x2="12" y2="12"/>
-                  <line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                <span>
-                  {{ t('gameSettingsModal.fields.identityVDllVersionCapHint', {
-                    maxVersion: ResourceManager.getCappedDevD3d11MaxVersion(),
-                  }) }}
-                </span>
-              </div>
-
-              <!-- Top info bar: source selector + current version -->
-              <div class="dll-top-bar">
-                <div class="dll-source-group">
-                  <div class="dll-source-label-row">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-                    </svg>
-                    <span class="dll-source-label">{{ t('gameSettingsModal.fields.dllSource') }}</span>
-                  </div>
-                  <el-select v-model="config.d3d11Mode" :disabled="isForcedSsiceADllMode" class="custom-select" @change="saveConfig">
-                    <el-option v-for="item in dllSourceOptions" :key="item.value" :label="item.label" :value="item.value" />
-                  </el-select>
-                  <div class="dll-source-hint">{{ t('gameSettingsModal.fields.dllSourceHint') }}</div>
-                </div>
-
+              <!-- SSMT Runtime is bundled with SSMT; upstream notes are read-only. -->
+              <div class="dll-top-bar runtime-top-bar">
                 <div class="dll-version-badge">
                   <div class="dll-version-badge-inner">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1593,8 +1333,8 @@ defineExpose({
                       <polyline points="17 6 23 6 23 12"/>
                     </svg>
                     <div class="dll-version-badge-info">
-                      <span class="dll-version-badge-label">{{ t('gameSettingsModal.fields.currentInstalledDllVersion') }}</span>
-                      <span class="dll-version-badge-value">{{ currentCoreVersion || t('gameSettingsModal.fields.noDllVersionInstalled') }}</span>
+                      <span class="dll-version-badge-label">{{ t('gameSettingsModal.fields.ssmtRuntime') }}</span>
+                      <span class="dll-version-badge-value">{{ t('gameSettingsModal.fields.ssmtRuntimeHint') }}</span>
                     </div>
                   </div>
                 </div>
@@ -1607,9 +1347,9 @@ defineExpose({
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                     </svg>
-                    <span class="dll-release-section-title">{{ t('gameSettingsModal.fields.availableDllVersions') }}</span>
+                    <span class="dll-release-section-title">{{ t('gameSettingsModal.fields.xxmiRuntimeChangelog') }}</span>
                   </div>
-                  <span class="dll-release-section-subtitle">{{ t('gameSettingsModal.fields.availableDllVersionsHint') }}</span>
+                  <span class="dll-release-section-subtitle">{{ t('gameSettingsModal.fields.xxmiRuntimeChangelogHint') }}</span>
                 </div>
 
                 <div class="dll-release-toolbar">
@@ -1651,8 +1391,7 @@ defineExpose({
 
                 <!-- Release cards -->
                 <div v-else class="dll-release-list">
-                  <div v-for="item in visibleDllReleaseList" :key="item.version" class="dll-release-card"
-                    :class="{ 'dll-release-card-installed': item.version === currentCoreVersion }">
+                  <div v-for="item in visibleDllReleaseList" :key="item.version" class="dll-release-card">
                     <div class="dll-release-card-top">
                       <div class="dll-release-card-info">
                         <div class="dll-release-version-row">
@@ -1664,33 +1403,12 @@ defineExpose({
                             {{ t('gameSettingsModal.fields.prereleaseLabel') }}
                           </span>
                         </div>
-                        <span v-if="item.version === currentCoreVersion" class="dll-release-installed-tag">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="20 6 9 17 4 12"/>
-                          </svg>
-                          {{ t('gameSettingsModal.fields.currentInstalledLabel') }}
-                        </span>
                       </div>
                       <ReleaseNotesMarkdown
                         class="dll-release-description"
                         :content="item.description"
                         compact
                       />
-                    </div>
-                    <div class="dll-release-card-actions">
-                      <button
-                        class="dll-install-btn"
-                        @click="installSelectedDllVersion(item)"
-                        :disabled="config.allowDllUpdates === false || isLoading || isDllReleaseLoading || installingDllVersion === item.version"
-                      >
-                        <svg v-if="installingDllVersion !== item.version" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                          <polyline points="7 10 12 15 17 10"/>
-                          <line x1="12" y1="15" x2="12" y2="3"/>
-                        </svg>
-                        <span v-if="installingDllVersion === item.version" class="dll-install-spinner"></span>
-                        {{ installingDllVersion === item.version ? t('gameSettingsModal.actions.installingVersion') : t('gameSettingsModal.actions.installThisVersion') }}
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -2292,12 +2010,20 @@ defineExpose({
 
 /* ===== DLL Update Tab ===== */
 
-/* Top info bar: source + version side by side */
+/* Top info bar */
 .dll-top-bar {
   display: flex;
   gap: 14px;
   margin-bottom: 18px;
   align-items: stretch;
+}
+
+.runtime-top-bar .dll-version-badge {
+  flex: 1;
+}
+
+.runtime-top-bar .dll-version-badge-value {
+  white-space: normal;
 }
 
 .dll-source-group {
@@ -2441,27 +2167,6 @@ defineExpose({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* Capped dev d3d11.dll version cap notice */
-.dll-cap-hint {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  margin-bottom: 14px;
-  border-radius: 8px;
-  background: rgba(255, 186, 88, 0.09);
-  border: 1px solid rgba(255, 186, 88, 0.26);
-  color: rgba(var(--theme-text-primary-rgb), 0.86);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.dll-cap-hint svg {
-  flex-shrink: 0;
-  margin-top: 1px;
-  color: #ffb95c;
 }
 
 /* Release section */

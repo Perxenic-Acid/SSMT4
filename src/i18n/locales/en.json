@@ -113,7 +113,7 @@
     "tabs": {
       "basic": "Basic Settings",
       "migoto": "3DMigoto Settings",
-      "dllUpdate": "d3d11.dll Updates",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "3Dmigoto Package Updates",
       "other": "Other Settings"
     },
@@ -183,11 +183,13 @@
       "autoExitSeconds": "Auto Exit Seconds (Auto Exit s)",
       "extraInjectedDll": "Extra Injected DLL",
       "options": "Options",
-      "dllSource": "d3d11.dll Source",
-      "dllSourceHint": "Dev uses SpectrumQT/XXMI-Libs-Package, Play uses Doodle, and ssice-a uses ssice-a/XXMI-Libs-Package. After the first install, the DLL is cached locally and later mode switches only replace the local cached file. NTEMI is always forced to use ssice-a.",
       "currentInstalledDllVersion": "Currently Installed Version",
       "noDllVersionInstalled": "No installed version is recorded",
       "availableDllVersions": "Available Version List",
+      "ssmtRuntime": "SSMT Runtime",
+      "ssmtRuntimeHint": "Bundled with SSMT and updated with the application.",
+      "xxmiRuntimeChangelog": "XXMI Runtime changelog",
+      "xxmiRuntimeChangelogHint": "Upstream release notes for reference only; these builds are not installed by SSMT.",
       "availableDllVersionsHint": "Fetched from GitHub Releases. You can install any listed version directly. The newest 10 versions are shown first.",
       "identityVDllVersionCapHint": "With the current preset, d3d11.dll is capped at v{maxVersion}. Newer versions can cause problems, so versions above v{maxVersion} are not offered for download.",
       "packageSource": "3Dmigoto Package Source",
@@ -216,11 +218,6 @@
       "wwmiDisableWoundedFxHint": "Set SkinDamageMode to Off before launch to avoid texture issues after taking damage."
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev (XXMI-Libs-Package)",
-        "play": "Play (Doodle)",
-        "ssiceA": "ssice-a (XXMI-Libs-Package)"
-      },
       "backgroundUpdateMode": {
         "manual": "Manual",
         "auto": "Auto"
@@ -557,7 +554,6 @@
       "altF": "Enable Alt+F Window Shortcut",
       "textureMarkStyle": "Texture Marking Style",
       "previewLighting": "Simple 3D Preview Rendering",
-      "d3d11Source": "d3d11.dll Source",
       "launchMode": "Preferred Launch Method",
       "huntingMode": "Hunting Display Mode",
       "showWarnings": "Show Top-left Warnings",
@@ -1584,6 +1580,7 @@
       "installDirNotConfigured": "3Dmigoto install directory is not configured",
       "iniNotFoundAt": "d3dx.ini not found at {path}",
       "d3d11SourceMissingForMode": "The {mode} mode d3d11.dll source file is missing: {path}",
+      "ssmtRuntimeSourceMissing": "SSMT Runtime file is missing: {path}",
       "specificIbDumpRequiresDrawIbs": "Please add at least one DrawIB before enabling specific IB dump mode",
       "specificIbDumpUnsupportedLogic": "The current logic {logicName} does not support specific IB dump mode"
     }

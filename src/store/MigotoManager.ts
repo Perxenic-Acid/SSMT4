@@ -4,7 +4,7 @@ import { D3dxIniManager } from './D3dxIniManager'
 import { ResourceManager } from './ResourceManager'
 import { PathHelper } from '../helper/PathHelper'
 import { i18n } from '../i18n'
-import type { D3d11Mode, GameConfig, HuntingMode } from './GameConfig'
+import type { GameConfig, HuntingMode } from './GameConfig'
 
 const t = i18n.global.t
 
@@ -57,7 +57,6 @@ export interface ThreeDMigotoConfig {
   extraDlls?: string[]
   autoExitSeconds?: number
   useUpx?: boolean
-  d3d11Mode?: D3d11Mode
 }
 
 export interface SpecificIbDumpOptions {
@@ -132,10 +131,6 @@ const buildSpecificIbDumpConfigContent = (drawIbs: string[], logicName: string, 
 }
 
 export class MigotoManager {
-  static getEffectiveD3d11Mode(config?: Pick<ThreeDMigotoConfig, 'd3d11Mode' | 'gamePreset'> | null): D3d11Mode {
-    return ResourceManager.getEffectiveD3d11Mode(config)
-  }
-
   static async resolveMigotoDir(_gameName: string, _cfg: ThreeDMigotoConfig): Promise<string> {
     const resolved = await PathHelper.GetCurrentGame3DmigotoFolderPath()
     if (resolved && resolved.trim()) return resolved
@@ -150,15 +145,14 @@ export class MigotoManager {
     return exists(d3dxPath)
   }
 
-  static async applyD3d11ModeToMigotoDir(gameName: string, migotoDir: string, config?: GameConfig): Promise<D3d11Mode> {
+  static async applySSMTRuntimeToMigotoDir(gameName: string, migotoDir: string, config?: GameConfig): Promise<void> {
     const effectiveConfig = config || await ResourceManager.loadGameConfig(gameName)
     const dllSource = await ResourceManager.resolveMigotoDllSource(effectiveConfig)
-    const mode = dllSource.mode
     const sourcePath = dllSource.sourcePath
     const destPath = await join(migotoDir, dllSource.targetFileName)
 
     if (!(await exists(sourcePath))) {
-      throw new Error(t('migotoManager.messages.d3d11SourceMissingForMode', { mode: dllSource.label, path: sourcePath }))
+      throw new Error(t('migotoManager.messages.ssmtRuntimeSourceMissing', { path: sourcePath }))
     }
 
     const stagingPath = `${destPath}.ssmt-staging-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -195,27 +189,6 @@ export class MigotoManager {
       throw error
     }
 
-    return mode
-  }
-
-  static async applySelectedD3d11Mode(gameName: string): Promise<D3d11Mode> {
-    const gameConfig = await ResourceManager.loadGameConfig(gameName)
-    const cfg = gameConfig || {}
-    const migotoDir = await this.resolveMigotoDir(gameName, cfg)
-    return this.applyD3d11ModeToMigotoDir(gameName, migotoDir, cfg)
-  }
-
-  static async switchD3d11Mode(gameName: string, mode: D3d11Mode): Promise<D3d11Mode> {
-    const gameConfig = await ResourceManager.loadGameConfig(gameName)
-    const nextConfig = {
-      ...gameConfig,
-      d3d11Mode: mode,
-    }
-
-    const migotoDir = await this.resolveMigotoDir(gameName, nextConfig)
-    const appliedMode = await this.applyD3d11ModeToMigotoDir(gameName, migotoDir, nextConfig)
-    await ResourceManager.saveGameConfig(gameName, nextConfig)
-    return appliedMode
   }
 
   /**

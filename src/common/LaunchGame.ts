@@ -316,49 +316,14 @@ export class LaunchGame {
         return programs;
     }
 
-    private static async ensureXXMILibsReady(
-        gameName: string,
-        onNeedsDllUpdate?: () => Promise<boolean | void>,
-    ): Promise<boolean> {
+    private static async ensureSSMTRuntimeReady(gameName: string): Promise<boolean> {
         const missingFiles =
-            await ResourceManager.getMissingXXMILibsFiles(gameName);
+            await ResourceManager.getMissingSSMTRuntimeFiles(gameName);
         if (missingFiles.length === 0) {
             return true;
         }
-
-        try {
-            await ElMessageBox.confirm(
-                t("launchGame.messages.missingDllPackageConfirmContent", {
-                    files: missingFiles.join(", "),
-                }),
-                t("launchGame.messages.missingDllPackageTitle"),
-                {
-                    confirmButtonText: t("launchGame.common.checkUpdate"),
-                    cancelButtonText: t("launchGame.common.cancel"),
-                    type: "warning",
-                },
-            );
-        } catch {
-            return false;
-        }
-
-        const updateHandled = await onNeedsDllUpdate?.();
-        if (updateHandled === false) {
-            return false;
-        }
-
-        const missingAfterUpdate =
-            await ResourceManager.getMissingXXMILibsFiles(gameName);
-        if (missingAfterUpdate.length > 0) {
-            ElMessage.error(
-                t("launchGame.messages.missingDllPackageStillMissing", {
-                    files: missingAfterUpdate.join(", "),
-                }),
-            );
-            return false;
-        }
-
-        return true;
+        ElMessage.error(`SSMT Runtime 缺少文件：${missingFiles.join(", ")}`);
+        return false;
     }
 
     static async resolveMigotoDirForLaunch(
@@ -527,7 +492,7 @@ export class LaunchGame {
             return null;
         }
 
-        // Initialize Migoto environment and apply the selected d3d11 mode before launch.
+        // 启动前将随应用提供的 SSMT Runtime 部署到 Migoto 目录。
         // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
         const useUpx = getEffectiveUseUpx(migotoCfg);
         await this.prepareGameEnvironment(
@@ -553,7 +518,6 @@ export class LaunchGame {
         appSettings: AppSettings,
         onNeedsUpdate: () => Promise<boolean | void> | boolean | void,
         onNeedsConfigureProcessPath?: () => void,
-        onNeedsDllUpdate?: () => Promise<boolean | void>,
         ctrlPressed = false,
     ): Promise<void> {
         let managedStagedTarget: string | null = null;
@@ -567,10 +531,7 @@ export class LaunchGame {
                 (await ResourceManager.loadGameConfig(gameName))?.launchTargetProgram !== false;
             const libsReady = pureDirectLaunch
                 ? true
-                : await this.ensureXXMILibsReady(
-                      gameName,
-                      onNeedsDllUpdate,
-                  );
+                : await this.ensureSSMTRuntimeReady(gameName);
             if (!libsReady) return;
 
             const preflight = await this.prepareLaunch(
@@ -930,7 +891,7 @@ export class LaunchGame {
                 }
             }
 
-            await MigotoManager.applyD3d11ModeToMigotoDir(
+            await MigotoManager.applySSMTRuntimeToMigotoDir(
                 gameName,
                 migotoPath,
                 config,

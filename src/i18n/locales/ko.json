@@ -78,7 +78,7 @@
     "tabs": {
       "basic": "기본 설정",
       "migoto": "3DMigoto 설정",
-      "dllUpdate": "d3d11.dll 업데이트",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "3Dmigoto Package 업데이트",
       "other": "기타 설정"
     },
@@ -126,8 +126,6 @@
       "autoExitSeconds": "자동 종료 시간(초)",
       "extraInjectedDll": "추가 주입 DLL",
       "options": "기타 옵션",
-      "dllSource": "d3d11.dll 소스",
-      "dllSourceHint": "Dev는 SpectrumQT/XXMI-Libs-Package, Play는 Doodle, ssice-a는 ssice-a/XXMI-Libs-Package를 사용합니다. 최초 설치 후 DLL은 로컬에 캐시되며 이후 모드 전환 시 로컬 캐시 파일만 교체됩니다. NTEMI 프리셋은 항상 ssice-a를 강제로 사용합니다.",
       "currentInstalledDllVersion": "현재 설치된 버전",
       "noDllVersionInstalled": "설치된 버전 기록 없음",
       "availableDllVersions": "설치 가능한 버전",
@@ -159,11 +157,6 @@
       "wwmiDisableWoundedFxHint": "실행 전에 SkinDamageMode를 Off로 설정하여 피격 후 텍스처 문제를 방지합니다."
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev (XXMI-Libs-Package)",
-        "play": "Play (Doodle)",
-        "ssiceA": "ssice-a (XXMI-Libs-Package)"
-      },
       "backgroundUpdateMode": {
         "manual": "수동",
         "auto": "자동"
@@ -454,7 +447,6 @@
       "altF": "Alt+F 창 호출 단축키 활성화",
       "textureMarkStyle": "텍스처 마킹 스타일",
       "previewLighting": "간단한 3D 미리보기 렌더링",
-      "d3d11Source": "d3d11.dll 소스",
       "launchMode": "선호 실행 방식",
       "huntingMode": "사냥 모드 표시 설정",
       "showWarnings": "왼쪽 위 경고 표시",

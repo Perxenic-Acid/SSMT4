@@ -112,7 +112,7 @@
     "tabs": {
       "basic": "基础设置",
       "migoto": "3DMigoto 设置",
-      "dllUpdate": "d3d11.dll更新",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "3Dmigoto Package更新",
       "other": "其他设置"
     },
@@ -182,11 +182,13 @@
       "autoExitSeconds": "自动退出秒数",
       "extraInjectedDll": "额外注入 DLL",
       "options": "其他选项",
-      "dllSource": "d3d11.dll 来源",
-      "dllSourceHint": "Dev 使用 SpectrumQT/XXMI-Libs-Package，Play 使用 Doodle，ssice-a 使用 ssice-a/XXMI-Libs-Package。首次安装后会缓存到本地，后续切换只替换本地缓存文件。NTEMI 预设会强制使用 ssice-a。",
       "currentInstalledDllVersion": "当前已安装版本",
       "noDllVersionInstalled": "未记录已安装版本",
       "availableDllVersions": "可安装版本列表",
+      "ssmtRuntime": "SSMT Runtime",
+      "ssmtRuntimeHint": "随 SSMT 一起提供和更新。",
+      "xxmiRuntimeChangelog": "XXMI Runtime 更新记录",
+      "xxmiRuntimeChangelogHint": "仅供阅读上游更新说明；SSMT 不会安装这些版本。",
       "availableDllVersionsHint": "从 GitHub Release 拉取，可直接安装指定版本。默认先显示最近 10 个版本。",
       "identityVDllVersionCapHint": "当前预设下 d3d11.dll 最高支持到 v{maxVersion}。更高版本可能导致问题，因此 v{maxVersion} 以上版本不提供下载。",
       "packageSource": "3Dmigoto Package 来源",
@@ -215,11 +217,6 @@
       "wwmiDisableWoundedFxHint": "启动前关闭 SkinDamageMode，避免受击后贴图异常。"
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev（XXMI-Libs-Package）",
-        "play": "Play（Doodle）",
-        "ssiceA": "ssice-a（XXMI-Libs-Package）"
-      },
       "backgroundUpdateMode": {
         "manual": "手动",
         "auto": "自动"
@@ -556,7 +553,6 @@
       "altF": "启用 Alt+F 快捷唤起",
       "textureMarkStyle": "贴图标记风格偏好",
       "previewLighting": "3D 预览简易渲染模式",
-      "d3d11Source": "d3d11.dll 来源",
       "launchMode": "启动方式偏好",
       "huntingMode": "Hunting 显示模式",
       "showWarnings": "显示左上角警告",
@@ -1584,6 +1580,7 @@
       "installDirNotConfigured": "3Dmigoto 安装目录未配置",
       "iniNotFoundAt": "未找到 d3dx.ini：{path}",
       "d3d11SourceMissingForMode": "当前 {mode} 模式缺少 d3d11.dll 源文件：{path}",
+      "ssmtRuntimeSourceMissing": "缺少 SSMT Runtime 文件：{path}",
       "specificIbDumpRequiresDrawIbs": "启用指定 IB Dump 模式前，请先至少添加一个 DrawIB",
       "specificIbDumpUnsupportedLogic": "当前执行逻辑 {logicName} 不支持指定 IB Dump 模式"
     }

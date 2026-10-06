@@ -76,7 +76,7 @@
     "tabs": {
       "basic": "Ajustes básicos",
       "migoto": "Ajustes de 3DMigoto",
-      "dllUpdate": "Actualizaciones de d3d11.dll",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "Actualizaciones de 3Dmigoto Package",
       "other": "Otros ajustes"
     },
@@ -124,8 +124,6 @@
       "autoExitSeconds": "Segundos hasta el cierre automático",
       "extraInjectedDll": "DLL adicional inyectada",
       "options": "Otras opciones",
-      "dllSource": "Origen de d3d11.dll",
-      "dllSourceHint": "Dev usa SpectrumQT/XXMI-Libs-Package, Play usa Doodle y ssice-a usa ssice-a/XXMI-Libs-Package. Tras la primera instalación, la DLL se guarda en caché localmente y los cambios de modo posteriores solo sustituyen el archivo en caché. El preajuste NTEMI siempre fuerza el uso de ssice-a.",
       "currentInstalledDllVersion": "Versión instalada actualmente",
       "noDllVersionInstalled": "No hay ninguna versión instalada registrada",
       "availableDllVersions": "Versiones disponibles para instalar",
@@ -157,11 +155,6 @@
       "wwmiDisableWoundedFxHint": "Establece SkinDamageMode en Off antes de iniciar para evitar problemas de texturas tras recibir daño."
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev (XXMI-Libs-Package)",
-        "play": "Play (Doodle)",
-        "ssiceA": "ssice-a (XXMI-Libs-Package)"
-      },
       "backgroundUpdateMode": {
         "manual": "Manual",
         "auto": "Automático"
@@ -452,7 +445,6 @@
       "altF": "Activar atajo de ventana Alt+F",
       "textureMarkStyle": "Estilo de marcado de texturas",
       "previewLighting": "Renderizado sencillo de vista previa 3D",
-      "d3d11Source": "Origen de d3d11.dll",
       "launchMode": "Método de inicio preferido",
       "huntingMode": "Visualización del modo de caza",
       "showWarnings": "Mostrar avisos en la esquina superior izquierda",

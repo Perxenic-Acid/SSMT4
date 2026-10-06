@@ -76,7 +76,7 @@
     "tabs": {
       "basic": "Grundeinstellungen",
       "migoto": "3DMigoto-Einstellungen",
-      "dllUpdate": "d3d11.dll-Updates",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "Updates für 3Dmigoto Package",
       "other": "Weitere Einstellungen"
     },
@@ -124,8 +124,6 @@
       "autoExitSeconds": "Sekunden bis zum automatischen Beenden",
       "extraInjectedDll": "Zusätzlich injizierte DLL",
       "options": "Weitere Optionen",
-      "dllSource": "Quelle für d3d11.dll",
-      "dllSourceHint": "Dev verwendet SpectrumQT/XXMI-Libs-Package, Play verwendet Doodle und ssice-a verwendet ssice-a/XXMI-Libs-Package. Nach der ersten Installation wird die DLL lokal zwischengespeichert; spätere Moduswechsel ersetzen nur diese lokale Cache-Datei. Beim NTEMI-Preset wird immer ssice-a erzwungen.",
       "currentInstalledDllVersion": "Derzeit installierte Version",
       "noDllVersionInstalled": "Keine installierte Version verzeichnet",
       "availableDllVersions": "Verfügbare Versionen",
@@ -157,11 +155,6 @@
       "wwmiDisableWoundedFxHint": "Setzt SkinDamageMode vor dem Start auf Off, um Texturfehler nach erlittenem Schaden zu vermeiden."
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev (XXMI-Libs-Package)",
-        "play": "Play (Doodle)",
-        "ssiceA": "ssice-a (XXMI-Libs-Package)"
-      },
       "backgroundUpdateMode": {
         "manual": "Manuell",
         "auto": "Automatisch"
@@ -452,7 +445,6 @@
       "altF": "Alt+F-Fensterkürzel aktivieren",
       "textureMarkStyle": "Textur-Markierungsstil",
       "previewLighting": "Einfache 3D-Vorschau",
-      "d3d11Source": "Quelle für d3d11.dll",
       "launchMode": "Bevorzugte Startmethode",
       "huntingMode": "Anzeige des Jagdmodus",
       "showWarnings": "Warnungen oben links anzeigen",

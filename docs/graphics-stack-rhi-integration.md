@@ -1,5 +1,9 @@
 # 图形插件组合与 SSMT 资源管理
 
+## 2026-10-06 SSMT Runtime 来源收敛
+
+游戏设置不再提供 Dev、Play、ssice-a 三种 DLL 来源。D3D11 启动统一从 SSMT 随应用提供的 `resources/d3d11.dll` 部署；原有 DX12 预设继续使用 `resources/DX12/d3d12.dll`。旧来源配置在读取时移除，启动前也不再下载上游 DLL。设置页保留 `SpectrumQT/XXMI-Libs-Package` Release 的只读更新记录，不能从该列表安装 DLL。发布脚本构建并暂存 SSMT Runtime；本次只做前端构建与资源暂存检查，没有运行发布构建或游戏热测。下文带日期的测试记录保留当时的实现和结论，其中旧来源现状不代表此项改动后的状态。
+
 ## 2026-10-06 冷加载文件的启动会话管理
 
 SSMT 托管的 Swapper 路线安装后，清单中的 DLL、ReShade add-on 和 ASI 会按逐游戏哈希封存到本机 `SSMT4GlobalConfigs/GraphicsCold`。游戏目录中 Swapper 新增的冷加载文件在非 SSMT 会话期间不存在；被覆盖的原游戏 DLL 从 Swapper 原版备份恢复。SSMT 准备启动时先检查封存文件和原版哈希，再建立文件符号链接；游戏进程结束后删除链接并恢复原版。普通着色器、贴图和配置仍由各自已有的所有权机制管理。旧的托管安装会在下一次 SSMT 启动或准备游戏时迁移到封存状态。
