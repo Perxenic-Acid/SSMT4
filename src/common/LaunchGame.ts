@@ -11,6 +11,7 @@ import { getEffectiveUseUpx, type GameConfig, type LaunchProgramConfig } from ".
 import type { AppSettings } from "../store/AppSettings";
 import { debugLog, debugWarn } from "../utils/debugLog";
 import { serializePlayerTweaksCamera } from '../plugin/playerTweaksCamera';
+import { serializePlayerTweaksGameplay } from '../plugin/playerTweaksGameplay';
 
 const t = i18n.global.t;
 
@@ -809,7 +810,9 @@ export class LaunchGame {
 
         try {
             const gameConfig = await ResourceManager.loadGameConfig(gameName);
-            await writeTextFile(configTargetPath, serializePlayerTweaksCamera(gameConfig?.playerTweaksCamera));
+            await writeTextFile(configTargetPath,
+                serializePlayerTweaksCamera(gameConfig?.playerTweaksCamera) +
+                serializePlayerTweaksGameplay(gameConfig?.playerTweaksGameplay));
         } catch (error) {
             await removeStaleDll();
             console.warn('Failed to prepare Player Tweaks config:', error);

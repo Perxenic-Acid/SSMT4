@@ -13,6 +13,9 @@ import { ResourceManager } from '../../store/ResourceManager'
 const PlayerTweaksCameraSettings = defineAsyncComponent(
   () => import('../../plugin/components/PlayerTweaksCameraSettings.vue'),
 )
+const PlayerTweaksGameplaySettings = defineAsyncComponent(
+  () => import('../../plugin/components/PlayerTweaksGameplaySettings.vue'),
+)
 
 type DependencyStatus = 'missing' | 'invalid' | 'ready'
 
@@ -486,6 +489,11 @@ onMounted(async () => {
           <div class="detail-main">
             <template v-if="detailTab === 'details'">
               <PlayerTweaksCameraSettings
+                v-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'"
+                :game-name="selectedGameName"
+                :enabled="selectedPlugin.enabled"
+              />
+              <PlayerTweaksGameplaySettings
                 v-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'"
                 :game-name="selectedGameName"
                 :enabled="selectedPlugin.enabled"
