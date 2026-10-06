@@ -311,6 +311,12 @@ impl PluginRegistry {
             .map(PathBuf::as_path)
     }
 
+    pub fn managed_game_executables_for_plugin(&self, id: &str) -> Vec<PathBuf> {
+        self.state.managed_game_executables.values()
+            .filter_map(|plugins| plugins.get(id).cloned())
+            .collect()
+    }
+
     pub fn set_managed_game_executable(
         &mut self,
         game_name: &str,

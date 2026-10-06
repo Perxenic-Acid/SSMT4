@@ -15,6 +15,7 @@ pub mod logging;
 pub mod official_release;
 pub mod managed_reshade;
 pub mod managed_reshade_journal;
+pub mod managed_cold_files;
 pub mod managed_stack;
 pub mod marketplace;
 pub mod package_installer;

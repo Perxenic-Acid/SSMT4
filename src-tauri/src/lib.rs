@@ -114,6 +114,9 @@ pub fn run() {
             reveal_main_window(app);
         }))
         .setup(|app| {
+            if let Err(error) = plugin::managed_stack::recover_stale_sessions() {
+                eprintln!("[GraphicsStack] Startup recovery failed: {error}");
+            }
             // 初始化 ModWatcher 状态
             app.manage(commands::mod_manager::ModWatcher(Mutex::new(None)));
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
