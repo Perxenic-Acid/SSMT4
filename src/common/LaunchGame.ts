@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { exists, mkdir, copyFile, remove } from "@tauri-apps/plugin-fs";
+import { exists, mkdir, copyFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ResourceManager } from "../store/ResourceManager";
@@ -10,6 +10,7 @@ import { i18n } from "../i18n";
 import { getEffectiveUseUpx, type GameConfig, type LaunchProgramConfig } from "../store/GameConfig";
 import type { AppSettings } from "../store/AppSettings";
 import { debugLog, debugWarn } from "../utils/debugLog";
+import { serializePlayerTweaksCamera } from '../plugin/playerTweaksCamera';
 
 const t = i18n.global.t;
 
@@ -778,17 +779,11 @@ export class LaunchGame {
             "SSMT-Player-Tweaks.dll",
         );
         const dllTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.dll");
+        const configTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.ini");
 
         const removeStaleDll = async () => {
-            try {
-                if (await exists(dllTargetPath)) {
-                    await remove(dllTargetPath);
-                }
-            } catch (e) {
-                console.warn(
-                    "Failed to remove stale SSMT-Player-Tweaks.dll:",
-                    e,
-                );
+            if (await exists(dllTargetPath)) {
+                await remove(dllTargetPath);
             }
         };
 
@@ -812,7 +807,22 @@ export class LaunchGame {
             return;
         }
 
-        await copyFile(dllSourcePath, dllTargetPath);
+        try {
+            const gameConfig = await ResourceManager.loadGameConfig(gameName);
+            await writeTextFile(configTargetPath, serializePlayerTweaksCamera(gameConfig?.playerTweaksCamera));
+        } catch (error) {
+            await removeStaleDll();
+            console.warn('Failed to prepare Player Tweaks config:', error);
+            ElMessage.warning(`Player Tweaks 配置写入失败，已跳过本次注入：${String(error)}`);
+            return;
+        }
+        try {
+            await copyFile(dllSourcePath, dllTargetPath);
+        } catch (error) {
+            await removeStaleDll();
+            console.warn('Failed to deploy Player Tweaks:', error);
+            ElMessage.warning(`Player Tweaks 部署失败，已跳过本次注入：${String(error)}`);
+        }
     }
 
     private static async ensureSSMTPluginHostFile(migotoDir: string): Promise<void> {

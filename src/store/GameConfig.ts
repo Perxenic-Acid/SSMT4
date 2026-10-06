@@ -4,6 +4,7 @@ import { SSMTFileUtils } from "../utils/SSMTFileUtils";
 import { exists, mkdir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { moveDirectoryToRecycleBin } from "../utils/RecycleBin";
 import { isValidGamePreset, resolveGamePresetByGameName } from "./GamePreset";
+import type { PlayerTweaksCameraConfig } from '../plugin/playerTweaksCamera';
 
 export type HuntingMode = '0' | '1' | '2'
 
@@ -111,6 +112,7 @@ export type GameConfig = {
     unlockFps?: boolean;
     forceMaxLodBias?: boolean;
     disableWoundedFx?: boolean;
+    playerTweaksCamera?: PlayerTweaksCameraConfig;
     preLaunchPrograms?: LaunchProgramConfig[];
     postLaunchPrograms?: LaunchProgramConfig[];
     backgroundUpdateMode?: 'manual' | 'auto';

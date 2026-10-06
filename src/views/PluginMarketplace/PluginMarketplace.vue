@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -9,6 +9,10 @@ import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 import { AppStateManager } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
+
+const PlayerTweaksCameraSettings = defineAsyncComponent(
+  () => import('../../plugin/components/PlayerTweaksCameraSettings.vue'),
+)
 
 type DependencyStatus = 'missing' | 'invalid' | 'ready'
 
@@ -481,6 +485,11 @@ onMounted(async () => {
         <div class="detail-body">
           <div class="detail-main">
             <template v-if="detailTab === 'details'">
+              <PlayerTweaksCameraSettings
+                v-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'"
+                :game-name="selectedGameName"
+                :enabled="selectedPlugin.enabled"
+              />
               <section class="detail-section">
                 <h3>{{ t('pluginMarketplace.sections.externalDependencies') }}</h3>
                 <p class="section-hint">{{ t('pluginMarketplace.dependencyHint') }}</p>
