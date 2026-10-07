@@ -67,6 +67,7 @@ const save = async () => {
       <label><input v-model="camera.disableTransitionBlend" type="checkbox">{{ label('关闭镜头过渡混合', 'Disable camera transition blend') }}</label>
       <label><input v-model="camera.disableCharacterFade" type="checkbox">{{ label('关闭角色靠近镜头时淡出', 'Disable character fade') }}</label>
       <label><input v-model="camera.disableEventCameraMovement" type="checkbox">{{ label('关闭事件镜头移动', 'Disable event camera movement') }}</label>
+      <label><input v-model="camera.cameraZoom" type="checkbox">{{ label('解锁原生缩放上下限', 'Unlock native zoom limits') }}</label>
     </div>
     <p v-if="gameName && camera.customFov && camera.preserveAimingFov" class="camera-hint">
       {{ label('已知限制：瞄准时仍可能比原生视野略宽。', 'Known limitation: aiming can remain wider than the original game view.') }}

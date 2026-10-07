@@ -9,6 +9,7 @@ export interface PlayerTweaksCameraConfig {
   disableTransitionBlend: boolean
   disableCharacterFade: boolean
   disableEventCameraMovement: boolean
+  cameraZoom: boolean
 }
 
 export const defaultPlayerTweaksCamera = (): PlayerTweaksCameraConfig => ({
@@ -22,6 +23,7 @@ export const defaultPlayerTweaksCamera = (): PlayerTweaksCameraConfig => ({
   disableTransitionBlend: false,
   disableCharacterFade: true,
   disableEventCameraMovement: false,
+  cameraZoom: false,
 })
 
 export const normalizePlayerTweaksCamera = (value: unknown): PlayerTweaksCameraConfig => {
@@ -41,11 +43,12 @@ export const normalizePlayerTweaksCamera = (value: unknown): PlayerTweaksCameraC
     disableTransitionBlend: typeof source.disableTransitionBlend === 'boolean' ? source.disableTransitionBlend : defaults.disableTransitionBlend,
     disableCharacterFade: typeof source.disableCharacterFade === 'boolean' ? source.disableCharacterFade : defaults.disableCharacterFade,
     disableEventCameraMovement: typeof source.disableEventCameraMovement === 'boolean' ? source.disableEventCameraMovement : defaults.disableEventCameraMovement,
+    cameraZoom: typeof source.cameraZoom === 'boolean' ? source.cameraZoom : defaults.cameraZoom,
   }
 }
 
 export const serializePlayerTweaksCamera = (value: unknown): string => {
   const camera = normalizePlayerTweaksCamera(value)
   const bool = (enabled: boolean) => enabled ? 1 : 0
-  return `[Camera]\nCustomFov=${bool(camera.customFov)}\nFov=${camera.fov}\nPreserveAimingFov=${bool(camera.preserveAimingFov)}\nPreserveCutsceneFov=${bool(camera.preserveCutsceneFov)}\nRestoreInUi=${bool(camera.restoreInUi)}\nTransitionSpeed=${camera.transitionSpeed}\nDisableInputSmoothing=${bool(camera.disableInputSmoothing)}\nDisableTransitionBlend=${bool(camera.disableTransitionBlend)}\nDisableCharacterFade=${bool(camera.disableCharacterFade)}\nDisableEventCameraMovement=${bool(camera.disableEventCameraMovement)}\n`
+  return `[Camera]\nCustomFov=${bool(camera.customFov)}\nFov=${camera.fov}\nPreserveAimingFov=${bool(camera.preserveAimingFov)}\nPreserveCutsceneFov=${bool(camera.preserveCutsceneFov)}\nRestoreInUi=${bool(camera.restoreInUi)}\nTransitionSpeed=${camera.transitionSpeed}\nDisableInputSmoothing=${bool(camera.disableInputSmoothing)}\nDisableTransitionBlend=${bool(camera.disableTransitionBlend)}\nDisableCharacterFade=${bool(camera.disableCharacterFade)}\nDisableEventCameraMovement=${bool(camera.disableEventCameraMovement)}\nCameraZoom=${bool(camera.cameraZoom)}\n`
 }
