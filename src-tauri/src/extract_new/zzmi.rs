@@ -18,7 +18,7 @@ use crate::utils::ssmt_string_utils::SSMTStringUtils;
 use crate::workspace::submesh_json::{
     SubMeshCategoryBuffer, SubMeshD3D11Element, SubMeshIndexBuffer, SubMeshJson,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,6 +29,23 @@ pub struct ZZMINewExtractor {
     drawib_config: DrawIBConfig,
     specify_drawib_extract: bool,
     d3d11_gametype_lv2: D3D11GameTypeLv2,
+}
+
+/// 一个部件（子网格）在帧数据中的来源信息。
+///
+/// 同一个 DrawIB 可能包含多个部件，它们甚至共用同一份 IB 缓冲
+/// （`index_count` 与 `first_index` 完全相同，例如 4 个推进器），
+/// 此时唯一能区分它们的，是各自对应的 GPU-PreSkinning 预蒙皮 draw（`pointlist_index`）。
+#[derive(Clone, Debug)]
+struct ZZMIComponent {
+    /// 输出文件夹名，形如 `acfa670a-918-0`；发生重名冲突时追加预蒙皮 draw 索引
+    folder_name: String,
+    /// 该部件 IB 的 txt 文件名（帧目录中的原始名）
+    ib_txt_file_name: String,
+    /// 该部件对应的 PointList 索引；CPU-PreSkinning 类型时为空
+    pointlist_index: String,
+    /// 归属于该部件的 trianglelist drawcall 索引列表
+    trianglelist_index_list: Vec<String>,
 }
 
 impl ZZMINewExtractor {
@@ -168,11 +185,29 @@ impl ZZMINewExtractor {
         Ok(())
     }
 
-    fn collect_match_first_index_ib_map(
+    /// 把同一个 DrawIB 的 trianglelist drawcall 归组成「部件」列表。
+    ///
+    /// 与旧逻辑（只按 IB 的 `first_index` 去重）的区别：
+    /// 旧逻辑会把共用同一份 IB 缓冲的多个部件并成一个（例如 4 个推进器
+    /// 的 `index_count=918 / first_index=0` 完全相同）；
+    /// 这里把「该渲染 draw 自己对应的预蒙皮 draw（vb1 贴图坐标 hash 匹配）」
+    /// 也纳入分组键，使每个部件单独输出一份。
+    /// 普通部件（多趟渲染共用同一个预蒙皮 draw）分组结果与旧逻辑一致，命名也不变。
+    fn collect_zzmi_components(
         &self,
+        draw_ib: &str,
         trianglelist_index_list: &[String],
-    ) -> Result<BTreeMap<u64, String>, String> {
-        let mut result: BTreeMap<u64, String> = BTreeMap::new();
+        fallback_pointlist_index: &str,
+    ) -> Result<Vec<ZZMIComponent>, String> {
+        struct ComponentGroup {
+            first_index: u64,
+            pointlist_index: String,
+            ib_txt_file_name: String,
+            trianglelist_index_list: Vec<String>,
+        }
+
+        let mut groups: Vec<ComponentGroup> = Vec::new();
+
         for trianglelist_index in trianglelist_index_list {
             let ib_file_name = self
                 .fa
@@ -187,30 +222,115 @@ impl ZZMINewExtractor {
                 continue;
             }
             let ib_txt_file = IndexBufferTxtFile::new(&ib_file_path, false)?;
-            let match_first_index = ib_txt_file.first_index.parse::<u64>().unwrap_or(0);
-            result.entry(match_first_index).or_insert(ib_file_name);
+            let first_index = ib_txt_file.first_index.parse::<u64>().unwrap_or(0);
+
+            let own_pointlist_index = self
+                .fa
+                .log
+                .get_pointlist_index_by_texcoord_hash(trianglelist_index)
+                .unwrap_or_default();
+            let pointlist_index = if own_pointlist_index.is_empty() {
+                fallback_pointlist_index.to_string()
+            } else {
+                own_pointlist_index
+            };
+
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|g| g.first_index == first_index && g.pointlist_index == pointlist_index)
+            {
+                if !group.trianglelist_index_list.contains(trianglelist_index) {
+                    group.trianglelist_index_list.push(trianglelist_index.clone());
+                }
+            } else {
+                groups.push(ComponentGroup {
+                    first_index,
+                    pointlist_index,
+                    ib_txt_file_name: ib_file_name,
+                    trianglelist_index_list: vec![trianglelist_index.clone()],
+                });
+            }
         }
-        Ok(result)
+
+        // 与导出阶段口径一致：只有完整读取索引数据后才能得到正确的 index_number_count
+        // （只读文件头时它只会数到头几行，例如 918 会被数成 9）。
+        let mut index_count_list: Vec<String> = Vec::with_capacity(groups.len());
+        for group in groups.iter() {
+            let ib_file_path = self.fa.log.get_deduped_filepath(&group.ib_txt_file_name);
+            let index_count = if ib_file_path.is_empty() {
+                String::new()
+            } else {
+                IndexBufferTxtFile::new(&ib_file_path, true)?
+                    .index_number_count
+                    .to_string()
+            };
+            index_count_list.push(index_count);
+        }
+
+        let mut components: Vec<ZZMIComponent> = Vec::new();
+        for (i, group) in groups.iter().enumerate() {
+            let index_count = &index_count_list[i];
+            // 仅当 (index_count, first_index) 发生冲突时才追加后缀，
+            // 这样普通部件的输出目录名与旧版本完全一致。
+            let conflict = groups.iter().enumerate().any(|(j, other)| {
+                j != i
+                    && other.first_index == group.first_index
+                    && index_count_list[j] == *index_count
+            });
+
+            let folder_name = if conflict {
+                let suffix: String = if group.pointlist_index.is_empty() {
+                    let ordinal = groups[..i]
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, g)| {
+                            *j < i
+                                && g.first_index == group.first_index
+                                && index_count_list[*j] == *index_count
+                        })
+                        .count()
+                        + 1;
+                    ordinal.to_string()
+                } else {
+                    group.pointlist_index.clone()
+                };
+                format!(
+                    "{}-{}-{}-{}",
+                    draw_ib, index_count, group.first_index, suffix
+                )
+            } else {
+                format!("{}-{}-{}", draw_ib, index_count, group.first_index)
+            };
+
+            components.push(ZZMIComponent {
+                folder_name,
+                ib_txt_file_name: group.ib_txt_file_name.clone(),
+                pointlist_index: group.pointlist_index.clone(),
+                trianglelist_index_list: group.trianglelist_index_list.clone(),
+            });
+        }
+
+        Ok(components)
     }
 
     fn export_unity_vs_submeshes(
         &self,
         game_preset: &str,
         draw_ib: &str,
-        pointlist_index: &str,
+        components: &[ZZMIComponent],
         trianglelist_index_list: &[String],
         possible_d3d11_game_type_list: &[D3D11GameType],
     ) -> Result<bool, String> {
         if possible_d3d11_game_type_list.is_empty() {
             return Ok(false);
         }
-        let match_first_index_ib_txt_file_name_dict =
-            self.collect_match_first_index_ib_map(trianglelist_index_list)?;
-        for (match_first_index, ib_file_name) in &match_first_index_ib_txt_file_name_dict {
+        for component in components {
             crate::extract_log!(
-                "MatchFirstIndex: {} IBFileName: {}",
-                match_first_index,
-                ib_file_name
+                "DrawIB: {} Component: {} IBFileName: {} PointlistIndex: {}",
+                draw_ib,
+                component.folder_name,
+                component.ib_txt_file_name,
+                component.pointlist_index
             );
         }
         for d3d11_game_type in possible_d3d11_game_type_list {
@@ -221,7 +341,9 @@ impl ZZMINewExtractor {
             );
             let vertex_limit_vb = self.build_vertex_limit_vb(&trianglelist_index);
             let game_type_folder_name = format!("TYPE_{}", d3d11_game_type.game_type_name);
-            for ib_txt_file_name in match_first_index_ib_txt_file_name_dict.values() {
+            for component in components {
+                let ib_txt_file_name = &component.ib_txt_file_name;
+                let pointlist_index = &component.pointlist_index;
                 let per_ib_trianglelist_index: String = ib_txt_file_name.chars().take(6).collect();
                 let ib_buf_file_name =
                     SSMTFileUtils::get_filename_with_new_extension(ib_txt_file_name, "buf")?;
@@ -254,10 +376,7 @@ impl ZZMINewExtractor {
                         .filter_first_file(&filename_search_str, ".buf")?;
                     category_buf_filename_map.insert(category_name.clone(), category_buf_filename);
                 }
-                let unique_str_folder_name = format!(
-                    "{}-{}-{}",
-                    draw_ib, ib_txt_file.index_number_count, ib_txt_file.first_index
-                );
+                let unique_str_folder_name = component.folder_name.clone();
                 let game_type_output_path = PathBuf::from(&self.workspace_path)
                     .join(&unique_str_folder_name)
                     .join(&game_type_folder_name);
@@ -756,10 +875,16 @@ impl ZZMINewExtractor {
 
         possible_d3d11_game_type_list.retain(|gt| data_type_filter.allows(gt.gpu_pre_skinning));
 
+        let components = self.collect_zzmi_components(
+            draw_ib,
+            trianglelist_index_list,
+            pointlist_index,
+        )?;
+
         self.export_unity_vs_submeshes(
             "ZZMI",
             draw_ib,
-            pointlist_index,
+            &components,
             trianglelist_index_list,
             &possible_d3d11_game_type_list,
         )
@@ -782,20 +907,30 @@ impl ZZMINewExtractor {
         for draw_ib in draw_ib_list.iter() {
             crate::extract_log!("DrawIB: {}", draw_ib);
 
-            let pointlist_index = self
-                .fa
-                .log
-                .get_last_pointlist_index_by_hash(&draw_ib)
-                .unwrap_or_default();
+            let trianglelist_index_list = self.fa.data.get_trianglelist_index_list(&draw_ib);
+            for trianglelist_index in trianglelist_index_list.iter() {
+                crate::extract_log!("TriangleListIndex: {}", trianglelist_index);
+            }
+
+            // 优先用「渲染 draw 的 vb1(贴图坐标) hash」精确定位预蒙皮 draw；
+            // 失败时回退到旧逻辑，保证其它游戏的既有行为不变。
+            let pointlist_index = trianglelist_index_list
+                .first()
+                .and_then(|trianglelist_index| {
+                    self.fa
+                        .log
+                        .get_pointlist_index_by_texcoord_hash(trianglelist_index)
+                })
+                .unwrap_or_else(|| {
+                    self.fa
+                        .log
+                        .get_last_pointlist_index_by_hash(&draw_ib)
+                        .unwrap_or_default()
+                });
             crate::extract_log!("PointlistIndex: {:?}", pointlist_index);
 
             if pointlist_index.is_empty() {
                 crate::extract_log!("未找到对应PointlistIndex，该DrawIB可能为CPU-PreSkinning类型");
-            }
-
-            let trianglelist_index_list = self.fa.data.get_trianglelist_index_list(&draw_ib);
-            for trianglelist_index in trianglelist_index_list.iter() {
-                crate::extract_log!("TriangleListIndex: {}", trianglelist_index);
             }
 
             let extract_success = self.extract_fee307b98a965c16(
@@ -824,12 +959,10 @@ impl ZZMINewExtractor {
     /// ZZMI 专用贴图同步方法。
     ///
     /// 与通用 `sync_workspace_deduped_textures_and_json` 不同，
-    /// 本方法使用与模型提取阶段完全相同的 IB 文件选取逻辑
-    /// （`collect_match_first_index_ib_map` + BOTH txt/buf 存在检查），
+    /// 本方法使用与模型提取阶段完全相同的部件归组逻辑
+    /// （`collect_zzmi_components` + BOTH txt/buf 存在检查），
     /// 确保生成的子网格文件夹名与模型提取一致。
     fn sync_zzmi_textures_and_json(&self, draw_ib_list: Vec<String>) -> Result<(), String> {
-        use std::collections::BTreeMap;
-
         let drawib_config = DrawIBConfig {
             path: String::new(),
             entries: draw_ib_list
@@ -854,74 +987,36 @@ impl ZZMINewExtractor {
                 continue;
             }
 
-            // 使用与模型提取完全相同的 IB 文件选取逻辑
-            let match_first_index_ib_map =
-                self.collect_match_first_index_ib_map(&trianglelist_index_list)?;
+            // 使用与模型提取完全相同的部件归组逻辑，保证生成的子网格文件夹名与模型提取一致
+            let fallback_pointlist_index = trianglelist_index_list
+                .first()
+                .and_then(|trianglelist_index| {
+                    self.fa
+                        .log
+                        .get_pointlist_index_by_texcoord_hash(trianglelist_index)
+                })
+                .unwrap_or_else(|| {
+                    self.fa
+                        .log
+                        .get_last_pointlist_index_by_hash(draw_ib)
+                        .unwrap_or_default()
+                });
 
-            let mut first_index_index_count_map: BTreeMap<u64, String> = BTreeMap::new();
-            let mut first_index_trianglelist_index_map: BTreeMap<u64, Vec<String>> =
-                BTreeMap::new();
+            let components = self.collect_zzmi_components(
+                draw_ib,
+                &trianglelist_index_list,
+                &fallback_pointlist_index,
+            )?;
 
-            for (&first_index, ib_txt_file_name) in match_first_index_ib_map.iter() {
-                let ib_buf_file_name =
-                    SSMTFileUtils::get_filename_with_new_extension(ib_txt_file_name, "buf")?;
-                let ib_txt_file_path = self.fa.log.get_deduped_filepath(ib_txt_file_name);
-                let ib_buf_file_path = self.fa.log.get_deduped_filepath(&ib_buf_file_name);
-
-                // 与 export_unity_vs_submeshes 一致：BOTH txt 和 buf 必须存在
-                if ib_txt_file_path.is_empty() || ib_buf_file_path.is_empty() {
-                    continue;
-                }
-
-                let ib_txt_file = IndexBufferTxtFile::new(&ib_txt_file_path, true)?;
-                let submesh_index_count = ib_txt_file.index_number_count.to_string();
-
-                first_index_index_count_map.insert(first_index, submesh_index_count);
-
-                // 收集此 first_index 对应的所有 trianglelist_index
-                for tl_idx in &trianglelist_index_list {
-                    let search_key = format!("{}-ib", tl_idx);
-                    let candidate_ib = self
-                        .fa
-                        .data
-                        .filter_first_file(&search_key, ".txt")
-                        .unwrap_or_default();
-                    if candidate_ib.is_empty() {
-                        continue;
-                    }
-                    let candidate_path = self.fa.log.get_deduped_filepath(&candidate_ib);
-                    if candidate_path.is_empty() {
-                        continue;
-                    }
-                    let candidate_ib_file = IndexBufferTxtFile::new(&candidate_path, false)?;
-                    let candidate_first_index =
-                        candidate_ib_file.first_index.parse::<u64>().unwrap_or(0);
-                    if candidate_first_index == first_index {
-                        let list = first_index_trianglelist_index_map
-                            .entry(first_index)
-                            .or_default();
-                        if !list.contains(tl_idx) {
-                            list.push(tl_idx.clone());
-                        }
-                    }
-                }
-            }
-
-            if match_first_index_ib_map.is_empty() {
+            if components.is_empty() {
                 component_drawcall_index_list_dict
                     .insert(draw_ib.to_string(), trianglelist_index_list.clone());
                 continue;
             }
 
-            for (first_index, submesh_trianglelist_index_list) in first_index_trianglelist_index_map
-            {
-                let index_count = first_index_index_count_map
-                    .get(&first_index)
-                    .cloned()
-                    .unwrap_or_default();
-                let submesh_folder_name = format!("{}-{}-{}", draw_ib, index_count, first_index);
+            for component in components {
                 component_drawcall_index_list_dict
-                    .insert(submesh_folder_name, submesh_trianglelist_index_list);
+                    .insert(component.folder_name, component.trianglelist_index_list);
             }
         }
 
