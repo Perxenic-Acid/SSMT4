@@ -253,6 +253,13 @@ impl MarkTextureHelper {
     /// Scans the LOD directory for extracted submesh folders (named
     /// `{draw_ib}-{index_count}-{first_index}`), groups them by DrawIB,
     /// sorts by FirstIndex, and assigns sequential component numbers (0, 1, 2...).
+    ///
+    /// A folder may carry extra trailing segments when one DrawIB is
+    /// pre-skinned several times in a single frame (e.g.
+    /// `{draw_ib}-{index_count}-{first_index}-{pose_draw}`). The DrawIB is
+    /// always the leading segment and FirstIndex is always the last one, so the
+    /// name is split from both ends; names whose FirstIndex is not numeric or
+    /// that lack a DrawIB are skipped.
     pub fn generate_draw_ib_component_json(lod_workspace_path: &str) {
         let lod_path = Path::new(lod_workspace_path);
         if !lod_path.exists() {
@@ -260,7 +267,7 @@ impl MarkTextureHelper {
             return;
         }
 
-        // Group submesh folders by DrawIB hash
+        // Group submesh folders by DrawIB hash: (folder name, first index)
         let mut draw_ib_submesh_map: HashMap<String, Vec<(String, u64)>> = HashMap::new();
 
         let entries = match fs::read_dir(lod_path) {
@@ -290,17 +297,16 @@ impl MarkTextureHelper {
                 None => continue,
             };
 
-            // Parse folder name: {draw_ib}-{index_count}-{first_index}
-            let parts: Vec<&str> = folder_name_str.splitn(3, '-').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-
-            let draw_ib = parts[0].to_string();
-            let first_index_str = parts[2];
-
+            // Parse folder name: DrawIB is the leading segment, FirstIndex the trailing one.
+            let mut parts = folder_name_str.splitn(2, '-');
+            let draw_ib = match parts.next() {
+                Some(value) if !value.is_empty() => value.to_string(),
+                _ => continue,
+            };
+            // The trailing segment may be preceded by extra ones (see doc comment).
+            let first_index_str = folder_name_str.rsplit('-').next().unwrap_or_default();
             let first_index = match first_index_str.parse::<u64>() {
-                Ok(v) => v,
+                Ok(value) => value,
                 Err(_) => continue,
             };
 
@@ -318,10 +324,14 @@ impl MarkTextureHelper {
             return;
         }
 
-        // Sort each DrawIB's submeshes by FirstIndex, assign component numbers.
+        // Sort each DrawIB's submeshes by FirstIndex (then by folder name for a
+        // stable order — several pre-skinned components share FirstIndex 0),
+        // and assign component numbers.
         let mut component_map: HashMap<String, BTreeMap<String, String>> = HashMap::new();
         for (draw_ib, mut submesh_list) in draw_ib_submesh_map {
-            submesh_list.sort_by_key(|(_, first_index)| *first_index);
+            submesh_list.sort_by(|left, right| {
+                left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0))
+            });
 
             let mut component_dict: BTreeMap<String, String> = BTreeMap::new();
             for (component_index, (submesh_name, _)) in submesh_list.iter().enumerate() {
