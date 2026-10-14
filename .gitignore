@@ -65,6 +65,7 @@ uib_wrapper_screenshot.png
 /src-tauri/resources/Run.exe
 /src-tauri/resources/d3d11.dll
 /src-tauri/resources/SSMT-Player-Tweaks.dll
+/src-tauri/resources/PluginPackages/
 
 # Agent 工具上传与临时工作目录（不提交）
 .dsh/
