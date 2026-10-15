@@ -73,6 +73,36 @@ Shell 只是启动方式，不能据 `useShell=true` 推断使用了官方启动
 
 ## 验证与实机验收
 
+### 2026-10-15 切换 FSR2 崩溃修复
+
+23:35:55 的实机 dump 位于 `OptiScaler.dll + 0x1C3E57`，读取空的 NGX 参数对象。
+核对实际 DLL 的指令、函数名字符串及固定源码后，确认调用的是
+`ffxFsr2ContextDispatch_Dx12`。原神 Bridge 提供 DX11 FSR2 契约，但下载包的
+`UseFsr2Dx11Inputs=auto` 默认选中 DX12；旧准备流程只指定 `Dx11Upscaler=dlss_12`
+输出后端，没有固定输入 API。错误分支未创建参数表却返回 Create 成功，随后首次
+Dispatch 触发空指针。
+
+准备流程现在显式启用 FSR2 DX11 输入、关闭 Vulkan 输入，固定 DLSS 后端所需选项，
+跳过 OptiScaler 的设备虚表 Hook，并禁止它另载 ReShade 或运行内置后置 NR。
+这些选项只写入已启用插件的托管配置，每次启动重新生成，已有导入目录也会修复。
+本次无需重装 0.2.1 插件、重新下载组件或重新编译 Native。
+
+新增 `native/SSMT-Gimi-Bridge/tests/fsr2.cpp` 使用真实 Bridge 与 OptiScaler，
+在 RTX 5060 Laptop 上检查 FSR2 Create、两次 Dispatch 及 Destroy。仅将输入选择
+恢复为 `auto`，即可复现相同的 `OptiScaler + 0x1C3E57`；修复配置通过，日志确认
+进入 DX11 输入并成功创建 DLSS Feature。该夹具使用系统 D3D11 设备，仅验证输入
+契约；Runtime 共存由另一组混合设备测试覆盖，不能合称为完整游戏链通过。
+没有 SwapChain / Present 的夹具只执行两次，不用于检验持续帧或 NR Feature 18。
+游戏内切换、NR 及画面仍待实机验收。
+
+显式运行实组件 Dispatch 验证：
+
+```powershell
+cmake --build native/build-gimi-bridge --config Release --target gimi-fsr2-dispatch-test
+$env:SSMT_HOT_FSR2_FIXTURE = (Resolve-Path native/build-gimi-bridge/SSMT-Gimi-Bridge/Release/gimi-fsr2-dispatch-test.exe).Path
+# 同时设置下文的 SSMT_HOT_TEST_SOURCE 和 Profile，再运行 ignored 测试。
+```
+
 ### 2026-10-15 混合设备崩溃修复
 
 22:32:58 和 22:42:04 的两份新 dump 均确认加载了修复后的 Runtime 1.2.2.12，

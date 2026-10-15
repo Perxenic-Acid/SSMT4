@@ -321,16 +321,7 @@ fn prepare_at(
         .map_err(|error| error.to_string())?;
     let opti = root.join("components/OptiScaler");
     let mut ini = read_text(&opti.join("OptiScaler.ini"))?;
-    for (key, value) in [
-        ("OptiDllPath", opti.clone()),
-        ("NvngxDlssPath", opti.join("nvngx_dlss.dll")),
-        ("NvngxFeaturePath", opti.clone()),
-    ] {
-        managed_reshade::set_entry(&mut ini, "Libraries", key, &value.to_string_lossy());
-    }
-    managed_reshade::set_entry(&mut ini, "Upscalers", "Dx11Upscaler", "dlss_12");
-    // NR 由同一条前置 Add-on 链负责，避免 OptiScaler 再运行一次后置 NR。
-    managed_reshade::set_entry(&mut ini, "DlssNr", "Enabled", "false");
+    configure_optiscaler(&mut ini, &opti);
     fs::write(opti.join("OptiScaler.ini"), ini).map_err(|error| error.to_string())?;
     let dlls = vec![
         root.join("components/ReShade/ReShade64.dll"),
@@ -365,6 +356,33 @@ fn prepare_at(
         environment,
         runtime_directory: root,
     })
+}
+
+fn configure_optiscaler(ini: &mut String, opti: &Path) {
+    for (key, value) in [
+        ("OptiDllPath", opti.to_path_buf()),
+        ("NvngxDlssPath", opti.join("nvngx_dlss.dll")),
+        ("NvngxFeaturePath", opti.to_path_buf()),
+    ] {
+        managed_reshade::set_entry(ini, "Libraries", key, &value.to_string_lossy());
+    }
+    // 上游模板的 auto 默认选择 FSR2 DX12；原神 Bridge 的契约必须显式固定为 DX11。
+    // 仅指定 dlss_12 输出后端并不能选择输入 API，会在首次 Dispatch 读取空参数表。
+    for (section, key, value) in [
+        ("Upscalers", "Dx11Upscaler", "dlss_12"),
+        ("Inputs", "EnableFsr2Inputs", "true"),
+        ("Inputs", "UseFsr2Inputs", "true"),
+        ("Inputs", "UseFsr2Dx11Inputs", "true"),
+        ("Inputs", "UseFsr2VulkanInputs", "false"),
+        ("DLSS", "Enabled", "true"),
+        ("DLSS", "UseGenericAppIdWithDlss", "true"),
+        ("Hooks", "SkipD3D11DeviceVTableHooks", "true"),
+        ("Plugins", "LoadReShade", "false"),
+    ] {
+        managed_reshade::set_entry(ini, section, key, value);
+    }
+    // NR 由同一条前置 Add-on 链负责，避免 OptiScaler 再运行一次后置 NR。
+    managed_reshade::set_entry(ini, "DlssNr", "Enabled", "false");
 }
 
 #[tauri::command]
@@ -519,6 +537,42 @@ pub fn prepare_gimi_hot_runtime(
 mod tests {
     use super::*;
 
+    #[test]
+    fn optiscaler_templates_select_dx11_input_and_keep_user_options() {
+        for input in ["auto", "false", "true"] {
+            let mut ini = format!(
+                "[Inputs]\nEnableFsr2Inputs={input}\nUseFsr2Inputs={input}\nUseFsr2Dx11Inputs={input}\nUseFsr2VulkanInputs=true\n\
+                 [DLSS]\nEnabled=false\nUseGenericAppIdWithDlss=auto\n\
+                 [Plugins]\nLoadReShade=true\n[Hooks]\nSkipD3D11DeviceVTableHooks=auto\n\
+                 [Menu]\nShortcutKey=0x24\n[FrameGen]\nEnabled=false\n\
+                 [DlssNr]\nEnabled=true\n[Upscalers]\nDx11Upscaler=auto\n"
+            );
+            configure_optiscaler(&mut ini, Path::new("C:/SSMT/组件/OptiScaler"));
+            for line in [
+                "EnableFsr2Inputs=true",
+                "UseFsr2Inputs=true",
+                "UseFsr2Dx11Inputs=true",
+                "UseFsr2VulkanInputs=false",
+                "UseGenericAppIdWithDlss=true",
+                "SkipD3D11DeviceVTableHooks=true",
+                "LoadReShade=false",
+                "Dx11Upscaler=dlss_12",
+                "ShortcutKey=0x24",
+            ] {
+                assert!(
+                    ini.lines().any(|actual| actual == line),
+                    "缺少 {line}: {ini}"
+                );
+            }
+            assert!(ini.contains("[DLSS]\nEnabled=true"));
+            assert!(ini.contains("[DlssNr]\nEnabled=false"));
+            assert!(ini.contains("[FrameGen]\nEnabled=false"));
+            let once = ini.clone();
+            configure_optiscaler(&mut ini, Path::new("C:/SSMT/组件/OptiScaler"));
+            assert_eq!(ini, once);
+        }
+    }
+
     pub(super) fn registry_with_bridge(root: &Path, dll: &[u8]) -> PluginRegistry {
         let mut registry = PluginRegistry::new(root.join("plugins")).unwrap();
         let package = registry.plugins_root().join(DLSS5_PLUGIN_ID).join("0.2.1");
@@ -636,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "需要 SSMT_HOT_TEST_SOURCE 指定含 NR Runtime 的完整组件包，可选 SSMT_HOT_TEST_SHADE_ROOT"]
+    #[ignore = "需要 SSMT_HOT_TEST_SOURCE 指定完整组件包；可选 SSMT_HOT_TEST_SHADE_ROOT 和 SSMT_HOT_FSR2_FIXTURE"]
     fn prepares_real_components_without_game_directory_writes() {
         let source = HotRuntimeInstallation {
             root: std::env::var_os("SSMT_HOT_TEST_SOURCE")
@@ -652,6 +706,20 @@ mod tests {
         let installation = import_at(&source, temp.join("owned 组件")).unwrap();
         let mut registry = registry_with_bridge(&temp, &real_bridge());
         let plan = prepare_at(&registry, &installation).unwrap();
+        let opti_ini = read_text(
+            &installation
+                .root
+                .join("components/OptiScaler/OptiScaler.ini"),
+        )
+        .unwrap();
+        for line in [
+            "UseFsr2Dx11Inputs=true",
+            "UseFsr2VulkanInputs=false",
+            "SkipD3D11DeviceVTableHooks=true",
+            "LoadReShade=false",
+        ] {
+            assert!(opti_ini.lines().any(|actual| actual == line));
+        }
         assert_eq!(plan.dlls.len(), 3);
         assert!(plan.dlls[0].ends_with("ReShade64.dll"));
         assert!(plan.dlls[1].ends_with("Dx11FsrBridge.dll"));
@@ -669,6 +737,74 @@ mod tests {
         assert!(read_text(&config)
             .unwrap()
             .contains("LoadFromDllMain=nr-before-sr.zh-CN.addon64"));
+        if let Some(fixture) = std::env::var_os("SSMT_HOT_FSR2_FIXTURE") {
+            // 只在显式的实组件回归中执行独立测试进程，不启动游戏。
+            let opti_config = installation
+                .root
+                .join("components/OptiScaler/OptiScaler.ini");
+            let mut diagnostics = read_text(&opti_config).unwrap();
+            managed_reshade::set_entry(&mut diagnostics, "Log", "LogToFile", "true");
+            managed_reshade::set_entry(&mut diagnostics, "Log", "LogLevel", "2");
+            let run = || {
+                let mut command = std::process::Command::new(&fixture);
+                command.args(&plan.dlls);
+                for (name, value) in &plan.environment {
+                    if let Some(value) = value {
+                        command.env(name, value);
+                    } else {
+                        command.env_remove(name);
+                    }
+                }
+                command
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = command.spawn().unwrap();
+                let start = std::time::Instant::now();
+                loop {
+                    if child.try_wait().unwrap().is_some() {
+                        break;
+                    }
+                    if start.elapsed() > std::time::Duration::from_secs(45) {
+                        child.kill().unwrap();
+                        let _ = child.wait();
+                        panic!(
+                            "FSR2 独立回归超时，资源保留于 {}",
+                            installation.root.display()
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                let output = child.wait_with_output().unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                eprintln!(
+                    "status={}\n{stdout}\n{}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                output
+            };
+            // 反例只改输入 API，必须命中实际游戏 dump 中同一个空参数表故障。
+            let mut legacy = diagnostics.clone();
+            managed_reshade::set_entry(&mut legacy, "Inputs", "UseFsr2Dx11Inputs", "auto");
+            fs::write(&opti_config, legacy).unwrap();
+            let baseline = run();
+            assert!(
+                baseline.status.code() == Some(10)
+                    && String::from_utf8_lossy(&baseline.stdout)
+                        .contains("module=OptiScaler.dll rva=1c3e57"),
+                "旧配置未复现预期崩溃，资源保留于 {}",
+                installation.root.display()
+            );
+            fs::write(&opti_config, diagnostics).unwrap();
+            let output = run();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success()
+                    && stdout.contains("FSR2 DX11 component dispatch completed"),
+                "FSR2 独立回归失败，资源保留于 {}",
+                installation.root.display()
+            );
+        }
         if let Some(shade) = std::env::var_os("SSMT_HOT_TEST_SHADE_ROOT") {
             let package = registry
                 .plugins_root()
