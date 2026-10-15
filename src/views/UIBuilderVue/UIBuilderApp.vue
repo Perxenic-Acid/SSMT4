@@ -70,14 +70,15 @@ onBeforeUnmount(teardown)
     <!-- 左侧工具窗停靠栏 -->
     <UibDock />
 
+    <!-- 左侧停靠轨道(仅作视觉背景)。
+         悬浮窗不再嵌套在 .sidebar 内:其 backdrop-filter 会形成包含块,
+         使 width: calc(100% - 150px) 按 62px 计算而塌缩成一条缝。 -->
+    <div class="sidebar"></div>
+
     <!-- 悬浮工具窗(设置 / 动画 / 属性),引擎按停靠栏切换显隐 -->
-    <div class="sidebar">
-      <div class="sidebar-top">
-        <UibSettingsWindow />
-        <UibAnimationWindow />
-        <UibPropertiesWindow />
-      </div>
-    </div>
+    <UibSettingsWindow />
+    <UibAnimationWindow />
+    <UibPropertiesWindow />
 
     <!-- 资源 / 文本逻辑悬浮窗 -->
     <UibResourceWindow />

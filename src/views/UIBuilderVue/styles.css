@@ -259,10 +259,6 @@
   min-height: 0;
 }
 
-.ui-builder-app .sidebar-top {
-  display: contents;
-}
-
 /* 悬浮工具窗:统一水晶玻璃规格(圆角 + 半透 + 模糊 + 细描边)
    absolute 定位:包含块为 .ui-builder-app,始终限定在子页面范围内 */
 .ui-builder-app .menu-column,
