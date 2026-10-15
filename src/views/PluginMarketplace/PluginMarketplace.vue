@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { ElMessage } from 'element-plus'
-import { FolderOpened, Refresh, Search, Setting, Document, Delete } from '@element-plus/icons-vue'
+import { FolderOpened, Refresh, Search, Setting, Document, Delete, Box, InfoFilled } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 import { AppStateManager } from '../../store/AppStateManager'
@@ -108,15 +108,19 @@ const reviewLocalId = ref('')
 const reviewInspection = ref<PackageInspection | null>(null)
 
 const activeTab = ref<'discover' | 'installed' | 'updates'>('discover')
-const detailTab = ref<'features' | 'dependencies' | 'permissions'>('features')
+const detailTab = ref<'features' | 'dependencies' | 'permissions' | 'details'>('features')
 const searchQuery = ref('')
 const selectedId = ref('')
 const installed = ref<InstalledPlugin[]>([])
 const installedGameName = ref('')
 const loading = ref(false)
+const catalogLoading = ref(false)
+const localCatalogLoading = ref(false)
+const refreshing = computed(() => loading.value || catalogLoading.value || localCatalogLoading.value)
 let refreshRequestId = 0
 const logDialogOpen = ref(false)
 const pluginLog = ref('')
+const logPlugin = ref<{ id: string; name: string } | null>(null)
 const logLoading = ref(false)
 
 const selectedEntry = computed(() => visibleEntries.value.find(entry => entry.id === selectedId.value))
@@ -183,6 +187,16 @@ const sourceLabelFor = (entry: CatalogEntry) => entry.localArchive
   : installedById.value.has(entry.id)
     ? t(installedById.value.get(entry.id)?.official ? 'pluginMarketplace.official' : 'pluginMarketplace.thirdParty')
     : t(entry.official ? 'pluginMarketplace.official' : 'pluginMarketplace.thirdParty')
+const sourceKindFor = (entry: CatalogEntry) => entry.localArchive ? 'local'
+  : entry.bundled ? 'bundled'
+  : (installedById.value.get(entry.id)?.official ?? entry.official) ? 'official' : 'thirdParty'
+const monogramFor = (entry: CatalogEntry) => {
+  const name = entry.name.replace(/^SSMT\s+/i, '').trim()
+  const words = name.split(/[\s-]+/)
+  return (words.length > 1 ? words.slice(0, 2).map(word => Array.from(word)[0]).join('') : Array.from(name).slice(0, 2).join('')).toLocaleUpperCase()
+}
+const countFor = (tab: typeof activeTab.value) => tab === 'installed' ? installedEntries.value.length
+  : tab === 'updates' ? updateEntries.value.length : allEntries.value.length
 const visibleEntries = computed(() => {
   const entries = activeTab.value === 'installed' ? installedEntries.value
     : activeTab.value === 'updates' ? updateEntries.value : allEntries.value
@@ -224,6 +238,7 @@ const refreshInstalled = async () => {
 }
 
 const refreshCatalog = async () => {
+  catalogLoading.value = true
   try {
     const entries = await invoke<OfficialCatalogEntry[]>('official_plugin_catalog')
     catalog.value = entries.map(entry => ({
@@ -240,14 +255,18 @@ const refreshCatalog = async () => {
     catalogError.value = ''
   } catch (error) {
     catalogError.value = String(error)
+  } finally {
+    catalogLoading.value = false
   }
 }
 
 const refreshAll = async () => {
+  if (refreshing.value) return
   await Promise.all([refreshInstalled(), refreshCatalog(), refreshLocalCatalog()])
 }
 
 const refreshLocalCatalog = async () => {
+  localCatalogLoading.value = true
   try {
     const packages = await invoke<LocalPluginPackage[]>('local_plugin_packages')
     localCatalog.value = packages.map(({ archivePath, inspection }) => ({
@@ -264,6 +283,8 @@ const refreshLocalCatalog = async () => {
     localCatalogError.value = ''
   } catch (error) {
     localCatalogError.value = String(error)
+  } finally {
+    localCatalogLoading.value = false
   }
 }
 
@@ -393,10 +414,12 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
 }
 
 const openPluginLog = async () => {
-  if (!selectedEntry.value || !installedById.value.has(selectedEntry.value.id)) return
+  if (!selectedEntry.value || !installedById.value.has(selectedEntry.value.id) || logLoading.value) return
+  const { id, name } = selectedEntry.value
+  logPlugin.value = { id, name }
   logLoading.value = true
   try {
-    pluginLog.value = await readPluginLog(selectedEntry.value.id)
+    pluginLog.value = await readPluginLog(id)
     logDialogOpen.value = true
   } catch (error) {
     ElMessage.error(t('pluginMarketplace.messages.logFailed', { error: String(error) }))
@@ -406,10 +429,10 @@ const openPluginLog = async () => {
 }
 
 const clearSelectedPluginLog = async () => {
-  if (!selectedEntry.value) return
+  if (!logPlugin.value || logLoading.value) return
   logLoading.value = true
   try {
-    await clearPluginLog(selectedEntry.value.id)
+    await clearPluginLog(logPlugin.value.id)
     pluginLog.value = ''
     ElMessage.success(t('pluginMarketplace.messages.logCleared'))
   } catch (error) {
@@ -456,6 +479,7 @@ watch(selectedGameName, () => {
 watch(visibleEntries, (entries) => {
   if (!entries.some(entry => entry.id === selectedId.value)) selectedId.value = entries[0]?.id ?? ''
 })
+watch(selectedId, () => { detailTab.value = 'features' })
 
 onMounted(async () => {
   if (!gamesList.length) await AppStateManager.loadGames()
@@ -469,81 +493,105 @@ onMounted(async () => {
 
 <template>
   <main class="plugin-marketplace">
-    <header class="marketplace-toolbar">
-      <div class="toolbar-left">
-        <label for="plugin-game-select">{{ t('pluginMarketplace.gameSelection') }}</label>
-        <el-select id="plugin-game-select" v-model="selectedGameName" size="small"
-          :placeholder="t('pluginMarketplace.chooseGame')" class="game-select">
-          <el-option v-for="game in orderedGamesList" :key="game.name" :label="game.name" :value="game.name" />
-        </el-select>
-        <span class="scope-note">{{ selectedPlugin?.appScoped
-          ? t('pluginMarketplace.appScopeHint')
-          : selectedGameName ? t('pluginMarketplace.gameScopeHint', { game: selectedGameName })
-          : t('pluginMarketplace.noGameHint') }}</span>
+    <header class="marketplace-header">
+      <div class="page-identity">
+        <h1>{{ t('pluginMarketplace.title') }}</h1>
+        <p>{{ t('pluginMarketplace.subtitle') }}</p>
       </div>
       <div class="toolbar-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="refreshAll">
+        <el-button :icon="Refresh" :loading="refreshing" @click="refreshAll">
           {{ t('pluginMarketplace.actions.refresh') }}
         </el-button>
-        <el-button size="small" :icon="FolderOpened" @click="installFromFile">
+        <el-button :icon="FolderOpened" :disabled="loading" @click="installFromFile">
           {{ t('pluginMarketplace.actions.installFromFile') }}
         </el-button>
       </div>
     </header>
 
-    <div v-if="catalogError" class="catalog-status">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</div>
-    <div v-if="localCatalogError" class="catalog-status">{{ t('pluginMarketplace.messages.localCatalogFailed', { error: localCatalogError }) }}</div>
+    <div class="marketplace-context">
+      <label for="plugin-game-select">{{ t('pluginMarketplace.gameSelection') }}</label>
+      <el-select id="plugin-game-select" v-model="selectedGameName" filterable
+        :placeholder="t('pluginMarketplace.chooseGame')" class="game-select">
+        <el-option v-for="game in orderedGamesList" :key="game.name" :label="game.name" :value="game.name" />
+      </el-select>
+      <span class="scope-note">{{ selectedPlugin?.appScoped
+        ? t('pluginMarketplace.appScopeHint')
+        : selectedGameName ? t('pluginMarketplace.gameScopeHint', { game: selectedGameName })
+        : t('pluginMarketplace.noGameHint') }}</span>
+    </div>
+
+    <details v-if="catalogError || localCatalogError" class="catalog-notice">
+      <summary><InfoFilled aria-hidden="true" /><span>{{ t('pluginMarketplace.catalogUnavailable') }}</span><span class="notice-details">{{ t('pluginMarketplace.showDetails') }}</span></summary>
+      <p v-if="catalogError">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</p>
+      <p v-if="localCatalogError">{{ t('pluginMarketplace.messages.localCatalogFailed', { error: localCatalogError }) }}</p>
+    </details>
 
     <div class="marketplace-layout">
       <aside class="marketplace-sidebar" :aria-label="t('pluginMarketplace.title')">
         <div class="sidebar-search">
-          <el-input v-model="searchQuery" size="small" clearable :placeholder="t('pluginMarketplace.searchPlaceholder')">
+          <el-input v-model="searchQuery" clearable :placeholder="t('pluginMarketplace.searchPlaceholder')"
+            :aria-label="t('pluginMarketplace.searchPlaceholder')" @keydown.esc="searchQuery = ''">
             <template #prefix><Search class="search-icon" /></template>
           </el-input>
         </div>
-        <div class="sidebar-tabs" role="tablist">
+        <div class="sidebar-tabs" role="group" :aria-label="t('pluginMarketplace.browsePlugins')">
           <button v-for="tab in (['discover', 'installed', 'updates'] as const)" :key="tab" type="button"
-            :class="{ active: activeTab === tab }" role="tab" :aria-selected="activeTab === tab"
+            :class="{ active: activeTab === tab }" :aria-pressed="activeTab === tab"
             @click="activeTab = tab">
             {{ t('pluginMarketplace.tabs.' + tab) }}
-            <span v-if="tab === 'installed'">{{ installedEntries.length }}</span>
-            <span v-else-if="tab === 'updates'">{{ updateEntries.length }}</span>
+            <span :class="{ 'has-updates': tab === 'updates' && updateEntries.length > 0 }">{{ countFor(tab) }}</span>
           </button>
         </div>
-        <div class="marketplace-list" aria-live="polite">
+        <div class="list-caption">{{ t('pluginMarketplace.resultsCount', { count: visibleEntries.length }) }}</div>
+        <div class="marketplace-list" :aria-busy="refreshing">
           <button v-for="entry in visibleEntries" :key="entry.id" type="button" class="plugin-row"
             :class="{ selected: selectedId === entry.id }" :aria-pressed="selectedId === entry.id"
             @click="selectedId = entry.id">
-            <span class="plugin-mark" aria-hidden="true">{{ entry.name.slice(0, 1) }}</span>
+            <span class="plugin-mark" aria-hidden="true">{{ monogramFor(entry) }}</span>
             <span class="plugin-row-content">
               <span class="plugin-row-title">
-                <strong>{{ entry.name }}</strong>
+                <strong :title="entry.name">{{ entry.name }}</strong>
+              </span>
+              <span class="plugin-row-description">{{ entry.description }}</span>
+              <span class="plugin-row-footer">
+                <span class="source-badge" :class="'source-' + sourceKindFor(entry)">{{ t('pluginMarketplace.sourceBadges.' + sourceKindFor(entry)) }}</span>
+                <span class="plugin-row-version" v-if="!entry.bundled">v{{ entry.version }}</span>
                 <span v-if="rowLifecycleFor(entry)" class="row-state"
                   :class="{ enabled: rowLifecycleFor(entry) === 'enabled', issue: ['broken', 'incompatible', 'external_dependency_missing'].includes(rowLifecycleFor(entry) ?? '') }">
                   {{ t('pluginMarketplace.lifecycle.' + rowLifecycleFor(entry)) }}
                 </span>
               </span>
-              <span class="plugin-row-description">{{ entry.description }}</span>
-              <span class="plugin-row-author">{{ entry.author }} · {{ sourceLabelFor(entry) }} · {{ entry.bundled ? '' : `v${entry.version}` }}</span>
             </span>
           </button>
-          <div v-if="visibleEntries.length === 0" class="empty-state">
-            {{ searchQuery ? t('pluginMarketplace.emptySearch') : t('pluginMarketplace.empty.' + activeTab) }}
+          <div v-if="visibleEntries.length === 0 && refreshing" class="list-loading" role="status">
+            <span>{{ t('pluginMarketplace.loadingPlugins') }}</span>
+            <div v-for="row in 3" :key="row" class="loading-row" aria-hidden="true" />
+          </div>
+          <div v-else-if="visibleEntries.length === 0" class="empty-state" role="status">
+            <Search v-if="searchQuery.trim()" aria-hidden="true" /><Box v-else aria-hidden="true" />
+            <p>{{ searchQuery.trim() ? t('pluginMarketplace.emptySearch') : t('pluginMarketplace.empty.' + activeTab) }}</p>
+            <el-button v-if="searchQuery.trim()" size="small" @click="searchQuery = ''">{{ t('pluginMarketplace.actions.clearSearch') }}</el-button>
           </div>
         </div>
       </aside>
 
       <section v-if="selectedEntry" class="plugin-detail" :aria-label="selectedEntry.name">
-        <div class="detail-top">
-          <span class="plugin-mark large" aria-hidden="true">{{ selectedEntry.name.slice(0, 1) }}</span>
+        <header class="detail-top">
+          <span class="plugin-mark large" aria-hidden="true">{{ monogramFor(selectedEntry) }}</span>
           <div class="detail-identity">
             <h2>{{ selectedEntry.name }}</h2>
-            <p>{{ selectedEntry.author }} · {{ sourceLabelFor(selectedEntry) }} · {{ selectedEntry.bundled ? '' : `v${selectedEntry.version}` }}</p>
-            <span class="detail-id">{{ selectedEntry.id }}</span>
+            <div class="detail-byline">
+              <span>{{ selectedEntry.author }}</span>
+              <span class="source-badge" :class="'source-' + sourceKindFor(selectedEntry)">{{ t('pluginMarketplace.sourceBadges.' + sourceKindFor(selectedEntry)) }}</span>
+              <span v-if="!selectedEntry.bundled">v{{ selectedPlugin?.manifest.version ?? selectedEntry.version }}</span>
+            </div>
           </div>
-        </div>
+          <span v-if="selectedPlugin" class="detail-state" :class="{ 'is-enabled': selectedPlugin.enabled }">
+            <span class="state-dot" aria-hidden="true" />{{ t('pluginMarketplace.status.' + (selectedPlugin.enabled ? 'enabled' : 'disabled')) }}
+          </span>
+        </header>
         <p class="detail-description">{{ selectedEntry.description }}</p>
-        <div class="detail-actions">
+        <div class="detail-actions" :aria-busy="loading">
           <el-button v-if="selectedEntry.localArchive && (!selectedPlugin || compareVersions(selectedEntry.version, selectedPlugin.manifest.version) > 0)"
             type="primary" size="small" :loading="loading" @click="installLocal(selectedEntry)">
             {{ t('pluginMarketplace.actions.installLocal') }}
@@ -568,22 +616,28 @@ onMounted(async () => {
             <el-button size="small" :icon="Document" :loading="logLoading" @click="openPluginLog">
               {{ t('pluginMarketplace.actions.viewLog') }}
             </el-button>
-            <span class="detail-state">{{ t('pluginMarketplace.lifecycle.' + lifecycleFor(selectedEntry, selectedPlugin)) }}</span>
+            <span v-if="['broken', 'incompatible', 'external_dependency_missing', 'update_available'].includes(lifecycleFor(selectedEntry, selectedPlugin))" class="detail-issue">
+              {{ t('pluginMarketplace.lifecycle.' + lifecycleFor(selectedEntry, selectedPlugin)) }}
+            </span>
           </template>
         </div>
 
-        <div class="detail-tabs" role="tablist">
-          <button type="button" role="tab" :aria-selected="detailTab === 'features'"
+        <div class="detail-tabs" role="group" :aria-label="t('pluginMarketplace.pluginContent')">
+          <button type="button" :aria-pressed="detailTab === 'features'"
             :class="{ active: detailTab === 'features' }" @click="detailTab = 'features'">
             {{ t('pluginMarketplace.detailTabs.features') }}
           </button>
-          <button type="button" role="tab" :aria-selected="detailTab === 'dependencies'"
+          <button type="button" :aria-pressed="detailTab === 'dependencies'"
             :class="{ active: detailTab === 'dependencies' }" @click="detailTab = 'dependencies'">
             {{ t('pluginMarketplace.detailTabs.dependencies') }}
           </button>
-          <button type="button" role="tab" :aria-selected="detailTab === 'permissions'"
+          <button type="button" :aria-pressed="detailTab === 'permissions'"
             :class="{ active: detailTab === 'permissions' }" @click="detailTab = 'permissions'">
             {{ t('pluginMarketplace.detailTabs.permissions') }}
+          </button>
+          <button type="button" :aria-pressed="detailTab === 'details'"
+            :class="{ active: detailTab === 'details' }" @click="detailTab = 'details'">
+            {{ t('pluginMarketplace.detailTabs.details') }}
           </button>
         </div>
 
@@ -638,40 +692,42 @@ onMounted(async () => {
                 </el-button>
               </div>
             </section>
-            <section v-else class="detail-section">
+            <section v-else-if="detailTab === 'permissions'" class="detail-section">
               <h3>{{ t('pluginMarketplace.sections.permissions') }}</h3>
               <p class="section-hint">{{ t('pluginMarketplace.permissionHint') }}</p>
               <div class="permission-list">
                 <span v-for="permission in selectedEntry.permissions" :key="permission" class="permission-row">
                   {{ permission }}
                 </span>
+                <span v-if="selectedEntry.permissions.length === 0" class="muted-copy">{{ t('pluginMarketplace.none') }}</span>
+              </div>
+            </section>
+            <section v-else class="detail-section detail-meta">
+              <h3>{{ t('pluginMarketplace.metadata') }}</h3>
+              <dl>
+                <dt>ID</dt><dd>{{ selectedEntry.id }}</dd>
+                <dt>{{ t('pluginMarketplace.version') }}</dt><dd>{{ selectedEntry.bundled ? t('pluginMarketplace.bundled') : (selectedPlugin?.manifest.version ?? selectedEntry.version) }}</dd>
+                <dt>{{ t('pluginMarketplace.author') }}</dt><dd>{{ selectedEntry.author }}</dd>
+                <dt>{{ t('pluginMarketplace.source') }}</dt><dd>{{ sourceLabelFor(selectedEntry) }}</dd>
+                <dt>{{ t('pluginMarketplace.currentGame') }}</dt><dd>{{ selectedPlugin?.appScoped ? t('pluginMarketplace.appScope') : (selectedGameName || '—') }}</dd>
+              </dl>
+              <h3>{{ t('pluginMarketplace.sections.supportedGames') }}</h3>
+              <div class="tag-list">
+                <span v-for="game in selectedEntry.supportedGames" :key="game" class="detail-tag">{{ game }}</span>
+                <span v-if="selectedEntry.supportedGames.length === 0" class="muted-copy">
+                  {{ t('pluginMarketplace.gameCompatibilityUnspecified') }}
+                </span>
               </div>
             </section>
           </div>
-          <aside class="detail-meta">
-            <h3>{{ t('pluginMarketplace.metadata') }}</h3>
-            <dl>
-              <dt>ID</dt><dd>{{ selectedEntry.id }}</dd>
-              <dt>{{ t('pluginMarketplace.version') }}</dt><dd>{{ selectedEntry.bundled ? t('pluginMarketplace.bundled') : (selectedPlugin?.manifest.version ?? selectedEntry.version) }}</dd>
-              <dt>{{ t('pluginMarketplace.author') }}</dt><dd>{{ selectedEntry.author }}</dd>
-              <dt>{{ t('pluginMarketplace.currentGame') }}</dt><dd>{{ selectedPlugin?.appScoped ? t('pluginMarketplace.appScope') : (selectedGameName || '—') }}</dd>
-            </dl>
-            <h3>{{ t('pluginMarketplace.sections.supportedGames') }}</h3>
-            <div class="tag-list">
-              <span v-for="game in selectedEntry.supportedGames" :key="game" class="detail-tag">{{ game }}</span>
-              <span v-if="selectedEntry.supportedGames.length === 0" class="muted-copy">
-                {{ t('pluginMarketplace.gameCompatibilityUnspecified') }}
-              </span>
-            </div>
-          </aside>
         </div>
       </section>
       <section v-else class="plugin-detail detail-empty">
-        {{ t('pluginMarketplace.selectPlugin') }}
+        <div><Box aria-hidden="true" /><h2>{{ t('pluginMarketplace.title') }}</h2><p>{{ t('pluginMarketplace.selectPlugin') }}</p></div>
       </section>
     </div>
 
-    <el-dialog v-model="logDialogOpen" :title="t('pluginMarketplace.logTitle', { name: selectedEntry?.name ?? '' })"
+    <el-dialog v-model="logDialogOpen" :title="t('pluginMarketplace.logTitle', { name: logPlugin?.name ?? '' })"
       width="min(760px, calc(100vw - 36px))">
       <pre class="plugin-log-view">{{ pluginLog || t('pluginMarketplace.logEmpty') }}</pre>
       <template #footer>
@@ -700,34 +756,43 @@ onMounted(async () => {
 
 <style scoped>
 .plugin-marketplace {
-  --market-line: rgba(var(--theme-surface-tint-rgb), .14);
+  --market-line: rgba(var(--theme-surface-tint-rgb), .10);
+  --market-muted: rgba(var(--theme-text-secondary-rgb), .82);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   min-height: 100%;
   box-sizing: border-box;
   padding: var(--t-page-padding);
   color: var(--t-page-text);
 }
-.marketplace-toolbar, .toolbar-left, .toolbar-actions, .detail-top, .detail-actions, .dependency-heading {
+.marketplace-header, .marketplace-context, .toolbar-actions, .detail-top, .detail-actions, .dependency-heading {
   display: flex;
   align-items: center;
 }
-.marketplace-toolbar { justify-content: space-between; gap: 16px; min-height: 38px; }
-.catalog-status { font-size: 12px; color: #e6b46b; }
+.marketplace-header { justify-content: space-between; gap: 20px; }
+.page-identity h1 { margin: 0; font-size: 23px; font-weight: 650; letter-spacing: -.5px; }
+.page-identity p { margin: 6px 0 0; color: var(--market-muted); font-size: 12px; line-height: 1.6; }
+.marketplace-context { gap: 12px; flex-wrap: wrap; padding: 12px 16px; border: var(--t-page-panel-border); border-radius: var(--t-page-section-radius); background: var(--t-page-panel-bg); }
+.marketplace-context label { flex: none; font-size: 12px; font-weight: 600; }
+.catalog-notice { border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); font-size: 12px; line-height: 1.6; }
+.catalog-notice summary { display: flex; align-items: center; gap: 9px; padding: 10px 14px; cursor: pointer; list-style: none; color: var(--t-warning-text); }
+.catalog-notice summary::-webkit-details-marker { display: none; }
+.catalog-notice summary > svg { flex: none; width: 16px; height: 16px; }
+.notice-details { margin-left: auto; white-space: nowrap; color: var(--market-muted); font-size: 11px; }
+.catalog-notice p { padding: 0 14px 12px 39px; margin: 0; overflow-wrap: anywhere; color: var(--market-muted); }
 .review-detail { font: 11px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
 .review-disclaimer { padding: 12px; border: var(--t-page-panel-border); border-radius: 6px; line-height: 1.6; }
-.toolbar-left { flex: 1 1 auto; min-width: 0; gap: 10px; }
-.toolbar-left label { flex: none; font-size: 12px; font-weight: 650; }
 .scope-note, .section-hint, .muted-copy {
-  color: rgba(var(--theme-text-secondary-rgb), .78);
+  color: var(--market-muted);
   font-size: 12px;
+  line-height: 1.7;
 }
 .toolbar-actions { flex: none; gap: 8px; }
 .toolbar-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.game-select { width: min(220px, 32vw); }
-.scope-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.marketplace-layout { display: grid; grid-template-columns: minmax(255px, 310px) minmax(0, 1fr); gap: 12px; flex: 1; min-height: 550px; }
+.game-select { width: 208px; max-width: 100%; }
+.scope-note { flex: 1 1 200px; }
+.marketplace-layout { display: grid; grid-template-columns: minmax(270px, 310px) minmax(0, 1fr); gap: 16px; flex: 1; align-items: start; min-height: 500px; }
 .marketplace-sidebar, .plugin-detail {
   min-width: 0;
   border: var(--t-page-panel-border);
@@ -737,76 +802,99 @@ onMounted(async () => {
   backdrop-filter: var(--t-page-panel-blur);
   -webkit-backdrop-filter: var(--t-page-panel-blur);
 }
-.marketplace-sidebar { display: flex; flex-direction: column; overflow: hidden; }
-.sidebar-search { padding: 10px; border-bottom: 1px solid var(--market-line); }
+.marketplace-sidebar { display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 12px; max-height: calc(100vh - 72px); }
+.sidebar-search { padding: 14px 14px 10px; }
 .search-icon { width: 15px; height: 15px; }
-.sidebar-tabs { display: flex; gap: 2px; padding: 4px 8px 0; border-bottom: 1px solid var(--market-line); }
+.sidebar-tabs { display: flex; gap: 3px; padding: 4px; margin: 0 14px; border: 1px solid var(--market-line); border-radius: 8px; background: var(--t-surface-subtle); }
 .sidebar-tabs button, .detail-tabs button {
-  border: 0; border-bottom: 2px solid transparent; background: transparent;
-  color: rgba(var(--theme-text-secondary-rgb), .85); font: inherit; font-size: 12px; cursor: pointer;
+  border: 0; background: transparent;
+  color: var(--market-muted); font: inherit; font-size: 12px; cursor: pointer;
+  transition: background .15s, color .15s;
 }
-.sidebar-tabs button { flex: 1; padding: 8px 3px; }
-.sidebar-tabs button span { margin-left: 3px; font-size: 10px; opacity: .72; }
-.sidebar-tabs button.active, .detail-tabs button.active { border-bottom-color: var(--t-page-accent); color: var(--t-page-text); }
-.marketplace-list { flex: 1; overflow-y: auto; padding: 4px 0; }
-.plugin-row { display: flex; width: 100%; gap: 10px; padding: 10px 12px; border: 0; border-left: 2px solid transparent; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.sidebar-tabs button { flex: 1; min-width: 0; padding: 7px 0; border-radius: 5px; white-space: nowrap; }
+.sidebar-tabs button span { margin-left: 4px; font-size: 10px; color: var(--t-page-text-muted); font-variant-numeric: tabular-nums; }
+.sidebar-tabs button.active { background: var(--t-surface-raised); color: var(--t-page-text); box-shadow: 0 1px 3px #0002; }
+.sidebar-tabs .has-updates { color: var(--t-warning-text); }
+.sidebar-tabs button:hover, .detail-tabs button:hover { color: var(--t-page-text); }
+.list-caption { padding: 14px 17px 6px; color: var(--t-page-text-muted); font-size: 11px; }
+.marketplace-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0 7px 7px; }
+.plugin-row { display: flex; width: 100%; gap: 11px; padding: 13px 10px; margin: 3px 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background .15s, border-color .15s; }
 .plugin-row:hover { background: var(--t-surface-hover); }
-.plugin-row.selected { border-left-color: var(--t-page-accent); background: var(--t-surface-raised); }
-.plugin-mark { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px; border-radius: 7px; background: var(--t-surface-raised); color: var(--t-page-accent); font-weight: 750; font-size: 16px; }
-.plugin-mark.large { width: 60px; height: 60px; font-size: 27px; }
+.plugin-row.selected { border-color: rgba(var(--theme-surface-tint-rgb), .22); background: var(--t-surface-raised); }
+.plugin-mark { display: grid; place-items: center; flex: 0 0 auto; width: 37px; height: 37px; border: 1px solid var(--market-line); border-radius: 10px; background: linear-gradient(135deg, rgba(var(--theme-surface-tint-rgb), .12), rgba(var(--theme-surface-tint-rgb), .03)); color: var(--t-page-text); font-weight: 650; font-size: 13px; letter-spacing: .5px; }
+.plugin-mark.large { width: 56px; height: 56px; border-radius: 14px; font-size: 20px; }
 .plugin-row-content { display: block; min-width: 0; flex: 1; }
-.plugin-row-title { display: flex; align-items: center; justify-content: space-between; gap: 5px; font-size: 13px; }
-.plugin-row-title strong, .plugin-row-description, .plugin-row-author { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plugin-row-title strong { min-width: 0; }
-.plugin-row-description { margin-top: 2px; font-size: 11px; color: rgba(var(--theme-text-secondary-rgb), .9); }
-.plugin-row-author { margin-top: 3px; font-size: 10px; color: rgba(var(--theme-text-secondary-rgb), .7); }
-.row-state { flex: none; font-size: 10px; color: rgba(var(--theme-text-secondary-rgb), .85); }
-.row-state.enabled { color: var(--t-page-accent); }
-.row-state.issue { color: #e6b46b; }
-.plugin-detail { overflow-y: auto; padding: 22px 24px; }
-.detail-top { gap: 16px; }
-.detail-identity { min-width: 0; }
-.detail-identity h2 { margin: 0 0 4px; font-size: 22px; }
-.detail-identity p, .detail-id { margin: 0; font-size: 12px; color: rgba(var(--theme-text-secondary-rgb), .85); }
-.detail-id { display: block; margin-top: 5px; font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
-.detail-description { margin: 14px 0; font-size: 13px; line-height: 1.5; }
-.detail-actions { gap: 8px; flex-wrap: wrap; min-height: 32px; }
+.plugin-row-title strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.plugin-row-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 5px; font-size: 11px; line-height: 1.7; color: var(--market-muted); }
+.plugin-row-footer { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 9px; font-size: 10px; }
+.plugin-row-version { color: var(--t-page-text-muted); font-variant-numeric: tabular-nums; }
+.source-badge { display: inline-flex; align-items: center; flex: none; padding: 1px 6px; border: 1px solid var(--market-line); border-radius: 4px; color: var(--market-muted); font-size: 10px; font-weight: 400; line-height: 1.7; }
+.row-state { margin-left: auto; font-size: 10px; color: var(--market-muted); }
+.row-state.enabled { color: var(--t-page-text); }
+.row-state.issue, .detail-issue { color: var(--t-warning-text); }
+.plugin-detail { padding: 24px; min-height: 500px; }
+.detail-top { gap: 14px; flex-wrap: wrap; }
+.detail-identity { min-width: 0; flex: 1 1 200px; }
+.detail-identity h2 { margin: 0 0 9px; font-size: 21px; line-height: 1.3; font-weight: 650; overflow-wrap: anywhere; letter-spacing: -.3px; }
+.detail-byline { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--market-muted); font-size: 11px; }
+.detail-description { margin: 14px 0 12px; font-size: 13px; line-height: 1.8; color: var(--market-muted); }
+.detail-actions { gap: 8px; flex-wrap: wrap; min-height: 32px; margin-top: 12px; }
+.detail-actions :deep(.el-button) { min-height: 30px; padding: 7px 12px; }
 .detail-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.detail-state { font-size: 11px; color: rgba(var(--theme-text-secondary-rgb), .85); }
-.detail-tabs { display: flex; gap: 20px; margin-top: 20px; border-bottom: 1px solid var(--market-line); }
-.detail-tabs button { padding: 9px 3px; }
-.detail-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 225px); gap: 24px; padding-top: 18px; }
+.detail-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--market-muted); white-space: nowrap; }
+.state-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--t-page-text-muted); }
+.is-enabled .state-dot { background: var(--theme-success); box-shadow: 0 0 0 3px var(--t-success-bg); }
+.detail-issue { font-size: 11px; }
+.detail-tabs { display: flex; gap: 22px; margin-top: 18px; border-bottom: 1px solid var(--market-line); }
+.detail-tabs button { border-bottom: 2px solid transparent; padding: 10px 0; white-space: nowrap; }
+.detail-tabs button.active { border-bottom-color: var(--t-page-accent); color: var(--t-page-text); }
+.detail-body { padding-top: 22px; }
+.detail-main { min-width: 0; }
+.detail-section { min-width: 0; }
 .detail-section h3, .detail-meta h3 { margin: 0 0 8px; font-size: 13px; font-weight: 650; }
-.section-hint { margin: 0 0 12px; line-height: 1.45; }
-.dependency-row { padding: 11px 0; border-top: 1px solid var(--market-line); }
-.dependency-heading { justify-content: space-between; gap: 8px; font-size: 12px; }
+.section-hint { margin: 0 0 18px; }
+.dependency-row { padding: 16px; margin: 12px 0; border: 1px solid var(--market-line); border-radius: 8px; background: var(--t-surface-subtle); }
+.dependency-heading { justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.dependency-heading strong { overflow-wrap: anywhere; min-width: 0; }
 .dependency-files, .dependency-path { margin: 5px 0; color: rgba(var(--theme-text-secondary-rgb), .82); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
-.dependency-path { font-family: ui-monospace, Consolas, monospace; }
-.dependency-status { flex: none; font-size: 10px; }
-.dependency-status.is-ready { color: var(--t-page-accent); }
-.dependency-status.is-missing { color: #e6b46b; }
-.dependency-status.is-invalid { color: #e18b83; }
-.detail-meta { border-left: 1px solid var(--market-line); padding-left: 18px; }
+.dependency-files { margin: 9px 0; }
+.dependency-path { font-family: ui-monospace, Consolas, monospace; padding: 8px 10px; background: var(--t-surface-soft); border-radius: 6px; }
+.dependency-status { flex: none; font-size: 10px; padding: 2px 7px; border-radius: 4px; background: var(--t-surface-raised); }
+.dependency-status.is-ready { color: var(--t-success-text); }
+.dependency-status.is-missing { color: var(--t-warning-text); }
+.dependency-status.is-invalid { color: var(--t-danger-text); }
 .detail-meta h3:not(:first-child) { margin-top: 22px; }
-.detail-meta dl { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; margin: 0; font-size: 11px; }
-.detail-meta dt { color: rgba(var(--theme-text-secondary-rgb), .8); }
-.detail-meta dd { margin: 0; overflow-wrap: anywhere; }
+.detail-meta dl { display: grid; grid-template-columns: minmax(65px, max-content) minmax(0, 1fr); gap: 0 20px; margin: 0; font-size: 12px; line-height: 1.7; }
+.detail-meta dt, .detail-meta dd { padding: 10px 0; border-bottom: 1px solid var(--market-line); }
+.detail-meta dt { color: var(--market-muted); }
+.detail-meta dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
 .tag-list, .permission-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.detail-tag, .permission-row { padding: 5px 7px; border: 1px solid var(--market-line); border-radius: 5px; font-size: 11px; }
-.permission-row { font-family: ui-monospace, Consolas, monospace; }
-.empty-state, .detail-empty { padding: 24px; color: rgba(var(--theme-text-secondary-rgb), .85); font-size: 12px; }
+.detail-tag, .permission-row { padding: 6px 10px; border: 1px solid var(--market-line); border-radius: 5px; font-size: 11px; }
+.permission-row { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; min-width: 0; }
+.empty-state, .detail-empty { padding: 32px 18px; color: var(--market-muted); font-size: 12px; text-align: center; line-height: 1.7; }
+.empty-state > svg, .detail-empty svg { width: 30px; height: 30px; opacity: .45; }
 .detail-empty { display: grid; place-items: center; }
+.detail-empty h2 { margin: 14px 0 6px; font-size: 16px; font-weight: 500; color: var(--t-page-text); }
+.detail-empty p { max-width: 260px; margin: 0; }
+.list-loading { padding: 16px 10px; color: var(--market-muted); font-size: 12px; }
+.loading-row { height: 58px; border-radius: 7px; margin-top: 12px; background: linear-gradient(100deg, var(--t-surface-soft) 25%, var(--t-surface-hover) 50%, var(--t-surface-soft) 75%); background-size: 200% 100%; animation: market-loading 1.5s linear infinite; }
+@keyframes market-loading { to { background-position: -200% 0; } }
+.plugin-marketplace button:focus-visible, .catalog-notice summary:focus-visible { outline: 2px solid var(--t-page-accent); outline-offset: 3px; }
 .plugin-log-view { max-height: 58vh; overflow: auto; margin: 0; padding: 12px; background: var(--t-surface-soft); color: var(--t-page-text); font: 11px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 900px) {
-  .marketplace-layout { grid-template-columns: minmax(210px, 260px) minmax(0, 1fr); }
-  .detail-body { grid-template-columns: minmax(0, 1fr); }
-  .detail-meta { border-left: 0; border-top: 1px solid var(--market-line); padding: 16px 0 0; }
+@media (max-width: 1080px) {
+  .marketplace-layout { grid-template-columns: minmax(250px, 280px) minmax(0, 1fr); }
+  .plugin-detail { padding: 20px; }
+  .detail-identity h2 { font-size: 19px; }
 }
-@media (max-width: 660px) {
-  .marketplace-toolbar { align-items: flex-start; flex-direction: column; }
+@media (max-width: 760px) {
+  .marketplace-header { align-items: flex-start; flex-wrap: wrap; }
   .marketplace-layout { grid-template-columns: minmax(0, 1fr); }
-  .marketplace-sidebar { max-height: 300px; }
-  .toolbar-left { flex-wrap: wrap; }
-  .scope-note { white-space: normal; }
+  .marketplace-sidebar { position: static; max-height: 340px; }
+  .scope-note { flex-basis: 100%; }
+  .plugin-detail { min-height: 360px; }
+  .detail-tabs { gap: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-marketplace * { animation: none; transition: none; }
 }
 </style>

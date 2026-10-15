@@ -41,20 +41,25 @@ const dlssPlugin = enabled => ({
   enabled, externalDependencies: {}, lifecycleStatus: 'installed', official: true,
 });
 
+function marketplace(t, options = {}) {
+  return component(t, '../../src/views/PluginMarketplace/PluginMarketplace.vue', [
+    'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
+    'catalog', 'catalogError', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog',
+  ], {
+    '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
+    '@tauri-apps/plugin-dialog': {}, 'element-plus': { ElMessage: { success() {}, error: message => { throw new Error(message); } } },
+    '@element-plus/icons-vue': {}, 'vue-i18n': i18n,
+    'vue-router': { useRouter: () => ({ push() { throw new Error('DLSS5 settings must stay in marketplace'); } }) },
+    '../../plugin/logs': options.logs ?? {}, '../../store/GamePreset': { getGamePresetPriority: () => 0 },
+    '../../store/AppStateManager': { AppStateManager: { gamesList: [], appSettings: { CurrentGameName: 'GIMI' } } },
+    '../../store/ResourceManager': { ResourceManager: { loadGameConfig: options.loadGameConfig ?? (() => { throw new Error('Unexpected config read'); }) } },
+  });
+}
+
 test('marketplace exposes DLSS5 settings only for the selected enabled game and discards stale target reads', async t => {
   const first = deferred(), second = deferred();
   const reads = [];
-  const s = component(t, '../../src/views/PluginMarketplace/PluginMarketplace.vue', [
-    'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
-  ], {
-    '@tauri-apps/api/core': { invoke() { throw new Error('Unexpected IPC'); } },
-    '@tauri-apps/plugin-dialog': {}, 'element-plus': { ElMessage: {} },
-    '@element-plus/icons-vue': {}, 'vue-i18n': i18n,
-    'vue-router': { useRouter: () => ({ push() { throw new Error('DLSS5 settings must stay in marketplace'); } }) },
-    '../../plugin/logs': {}, '../../store/GamePreset': { getGamePresetPriority: () => 0 },
-    '../../store/AppStateManager': { AppStateManager: { gamesList: [], appSettings: { CurrentGameName: 'GIMI' } } },
-    '../../store/ResourceManager': { ResourceManager: { loadGameConfig: game => { reads.push(game); return game === 'GIMI' ? first.promise : second.promise; } } },
-  });
+  const s = marketplace(t, { loadGameConfig: game => { reads.push(game); return game === 'GIMI' ? first.promise : second.promise; } });
   s.installed.value = [dlssPlugin(false)]; s.installedGameName.value = 'GIMI';
   await vue.nextTick();
   assert.deepEqual(reads, []);
@@ -80,17 +85,72 @@ test('marketplace exposes DLSS5 settings only for the selected enabled game and 
   assert.equal(s.graphicsConfigLoading.value, false);
 });
 
+test('marketplace refresh stays busy for every source and preserves the catalog on failure', async t => {
+  const registry = deferred(), remote = deferred(), local = deferred(), calls = [];
+  const previous = { ...dlssPlugin(false).manifest, supportedGames: [], official: true };
+  let retry = false;
+  const s = marketplace(t, { invoke: command => {
+    calls.push(command);
+    if (command === 'plugin_registry_snapshot_for_game') return retry ? [] : registry.promise;
+    if (command === 'official_plugin_catalog') return retry ? [previous] : remote.promise;
+    if (command === 'local_plugin_packages') return retry ? [] : local.promise;
+    throw new Error(`Unexpected command ${command}`);
+  } });
+  s.catalog.value = [previous];
+  const running = s.refreshAll();
+  assert.equal(s.refreshing.value, true);
+  await s.refreshAll();
+  assert.equal(calls.length, 3, 'repeated refresh must not start another set of requests');
+  registry.resolve([]); local.resolve([]);
+  await setImmediate();
+  assert.equal(s.loading.value, false);
+  assert.equal(s.refreshing.value, true, 'the catalog is still being read');
+  remote.reject(new Error('offline'));
+  await running;
+  assert.equal(s.refreshing.value, false);
+  assert.equal(s.catalog.value[0].id, previous.id);
+  assert.match(s.catalogError.value, /offline/);
+  retry = true;
+  await s.refreshAll();
+  assert.equal(s.catalogError.value, '');
+  assert.equal(s.refreshing.value, false);
+});
+
+test('switching the selected plugin keeps the pending log and clear action bound to their original plugin', async t => {
+  const read = deferred(), cleared = [];
+  const s = marketplace(t, { logs: {
+    readPluginLog: id => { assert.equal(id, 'ssmt.dlss5.integration'); return read.promise; },
+    clearPluginLog: async id => { cleared.push(id); },
+  } });
+  const bridge = { ...dlssPlugin(false), manifest: { ...dlssPlugin(false).manifest, id: 'ssmt.hoyoshade.bridge', name: 'Shade Bridge' } };
+  s.installed.value = [dlssPlugin(false), bridge];
+  await vue.nextTick();
+  const reading = s.openPluginLog();
+  s.detailTab.value = 'permissions';
+  s.selectedId.value = bridge.manifest.id;
+  await vue.nextTick();
+  assert.equal(s.detailTab.value, 'features');
+  read.resolve('original plugin log');
+  await reading;
+  assert.equal(s.logPlugin.value.id, 'ssmt.dlss5.integration');
+  assert.equal(s.logPlugin.value.name, 'DLSS5');
+  assert.equal(s.pluginLog.value, 'original plugin log');
+  await s.clearSelectedPluginLog();
+  assert.deepEqual(cleared, ['ssmt.dlss5.integration']);
+  assert.equal(s.pluginLog.value, '');
+});
+
 function graphics(t, options = {}) {
   const calls = [], messages = [], job = deferred();
   const props = vue.reactive({ gameName: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe' });
   const state = { root: 'C:/Assets/previous', profile: 'rtx50' };
   let pickerCount = 0;
   const s = component(t, '../../src/plugin/components/Dlss5GraphicsSettings.vue', [
-    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError',
+    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError', 'graphicsStateLoading',
   ], {
     '@tauri-apps/api/core': { Channel: class {}, invoke: async (command, args) => {
       calls.push({ command, args });
-      if (command === 'inspect_dlss5_game_state') return { state: 'not_managed' };
+      if (command === 'inspect_dlss5_game_state') return options.inspectState ? options.inspectState() : { state: 'not_managed' };
       if (command === 'gimi_hot_runtime_status') return state;
       if (command === 'inspect_dlss5_route_options') return { routes: ['gimi-hot'] };
       if (command === 'download_gimi_hot_runtime') return job.promise;
@@ -122,6 +182,32 @@ test('automatic setup runs only on click, reports progress, and captures the sel
   assert.equal(pickerCount(), 0);
   assert.equal(s.graphicsActionBusy.value, false);
   assert.ok(!calls.some(call => call.command === 'install_managed_dlss5_route'));
+});
+
+test('clearing the executable while reading graphics state ends loading and discards the old response', async t => {
+  const state = deferred();
+  const { s, props } = graphics(t, { inspectState: () => state.promise });
+  const reading = s.refreshGraphicsState();
+  assert.equal(s.graphicsStateLoading.value, true);
+  props.targetExePath = '';
+  await vue.nextTick();
+  await s.refreshGraphicsState();
+  assert.equal(s.graphicsStateLoading.value, false);
+  state.resolve({ state: 'managed' });
+  await reading;
+  assert.equal(s.hotRuntime.value, null);
+  assert.equal(s.graphicsStateLoading.value, false);
+});
+
+test('switching games cannot install using the previous game route before the new scan', async t => {
+  const { s, props, calls } = graphics(t);
+  await s.refreshGraphicsState();
+  props.gameName = 'Another';
+  props.targetExePath = 'D:/Another/GenshinImpact.exe';
+  await vue.nextTick();
+  assert.equal(s.hotRuntime.value, null);
+  await s.installSelectedDlss5Route();
+  assert.ok(!calls.some(call => call.command.includes('download') || call.command.includes('install_')));
 });
 
 test('offline import remains available without starting any download', async t => {
