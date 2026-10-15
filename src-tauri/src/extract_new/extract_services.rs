@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::extract_new::ailimit::AILIMITNewExtractor;
 use crate::extract_new::apmi2::APMI2NewExtractor;
+use crate::extract_new::cami::CamiNewExtractor;
 use crate::extract_new::efmi3::EFMI3FullNewExtractor;
 use crate::extract_new::gf2::GF2NewExtractor;
 use crate::extract_new::gimi::GIMINewExtractor;
@@ -358,6 +359,15 @@ impl ExtractNewService {
             }
             "SnowBreak" => {
                 let mut extractor = SnowBreakNewExtractor::new(
+                    &fa.folder_path,
+                    &workspace_path_string,
+                    is_full_extract,
+                )?;
+                extractor.run_extract(effective_filter)?;
+                Ok(())
+            }
+            "CAMI" => {
+                let mut extractor = CamiNewExtractor::new(
                     &fa.folder_path,
                     &workspace_path_string,
                     is_full_extract,

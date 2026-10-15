@@ -16,6 +16,7 @@ export const GAME_PRESET_VALUES = [
   'APMI',
   'Naraka',
   'NarakaM',
+  'CAMI',
 ] as const
 
 export type GamePreset = (typeof GAME_PRESET_VALUES)[number]
@@ -29,6 +30,7 @@ export const GAME_PRESET_DISPLAY_NAME_EN: Readonly<Record<GamePreset, string>> =
   DOAV: 'Dead or Alive Xtreme: Venus Vacation', SnowBreak: 'Snowbreak: Containment Zone',
   YYSLS: 'Where Winds Meet', APMI: 'Azur Promilia', Naraka: 'NARAKA: BLADEPOINT',
   NarakaM: 'NARAKA: BLADEPOINT Mobile',
+  CAMI: 'Calabiyau (Strinova)',
 }
 
 export type GamePresetTranslator = (key: string) => string
@@ -74,6 +76,7 @@ export const AUTO_UPDATE_SUPPORTED_PRESETS = [
   'ZZMIDX12',
   'NTEMI',
   'WWMI',
+  'CAMI',
 ] as const
 
 export const AUTO_UPDATE_SUPPORTED_PRESET_SET: ReadonlySet<string> =
@@ -100,6 +103,7 @@ export const GAME_PRESET_GITHUB_REPO_MAP: Readonly<Record<GamePreset, string>> =
   APMI: 'StarBobis/MinBase-Package',
   Naraka: 'StarBobis/NBP-Package',
   NarakaM: 'StarBobis/NBPM-Package',
+  CAMI: 'hello2565/CAMI-Package',
 }
 
 export function getGithubRepoByGamePreset(gamePreset: string): string | null {

@@ -396,6 +396,26 @@ pub fn sync_workspace_deduped_textures_and_json(
     drawib_config: &DrawIBConfig,
     workspace_path: &str,
 ) -> Result<(), String> {
+    sync_workspace_deduped_textures_and_json_impl(fa, drawib_config, workspace_path, false)
+}
+
+// CAMI（卡拉彼丘）的 FA 转储含 trianglestrip 等非 trianglelist 的 ib txt（无 first/count 语义），
+// 参与分组会把组件名污染成 {draw_ib}-0-0 这类错误文件夹名，且单个坏文件不应中止整体同步。
+// 仅 CAMI 启用该容错，其余预设行为保持不变。
+pub fn sync_cami_workspace_deduped_textures_and_json(
+    fa: &FrameAnalysis,
+    drawib_config: &DrawIBConfig,
+    workspace_path: &str,
+) -> Result<(), String> {
+    sync_workspace_deduped_textures_and_json_impl(fa, drawib_config, workspace_path, true)
+}
+
+fn sync_workspace_deduped_textures_and_json_impl(
+    fa: &FrameAnalysis,
+    drawib_config: &DrawIBConfig,
+    workspace_path: &str,
+    skip_non_trianglelist_ib: bool,
+) -> Result<(), String> {
     let mut component_drawcall_index_list_dict: HashMap<String, Vec<String>> = HashMap::new();
 
     for entry in drawib_config.entries.iter() {
@@ -428,7 +448,29 @@ pub fn sync_workspace_deduped_textures_and_json(
                 continue;
             }
 
-            let ib_txt_file = IndexBufferTxtFile::new(&ib_txt_filepath, true)?;
+            let ib_txt_file = if skip_non_trianglelist_ib {
+                match IndexBufferTxtFile::new(&ib_txt_filepath, true) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        crate::extract_log!(
+                            "跳过无法解析的 IB txt {}: {}",
+                            ib_txt_filename, error
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                IndexBufferTxtFile::new(&ib_txt_filepath, true)?
+            };
+            // 非 trianglelist（如 trianglestrip）的 ib txt 没有 first/count 语义，
+            // 参与分组会把组件名污染成 {draw_ib}-0-0 这类错误文件夹名。
+            if skip_non_trianglelist_ib && ib_txt_file.topology != "trianglelist" {
+                crate::extract_log!(
+                    "跳过非 trianglelist 的 IB txt: {} (topology={})",
+                    ib_txt_filename, ib_txt_file.topology
+                );
+                continue;
+            }
             let first_index = ib_txt_file.first_index.trim().parse::<u64>().unwrap_or(0);
             first_index_ib_txt_map.insert(first_index, ib_txt_filename);
             first_index_index_count_map

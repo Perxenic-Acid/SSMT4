@@ -3,7 +3,7 @@
     "GIMI": "Genshin Impact", "HIMI": "Honkai Impact 3rd", "SRMI": "Honkai: Star Rail", "ZZMI": "Zenless Zone Zero",
     "ZZMIDX12": "Zenless Zone Zero (DirectX 12)", "WWMI": "Wuthering Waves", "EFMI": "Arknights: Endfield", "NTEMI": "Neverness to Everness",
     "GF2": "Girls' Frontline 2: Exilium", "IdentityV": "Identity V", "AILIMIT": "AI LIMIT", "DOAV": "Dead or Alive Xtreme: Venus Vacation",
-    "SnowBreak": "Snowbreak: Containment Zone", "YYSLS": "Where Winds Meet", "APMI": "Azur Promilia", "Naraka": "NARAKA: BLADEPOINT", "NarakaM": "NARAKA: BLADEPOINT Mobile"
+    "SnowBreak": "Snowbreak: Containment Zone", "YYSLS": "Where Winds Meet", "APMI": "Azur Promilia", "Naraka": "NARAKA: BLADEPOINT", "NarakaM": "NARAKA: BLADEPOINT Mobile", "CAMI": "Calabiyau"
   },
   "home": {
     "versionInfo": {
