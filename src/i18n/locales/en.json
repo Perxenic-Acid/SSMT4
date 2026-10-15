@@ -367,6 +367,7 @@
     "bundled": "Bundled component",
     "official": "Official Native Release",
     "thirdParty": "Third-party or unverified source",
+    "localBuild": "Local build",
     "playerTweaksDescription": "Genshin runtime tweaks injected by the SSMT launcher.",
     "gameCompatibilityUnspecified": "No games listed by the package; check actual compatibility.",
     "byAuthor": "by {author}",
@@ -378,11 +379,11 @@
     "empty": { "discover": "No curated plugins are available.", "installed": "No plugins installed yet.", "updates": "All installed plugins are up to date." },
     "none": "None",
     "notProvided": "Not provided by this catalog entry.",
-    "actions": { "refresh": "Refresh", "installFromFile": "Install from file", "choosePackage": "Choose an SSMT plugin package", "installPackage": "Install package", "installOfficial": "Install from Native Release", "updateOfficial": "Update from Native Release", "chooseDependencyPath": "Choose dependency folder", "enable": "Enable", "disable": "Disable", "viewLog": "View log", "openSettings": "Open plugin settings", "clearLog": "Clear log", "close": "Close" },
-    "review": { "title": "Review third-party plugin", "permissions": "Declared permissions:", "disclaimer": "The safety check validates the archive structure, paths, size, manifest, and declared files. It cannot guarantee that plugin code is harmless. Once installed, a plugin may run native code or start programs under its declared permissions. Confirm that you trust its source and accept the risks of third-party plugins.", "accept": "I have read and understand this disclaimer and want to install this plugin.", "cancel": "Cancel" },
+    "actions": {"refresh": "Refresh", "installFromFile": "Install from file", "choosePackage": "Choose an SSMT plugin package", "installPackage": "Install package", "installOfficial": "Install from Native Release", "updateOfficial": "Update from Native Release", "chooseDependencyPath": "Choose dependency folder", "enable": "Enable", "disable": "Disable", "viewLog": "View log", "openSettings": "Open plugin settings", "clearLog": "Clear log", "close": "Close", "installLocal": "Install local build"},
+    "review": {"title": "Review plugin package", "permissions": "Declared permissions:", "disclaimer": "The safety check validates the archive structure, paths, size, manifest, and declared files. It cannot guarantee that plugin code is harmless. Once installed, a plugin may run native code or start programs under its declared permissions. Confirm that you trust its source and accept the risks of third-party plugins.", "accept": "I have read and understand this disclaimer and want to install this plugin.", "cancel": "Cancel", "source": "Source:"},
     "logTitle": "Plugin log · {name}",
     "logEmpty": "No plugin log entries.",
-    "messages": { "loadFailed": "Failed to load plugin registry: {error}", "catalogFailed": "Could not load the Native Release catalog: {error}. You can still install third-party packages from a local file.", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "dependencySaved": "Dependency folder saved.", "dependencySaveFailed": "Failed to set dependency folder: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}", "logFailed": "Failed to access plugin log: {error}", "logCleared": "Plugin log cleared." }
+    "messages": {"loadFailed": "Failed to load plugin registry: {error}", "catalogFailed": "Could not load the Native Release catalog: {error}. You can still install third-party packages from a local file.", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "dependencySaved": "Dependency folder saved.", "dependencySaveFailed": "Failed to set dependency folder: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}", "logFailed": "Failed to access plugin log: {error}", "logCleared": "Plugin log cleared.", "localCatalogFailed": "Could not read locally built plugins: {error}", "localUnavailable": "Local package is no longer available. Refresh the marketplace."}
   },
   "launchUi": {
     "title": "Launching game",

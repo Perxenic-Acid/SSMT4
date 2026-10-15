@@ -842,6 +842,32 @@ pub fn inspect_plugin_package(archive_path: String) -> Result<PackageInspection,
 }
 
 #[tauri::command]
+pub fn local_plugin_packages() -> Result<Vec<super::local_packages::LocalPluginPackage>, String> {
+    super::local_packages::discover(&crate::config::path_manager::PathManager::ssmt_resources_folder().join("PluginPackages"))
+}
+
+#[tauri::command]
+pub fn install_local_plugin(
+    app: tauri::AppHandle,
+    id: String,
+    reviewed_sha256: String,
+    disclaimer_accepted: bool,
+) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    if !disclaimer_accepted { return Err("local plugin disclaimer must be accepted".into()); }
+    // 本地构建保留 ID 以复用已有贡献，但安装来源仍未验证；不能借此安装任意路径的 ssmt.* 包。
+    let package = super::local_packages::reviewed(
+        &crate::config::path_manager::PathManager::ssmt_resources_folder().join("PluginPackages"),
+        &id, &reviewed_sha256,
+    )?;
+    if !package.inspection.manifest.compatibility.supports(&app.package_info().version.to_string(), super::SUPPORTED_PLATFORM, None) {
+        return Err("plugin is incompatible with this SSMT version or platform".into());
+    }
+    let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    install_verified_ssmtpkg(&mut registry, &package.archive_path, &reviewed_sha256).map_err(|error| error.to_string())?;
+    Ok(snapshot(&registry))
+}
+
+#[tauri::command]
 pub async fn official_plugin_catalog() -> Result<Vec<MarketplaceEntry>, String> {
     official_release::official_catalog().await
 }

@@ -12,6 +12,7 @@ pub mod launch_barrier;
 pub mod launch_coordinator;
 pub mod launch_event_bus;
 pub mod logging;
+pub mod local_packages;
 pub mod official_release;
 pub mod managed_reshade;
 pub mod managed_reshade_journal;

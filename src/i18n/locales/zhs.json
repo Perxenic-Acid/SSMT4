@@ -366,6 +366,7 @@
     "bundled": "内置组件",
     "official": "Native Release 官方包",
     "thirdParty": "第三方或未验证来源",
+    "localBuild": "本地构建",
     "playerTweaksDescription": "原神运行时增强；由 SSMT 启动器单独注入。",
     "gameCompatibilityUnspecified": "插件包未列出游戏；以实际兼容性为准。",
     "byAuthor": "作者：{author}",
@@ -377,11 +378,11 @@
     "empty": { "discover": "暂无受控插件。", "installed": "还没有安装插件。", "updates": "已安装插件都是最新版本。" },
     "none": "无",
     "notProvided": "此目录条目尚未提供。",
-    "actions": { "refresh": "刷新", "installFromFile": "从文件安装", "choosePackage": "选择 SSMT 插件包", "installPackage": "安装插件包", "installOfficial": "从 Native Release 安装", "updateOfficial": "从 Native Release 更新", "chooseDependencyPath": "选择依赖目录", "enable": "启用", "disable": "禁用", "viewLog": "查看日志", "openSettings": "打开插件设置", "clearLog": "清空日志", "close": "关闭" },
-    "review": { "title": "检查第三方插件", "permissions": "声明权限：", "disclaimer": "安全检查已验证压缩包结构、路径、大小、清单和声明文件，但无法保证插件代码没有恶意行为。安装后插件可能按所列权限运行原生代码或启动程序。请确认来源可信，并自行承担第三方插件造成的风险。", "accept": "我已阅读并理解以上免责声明，仍要安装这个插件。", "cancel": "取消" },
+    "actions": {"refresh": "刷新", "installFromFile": "从文件安装", "choosePackage": "选择 SSMT 插件包", "installPackage": "安装插件包", "installOfficial": "从 Native Release 安装", "updateOfficial": "从 Native Release 更新", "chooseDependencyPath": "选择依赖目录", "enable": "启用", "disable": "禁用", "viewLog": "查看日志", "openSettings": "打开插件设置", "clearLog": "清空日志", "close": "关闭", "installLocal": "安装本地构建"},
+    "review": {"title": "检查插件包", "permissions": "声明权限：", "disclaimer": "安全检查已验证压缩包结构、路径、大小、清单和声明文件，但无法保证插件代码没有恶意行为。安装后插件可能按所列权限运行原生代码或启动程序。请确认来源可信，并自行承担第三方插件造成的风险。", "accept": "我已阅读并理解以上免责声明，仍要安装这个插件。", "cancel": "取消", "source": "来源："},
     "logTitle": "插件日志 · {name}",
     "logEmpty": "暂无插件日志。",
-    "messages": { "loadFailed": "读取插件注册表失败：{error}", "catalogFailed": "无法读取 Native Release 插件目录：{error}。仍可从本地文件安装第三方插件。", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "dependencySaved": "依赖目录已保存。", "dependencySaveFailed": "设置依赖目录失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}", "logFailed": "访问插件日志失败：{error}", "logCleared": "插件日志已清空。" }
+    "messages": {"loadFailed": "读取插件注册表失败：{error}", "catalogFailed": "无法读取 Native Release 插件目录：{error}。仍可从本地文件安装第三方插件。", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "dependencySaved": "依赖目录已保存。", "dependencySaveFailed": "设置依赖目录失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}", "logFailed": "访问插件日志失败：{error}", "logCleared": "插件日志已清空。", "localCatalogFailed": "读取本地构建插件失败：{error}", "localUnavailable": "本地插件包已不存在，请刷新市场。"}
   },
   "launchUi": {
     "title": "正在启动游戏",

@@ -57,6 +57,7 @@ interface CatalogEntry {
   externalDependencies: Array<{ id: string; requiredFiles: string[] }>
   bundled?: boolean
   official?: boolean
+  localArchive?: string
 }
 
 interface PackageInspection {
@@ -64,6 +65,11 @@ interface PackageInspection {
   sha256: string
   fileCount: number
   unpackedSize: number
+}
+
+interface LocalPluginPackage {
+  archivePath: string
+  inspection: PackageInspection
 }
 
 interface OfficialCatalogEntry {
@@ -84,10 +90,13 @@ const selectedGameName = ref(AppStateManager.appSettings.CurrentGameName === 'De
   ? '' : AppStateManager.appSettings.CurrentGameName)
 
 const catalog = ref<CatalogEntry[]>([])
+const localCatalog = ref<CatalogEntry[]>([])
 const catalogError = ref('')
+const localCatalogError = ref('')
 const reviewOpen = ref(false)
 const reviewAccepted = ref(false)
 const reviewArchive = ref('')
+const reviewLocalId = ref('')
 const reviewInspection = ref<PackageInspection | null>(null)
 
 const activeTab = ref<'discover' | 'installed' | 'updates'>('discover')
@@ -113,8 +122,16 @@ const installedById = computed(() => {
   return byId
 })
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
+const availableCatalog = computed(() => {
+  const byId = new Map<string, CatalogEntry>()
+  for (const entry of [...catalog.value, ...localCatalog.value]) {
+    const current = byId.get(entry.id)
+    if (!current || compareVersions(entry.version, current.version) >= 0) byId.set(entry.id, entry)
+  }
+  return [...byId.values()]
+})
 const allEntries = computed<CatalogEntry[]>(() => {
-  const entries = [...catalog.value]
+  const entries = [...availableCatalog.value]
   for (const plugin of installedById.value.values()) {
     if (entries.some(entry => entry.id === plugin.manifest.id)) continue
     entries.push({
@@ -134,7 +151,7 @@ const allEntries = computed<CatalogEntry[]>(() => {
   return entries
 })
 const installedEntries = computed(() => allEntries.value.filter(entry => installedById.value.has(entry.id)))
-const updateEntries = computed(() => catalog.value.filter(entry => {
+const updateEntries = computed(() => availableCatalog.value.filter(entry => {
   const current = installedById.value.get(entry.id)
   return current && compareVersions(entry.version, current.manifest.version) > 0
 }))
@@ -146,7 +163,9 @@ const rowLifecycleFor = (entry: CatalogEntry) => {
   const plugin = installedById.value.get(entry.id)
   return plugin ? lifecycleFor(entry, plugin) : undefined
 }
-const sourceLabelFor = (entry: CatalogEntry) => entry.bundled
+const sourceLabelFor = (entry: CatalogEntry) => entry.localArchive
+  ? t('pluginMarketplace.localBuild')
+  : entry.bundled
   ? t('pluginMarketplace.bundled')
   : installedById.value.has(entry.id)
     ? t(installedById.value.get(entry.id)?.official ? 'pluginMarketplace.official' : 'pluginMarketplace.thirdParty')
@@ -209,7 +228,45 @@ const refreshCatalog = async () => {
 }
 
 const refreshAll = async () => {
-  await Promise.all([refreshInstalled(), refreshCatalog()])
+  await Promise.all([refreshInstalled(), refreshCatalog(), refreshLocalCatalog()])
+}
+
+const refreshLocalCatalog = async () => {
+  try {
+    const packages = await invoke<LocalPluginPackage[]>('local_plugin_packages')
+    localCatalog.value = packages.map(({ archivePath, inspection }) => ({
+      id: inspection.manifest.id,
+      name: inspection.manifest.name,
+      description: inspection.manifest.description || inspection.manifest.name,
+      author: inspection.manifest.author,
+      version: inspection.manifest.version,
+      supportedGames: inspection.manifest.compatibility?.games ?? [],
+      permissions: inspection.manifest.permissions,
+      externalDependencies: inspection.manifest.externalDependencies,
+      localArchive: archivePath,
+    }))
+    localCatalogError.value = ''
+  } catch (error) {
+    localCatalogError.value = String(error)
+  }
+}
+
+const installLocal = async (entry: CatalogEntry) => {
+  loading.value = true
+  try {
+    const packages = await invoke<LocalPluginPackage[]>('local_plugin_packages')
+    const current = packages.find(item => item.inspection.manifest.id === entry.id)
+    if (!current) throw new Error(t('pluginMarketplace.messages.localUnavailable'))
+    reviewInspection.value = current.inspection
+    reviewArchive.value = current.archivePath
+    reviewLocalId.value = entry.id
+    reviewAccepted.value = false
+    reviewOpen.value = true
+  } catch (error) {
+    ElMessage.error(t('pluginMarketplace.messages.installFailed', { error: String(error) }))
+  } finally {
+    loading.value = false
+  }
 }
 
 const installFromFile = async () => {
@@ -224,6 +281,7 @@ const installFromFile = async () => {
   try {
     reviewInspection.value = await invoke<PackageInspection>('inspect_plugin_package', { archivePath: selected })
     reviewArchive.value = selected
+    reviewLocalId.value = ''
     reviewAccepted.value = false
     reviewOpen.value = true
   } catch (error) {
@@ -238,8 +296,8 @@ const installReviewed = async () => {
   if (!reviewAccepted.value || !reviewInspection.value) return
   loading.value = true
   try {
-    await invoke('install_plugin_package', {
-      archivePath: reviewArchive.value,
+    await invoke(reviewLocalId.value ? 'install_local_plugin' : 'install_plugin_package', {
+      ...(reviewLocalId.value ? { id: reviewLocalId.value } : { archivePath: reviewArchive.value }),
       reviewedSha256: reviewInspection.value.sha256,
       disclaimerAccepted: true,
     })
@@ -387,6 +445,7 @@ onMounted(async () => {
     </header>
 
     <div v-if="catalogError" class="catalog-status">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</div>
+    <div v-if="localCatalogError" class="catalog-status">{{ t('pluginMarketplace.messages.localCatalogFailed', { error: localCatalogError }) }}</div>
 
     <div class="game-scope">
       <label for="plugin-game-select">{{ t('pluginMarketplace.gameSelection') }}</label>
@@ -450,7 +509,11 @@ onMounted(async () => {
         </div>
         <p class="detail-description">{{ selectedEntry.description }}</p>
         <div class="detail-actions">
-          <el-button v-if="!selectedPlugin && selectedEntry.official" type="primary" size="small"
+          <el-button v-if="selectedEntry.localArchive && (!selectedPlugin || compareVersions(selectedEntry.version, selectedPlugin.manifest.version) > 0)"
+            type="primary" size="small" :loading="loading" @click="installLocal(selectedEntry)">
+            {{ t('pluginMarketplace.actions.installLocal') }}
+          </el-button>
+          <el-button v-else-if="!selectedPlugin && selectedEntry.official" type="primary" size="small"
             :loading="loading" @click="installOfficial(selectedEntry)">
             {{ t('pluginMarketplace.actions.installOfficial') }}
           </el-button>
@@ -568,6 +631,7 @@ onMounted(async () => {
       <template v-if="reviewInspection">
         <p><strong>{{ reviewInspection.manifest.name }}</strong> · {{ reviewInspection.manifest.author }} · v{{ reviewInspection.manifest.version }}</p>
         <p class="review-detail">{{ reviewInspection.manifest.id }} · {{ reviewInspection.fileCount }} files · SHA-256: {{ reviewInspection.sha256 }}</p>
+        <p class="review-detail">{{ t('pluginMarketplace.review.source') }} {{ reviewArchive }}</p>
         <p class="review-detail">{{ t('pluginMarketplace.review.permissions') }} {{ reviewInspection.manifest.permissions.join(', ') || t('pluginMarketplace.none') }}</p>
         <p class="review-disclaimer">{{ t('pluginMarketplace.review.disclaimer') }}</p>
         <el-checkbox v-model="reviewAccepted">{{ t('pluginMarketplace.review.accept') }}</el-checkbox>
