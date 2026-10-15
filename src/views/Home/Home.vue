@@ -508,19 +508,26 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
           </el-icon>
         </button>
         <div class="home-background-list">
-          <button v-for="(entry, index) in backgroundEntries" :key="entry.id" type="button"
-            class="home-background-thumb" :class="{ active: currentBackgroundIndex === index }"
-            :title="entry.type === BGType.Video ? t('home.launcherLinks.videoBackground') : t('home.launcherLinks.imageBackground')"
-            @click="selectBackground(index)">
-            <span class="home-background-thumb-image"
-              :style="{ backgroundImage: `url(${entry.imagePath || entry.themePath || entry.videoPath || ''})` }"></span>
-            <span class="home-background-thumb-type">
-              <el-icon>
-                <VideoCamera v-if="entry.type === BGType.Video" />
-                <Picture v-else />
-              </el-icon>
-            </span>
-          </button>
+          <el-tooltip
+            v-for="(entry, index) in backgroundEntries"
+            :key="entry.id"
+            :content="entry.type === BGType.Video ? t('home.launcherLinks.videoBackground') : t('home.launcherLinks.imageBackground')"
+            placement="left"
+            :show-after="160"
+          >
+            <button type="button"
+              class="home-background-thumb" :class="{ active: currentBackgroundIndex === index }"
+              @click="selectBackground(index)">
+              <span class="home-background-thumb-image"
+                :style="{ backgroundImage: `url(${entry.imagePath || entry.themePath || entry.videoPath || ''})` }"></span>
+              <span class="home-background-thumb-type">
+                <el-icon>
+                  <VideoCamera v-if="entry.type === BGType.Video" />
+                  <Picture v-else />
+                </el-icon>
+              </span>
+            </button>
+          </el-tooltip>
         </div>
         <button type="button" class="home-background-arrow" :title="t('home.launcherLinks.nextBackground')"
           @click="stepBackground(1)">
@@ -761,7 +768,7 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
   position: absolute;
   top: 0;
   right: 0;
-  bottom: 0;
+  bottom: calc(var(--bottom-ui-gap) + 84px);
   width: 86px;
   z-index: 4;
   display: flex;
