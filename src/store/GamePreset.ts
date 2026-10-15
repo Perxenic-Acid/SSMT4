@@ -1,4 +1,17 @@
-export const GAME_PRESET_VALUES = [
+// ─────────────────────────────────────────────────────────────
+// 游戏预设定义
+// ─────────────────────────────────────────────────────────────
+// 说明:
+// - GAME_PRESET_ALL_VALUES 是全量预设表(历史遗留 + 当前保留),
+//   仅作为底层数据保留,不直接决定"当前支持"的入口。以后需要恢复
+//   某个游戏时,把它加回 GAME_PRESET_VALUES 即可。
+// - GAME_PRESET_VALUES 是当前真正参与构建/暴露的支持列表,按优先级
+//   排序,顺序决定下拉框与侧边栏的置顶顺序。
+// - i18n 的 gameNames 字典保持完整,不随此列表裁剪。
+// ─────────────────────────────────────────────────────────────
+
+/** 全量预设表(历史遗留 + 当前保留),底层逻辑与数据保留,便于以后恢复。 */
+const GAME_PRESET_ALL_VALUES = [
   'GIMI',
   'HIMI',
   'SRMI',
@@ -19,10 +32,37 @@ export const GAME_PRESET_VALUES = [
   'CAMI',
 ] as const
 
+type GamePresetAll = (typeof GAME_PRESET_ALL_VALUES)[number]
+
+/**
+ * 当前保留并参与构建的游戏预设,按优先级排序。
+ * - 绝对支持: GIMI
+ * - 长期支持: WWMI / SRMI / ZZMI / EFMI
+ * - 有限支持: NTEMI / HIMI / CAMI / ZZMIDX12
+ * - 将会支持: APMI(蓝色星原:旅谣)
+ *   (星布谷地 / 无限大 待接入后再加入)
+ */
+export const GAME_PRESET_VALUES = [
+  // 绝对支持
+  'GIMI',
+  // 长期支持
+  'WWMI',
+  'SRMI',
+  'ZZMI',
+  'EFMI',
+  // 有限支持
+  'NTEMI',
+  'HIMI',
+  'CAMI',
+  'ZZMIDX12',
+  // 将会支持
+  'APMI',
+] as const
+
 export type GamePreset = (typeof GAME_PRESET_VALUES)[number]
 
 /** English fallback only. Player-facing UI names live in i18n locale files. */
-export const GAME_PRESET_DISPLAY_NAME_EN: Readonly<Record<GamePreset, string>> = {
+export const GAME_PRESET_DISPLAY_NAME_EN: Readonly<Record<GamePresetAll, string>> = {
   GIMI: 'Genshin Impact', HIMI: 'Honkai Impact 3rd', SRMI: 'Honkai: Star Rail',
   ZZMI: 'Zenless Zone Zero', ZZMIDX12: 'Zenless Zone Zero (DirectX 12)',
   WWMI: 'Wuthering Waves', EFMI: 'Arknights: Endfield', NTEMI: 'Neverness to Everness',
@@ -37,11 +77,12 @@ export type GamePresetTranslator = (key: string) => string
 
 export function getGamePresetDisplayName(value: string | null | undefined, translate?: GamePresetTranslator): string {
   const normalized = (value || '').trim()
-  if (!GAME_PRESET_SET.has(normalized)) return normalized
-  const displayName = translate?.(`gameNames.${normalized}`) || GAME_PRESET_DISPLAY_NAME_EN[normalized as GamePreset]
+  if (!GAME_PRESET_ALL_SET.has(normalized)) return normalized
+  const displayName = translate?.(`gameNames.${normalized}`) || GAME_PRESET_DISPLAY_NAME_EN[normalized as GamePresetAll]
   return `${displayName}(${normalized})`
 }
 
+const GAME_PRESET_ALL_SET: ReadonlySet<string> = new Set(GAME_PRESET_ALL_VALUES)
 const GAME_PRESET_SET: ReadonlySet<string> = new Set(GAME_PRESET_VALUES)
 
 export const MIHOYO_GAME_PRESET_VALUES = [
@@ -82,7 +123,7 @@ export const AUTO_UPDATE_SUPPORTED_PRESETS = [
 export const AUTO_UPDATE_SUPPORTED_PRESET_SET: ReadonlySet<string> =
   new Set(AUTO_UPDATE_SUPPORTED_PRESETS)
 
-export const GAME_PRESET_GITHUB_REPO_MAP: Readonly<Record<GamePreset, string>> = {
+export const GAME_PRESET_GITHUB_REPO_MAP: Readonly<Record<GamePresetAll, string>> = {
   GIMI: 'SilentNightSound/GIMI-Package',
   HIMI: 'leotorrez/HIMI-Package',
   SRMI: 'SpectrumQT/SRMI-Package',
@@ -90,10 +131,10 @@ export const GAME_PRESET_GITHUB_REPO_MAP: Readonly<Record<GamePreset, string>> =
   ZZMIDX12: 'StarBobis/MinBase-Package',
   WWMI: 'SpectrumQT/WWMI-Package',
   EFMI: 'SpectrumQT/EFMI-Package',
-  
+
   //异环暂时用222221的包
   NTEMI: 'ssice-a/NTMI-PACKAGE',
-  
+
   GF2: 'SilentNightSound/GIMI-Package',
   IdentityV: 'StarBobis/MinBase-Package',
   AILIMIT: 'StarBobis/MinBase-Package',
@@ -108,7 +149,7 @@ export const GAME_PRESET_GITHUB_REPO_MAP: Readonly<Record<GamePreset, string>> =
 
 export function getGithubRepoByGamePreset(gamePreset: string): string | null {
   if (Object.prototype.hasOwnProperty.call(GAME_PRESET_GITHUB_REPO_MAP, gamePreset)) {
-    return GAME_PRESET_GITHUB_REPO_MAP[gamePreset as GamePreset]
+    return GAME_PRESET_GITHUB_REPO_MAP[gamePreset as GamePresetAll]
   }
   return null
 }

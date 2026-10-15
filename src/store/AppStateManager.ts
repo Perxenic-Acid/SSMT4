@@ -7,7 +7,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { AppSettings, BGType, DEFAULT_PAGE_VISIBILITY, SSMTLocale, type PageVisibilitySettings } from './AppSettings'
 import { applyAppThemeColors } from './AppTheme'
 import { GlobalConfig } from './GlobalConfig'
-import { AUTO_UPDATE_SUPPORTED_PRESET_SET } from './GamePreset'
+import { AUTO_UPDATE_SUPPORTED_PRESET_SET, isValidGamePreset } from './GamePreset'
 import { ResourceManager } from './ResourceManager'
 import { i18n } from '../i18n'
 
@@ -240,7 +240,9 @@ export const useAppStateStore = defineStore('appState', () => {
     try {
       const games = await ResourceManager.scanGames()
 
-      const visibleGames = games
+      // 只保留当前支持的游戏:其余游戏的入口从程序中断开,
+      // 但底层配置与逻辑仍保留在磁盘/代码中,便于以后恢复。
+      const visibleGames = games.filter(game => isValidGamePreset(game.name))
 
       console.log('Available games:', visibleGames)
 
