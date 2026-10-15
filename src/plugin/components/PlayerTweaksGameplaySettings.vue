@@ -46,18 +46,19 @@ const save = async () => {
 </script>
 
 <template>
-  <section class="gameplay-settings">
+  <section class="tweak-settings">
     <h3>{{ label('运行设置', 'Runtime settings') }}</h3>
-    <p class="gameplay-hint">{{ label('按当前游戏单独保存；下次通过 SSMT 启动时生效。', 'Saved per game; takes effect on the next SSMT launch.') }}</p>
-    <p class="gameplay-hint">{{ label('帧率数值只设置游戏内部目标；NVIDIA App 等外部限制或覆盖仍可能决定实际 FPS。', 'The FPS value sets the game target; NVIDIA App and other external controls may determine actual FPS.') }}</p>
-    <p v-if="!enabled" class="gameplay-hint">{{ label('插件已禁用，这些设置不会注入游戏。', 'The plugin is disabled; these settings will not be injected.') }}</p>
-    <p v-if="!gameName" class="gameplay-hint">{{ label('请先在上方选择游戏。', 'Select a game above first.') }}</p>
-    <div v-else class="gameplay-grid" :class="{ loading }">
-      <label><input v-model="gameplay.fpsUnlock" type="checkbox">{{ label('解锁帧率并关闭 VSync', 'Unlock FPS and disable VSync') }}</label>
-      <label class="number-field">{{ label('游戏内部目标帧率（30–240）', 'Game target FPS (30–240)') }}
+    <p class="tweak-hint">{{ label('按当前游戏单独保存；下次通过 SSMT 启动时生效。', 'Saved per game; takes effect on the next SSMT launch.') }}</p>
+    <p class="tweak-hint">{{ label('帧率数值只设置游戏内部目标；NVIDIA App 等外部限制或覆盖仍可能决定实际 FPS。', 'The FPS value sets the game target; NVIDIA App and other external controls may determine actual FPS.') }}</p>
+    <p v-if="!enabled" class="tweak-hint tweak-hint-warning">{{ label('插件已禁用，这些设置不会注入游戏。', 'The plugin is disabled; these settings will not be injected.') }}</p>
+    <p v-if="!gameName" class="tweak-hint tweak-hint-warning">{{ label('请先在上方选择游戏。', 'Select a game above first.') }}</p>
+    <div v-else class="tweak-grid" :class="{ loading }">
+      <el-checkbox v-model="gameplay.fpsUnlock">{{ label('解锁帧率并关闭 VSync', 'Unlock FPS and disable VSync') }}</el-checkbox>
+      <div class="tweak-number">
+        <span>{{ label('游戏内部目标帧率（30–240）', 'Game target FPS (30–240)') }}</span>
         <el-input-number v-model="gameplay.targetFps" :min="30" :max="240" :step="1" size="small" :disabled="!gameplay.fpsUnlock" />
-      </label>
-      <label><input v-model="gameplay.fastTeamPage" type="checkbox">{{ label('快速打开队伍页', 'Fast team page') }}</label>
+      </div>
+      <el-checkbox v-model="gameplay.fastTeamPage">{{ label('快速打开队伍页', 'Fast team page') }}</el-checkbox>
     </div>
     <el-button size="small" type="primary" :loading="saving" :disabled="!gameName || loading" @click="save">
       {{ label('保存设置', 'Save settings') }}
@@ -66,13 +67,14 @@ const save = async () => {
 </template>
 
 <style scoped>
-.gameplay-settings { border-top: 1px solid var(--market-line); padding-top: 16px; }
-.gameplay-settings h3 { margin: 0 0 7px; font-size: 13px; }
-.gameplay-hint { margin: 0 0 10px; color: rgba(var(--theme-text-secondary-rgb), .8); font-size: 11px; line-height: 1.5; }
-.gameplay-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 10px 16px; margin: 12px 0 16px; font-size: 12px; }
-.gameplay-grid.loading { opacity: .5; pointer-events: none; }
-.gameplay-grid label { display: flex; align-items: center; gap: 7px; min-height: 25px; }
-.gameplay-grid input[type='checkbox'] { accent-color: var(--t-page-accent); }
-.gameplay-grid .number-field { justify-content: space-between; gap: 10px; }
-.gameplay-grid :deep(.el-input-number) { width: 110px; flex: none; }
+.tweak-settings { border-top: 1px solid var(--market-line); padding-top: 18px; margin-top: 20px; }
+.tweak-settings h3 { margin: 0 0 7px; font-size: 13px; font-weight: 650; }
+.tweak-hint { margin: 0 0 10px; color: rgba(var(--theme-text-secondary-rgb), .8); font-size: 11px; line-height: 1.5; }
+.tweak-hint-warning { color: var(--t-warning-text); }
+.tweak-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); gap: 10px 16px; margin: 14px 0 16px; font-size: 12px; }
+.tweak-grid.loading { opacity: .5; pointer-events: none; }
+.tweak-grid .el-checkbox { margin-right: 0; }
+.tweak-number { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 25px; color: rgba(var(--theme-text-secondary-rgb), .9); }
+.tweak-number :deep(.el-input-number) { width: 110px; flex: none; }
 </style>
+

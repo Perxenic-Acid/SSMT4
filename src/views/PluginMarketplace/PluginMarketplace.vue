@@ -100,7 +100,7 @@ const reviewLocalId = ref('')
 const reviewInspection = ref<PackageInspection | null>(null)
 
 const activeTab = ref<'discover' | 'installed' | 'updates'>('discover')
-const detailTab = ref<'details' | 'permissions'>('details')
+const detailTab = ref<'features' | 'dependencies' | 'permissions'>('features')
 const searchQuery = ref('')
 const selectedId = ref('')
 const installed = ref<InstalledPlugin[]>([])
@@ -430,9 +430,16 @@ onMounted(async () => {
 <template>
   <main class="plugin-marketplace">
     <header class="marketplace-toolbar">
-      <div class="toolbar-title">
-        <h1>{{ t('pluginMarketplace.title') }}</h1>
-        <span>{{ t('pluginMarketplace.subtitle') }}</span>
+      <div class="toolbar-left">
+        <label for="plugin-game-select">{{ t('pluginMarketplace.gameSelection') }}</label>
+        <el-select id="plugin-game-select" v-model="selectedGameName" size="small"
+          :placeholder="t('pluginMarketplace.chooseGame')" class="game-select">
+          <el-option v-for="game in gamesList" :key="game.name" :label="game.name" :value="game.name" />
+        </el-select>
+        <span class="scope-note">{{ selectedPlugin?.appScoped
+          ? t('pluginMarketplace.appScopeHint')
+          : selectedGameName ? t('pluginMarketplace.gameScopeHint', { game: selectedGameName })
+          : t('pluginMarketplace.noGameHint') }}</span>
       </div>
       <div class="toolbar-actions">
         <el-button size="small" :icon="Refresh" :loading="loading" @click="refreshAll">
@@ -446,18 +453,6 @@ onMounted(async () => {
 
     <div v-if="catalogError" class="catalog-status">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</div>
     <div v-if="localCatalogError" class="catalog-status">{{ t('pluginMarketplace.messages.localCatalogFailed', { error: localCatalogError }) }}</div>
-
-    <div class="game-scope">
-      <label for="plugin-game-select">{{ t('pluginMarketplace.gameSelection') }}</label>
-      <el-select id="plugin-game-select" v-model="selectedGameName" size="small"
-        :placeholder="t('pluginMarketplace.chooseGame')" class="game-select">
-        <el-option v-for="game in gamesList" :key="game.name" :label="game.name" :value="game.name" />
-      </el-select>
-      <span class="scope-note">{{ selectedPlugin?.appScoped
-        ? t('pluginMarketplace.appScopeHint')
-        : selectedGameName ? t('pluginMarketplace.gameScopeHint', { game: selectedGameName })
-        : t('pluginMarketplace.noGameHint') }}</span>
-    </div>
 
     <div class="marketplace-layout">
       <aside class="marketplace-sidebar" :aria-label="t('pluginMarketplace.title')">
@@ -538,9 +533,13 @@ onMounted(async () => {
         </div>
 
         <div class="detail-tabs" role="tablist">
-          <button type="button" role="tab" :aria-selected="detailTab === 'details'"
-            :class="{ active: detailTab === 'details' }" @click="detailTab = 'details'">
-            {{ t('pluginMarketplace.detailTabs.details') }}
+          <button type="button" role="tab" :aria-selected="detailTab === 'features'"
+            :class="{ active: detailTab === 'features' }" @click="detailTab = 'features'">
+            {{ t('pluginMarketplace.detailTabs.features') }}
+          </button>
+          <button type="button" role="tab" :aria-selected="detailTab === 'dependencies'"
+            :class="{ active: detailTab === 'dependencies' }" @click="detailTab = 'dependencies'">
+            {{ t('pluginMarketplace.detailTabs.dependencies') }}
           </button>
           <button type="button" role="tab" :aria-selected="detailTab === 'permissions'"
             :class="{ active: detailTab === 'permissions' }" @click="detailTab = 'permissions'">
@@ -550,42 +549,45 @@ onMounted(async () => {
 
         <div class="detail-body">
           <div class="detail-main">
-            <template v-if="detailTab === 'details'">
-              <PlayerTweaksCameraSettings
-                v-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'"
-                :game-name="selectedGameName"
-                :enabled="selectedPlugin.enabled"
-              />
-              <PlayerTweaksGameplaySettings
-                v-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'"
-                :game-name="selectedGameName"
-                :enabled="selectedPlugin.enabled"
-              />
-              <section class="detail-section">
-                <h3>{{ t('pluginMarketplace.sections.externalDependencies') }}</h3>
-                <p class="section-hint">{{ t('pluginMarketplace.dependencyHint') }}</p>
-                <div v-if="selectedEntry.externalDependencies.length === 0" class="muted-copy">
-                  {{ t('pluginMarketplace.none') }}
+            <section v-if="detailTab === 'features'" class="detail-section">
+              <template v-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'">
+                <PlayerTweaksCameraSettings
+                  :game-name="selectedGameName"
+                  :enabled="selectedPlugin.enabled"
+                />
+                <PlayerTweaksGameplaySettings
+                  :game-name="selectedGameName"
+                  :enabled="selectedPlugin.enabled"
+                />
+              </template>
+              <template v-else>
+                <div class="muted-copy">{{ t('pluginMarketplace.noFeatures') }}</div>
+              </template>
+            </section>
+            <section v-else-if="detailTab === 'dependencies'" class="detail-section">
+              <h3>{{ t('pluginMarketplace.sections.externalDependencies') }}</h3>
+              <p class="section-hint">{{ t('pluginMarketplace.dependencyHint') }}</p>
+              <div v-if="selectedEntry.externalDependencies.length === 0" class="muted-copy">
+                {{ t('pluginMarketplace.none') }}
+              </div>
+              <div v-for="dependency in selectedEntry.externalDependencies" :key="dependency.id" class="dependency-row">
+                <div class="dependency-heading">
+                  <strong>{{ dependency.id }}</strong>
+                  <span v-if="selectedPlugin?.externalDependencies[dependency.id]" class="dependency-status"
+                    :class="dependencyStatusClass(selectedPlugin.externalDependencies[dependency.id].status)">
+                    {{ dependencyStatusLabel(selectedPlugin.externalDependencies[dependency.id].status) }}
+                  </span>
                 </div>
-                <div v-for="dependency in selectedEntry.externalDependencies" :key="dependency.id" class="dependency-row">
-                  <div class="dependency-heading">
-                    <strong>{{ dependency.id }}</strong>
-                    <span v-if="selectedPlugin?.externalDependencies[dependency.id]" class="dependency-status"
-                      :class="dependencyStatusClass(selectedPlugin.externalDependencies[dependency.id].status)">
-                      {{ dependencyStatusLabel(selectedPlugin.externalDependencies[dependency.id].status) }}
-                    </span>
-                  </div>
-                  <div class="dependency-files">{{ dependency.requiredFiles.join(' · ') }}</div>
-                  <div v-if="selectedPlugin?.externalDependencies[dependency.id]?.path" class="dependency-path">
-                    {{ selectedPlugin.externalDependencies[dependency.id].path }}
-                  </div>
-                  <el-button v-if="selectedPlugin" size="small" :disabled="loading"
-                    @click="configureDependency(selectedEntry.id, dependency.id)">
-                    {{ t('pluginMarketplace.actions.chooseDependencyPath') }}
-                  </el-button>
+                <div class="dependency-files">{{ dependency.requiredFiles.join(' · ') }}</div>
+                <div v-if="selectedPlugin?.externalDependencies[dependency.id]?.path" class="dependency-path">
+                  {{ selectedPlugin.externalDependencies[dependency.id].path }}
                 </div>
-              </section>
-            </template>
+                <el-button v-if="selectedPlugin" size="small" :disabled="loading"
+                  @click="configureDependency(selectedEntry.id, dependency.id)">
+                  {{ t('pluginMarketplace.actions.chooseDependencyPath') }}
+                </el-button>
+              </div>
+            </section>
             <section v-else class="detail-section">
               <h3>{{ t('pluginMarketplace.sections.permissions') }}</h3>
               <p class="section-hint">{{ t('pluginMarketplace.permissionHint') }}</p>
@@ -657,7 +659,7 @@ onMounted(async () => {
   padding: var(--t-page-padding);
   color: var(--t-page-text);
 }
-.marketplace-toolbar, .toolbar-actions, .game-scope, .detail-top, .detail-actions, .dependency-heading {
+.marketplace-toolbar, .toolbar-left, .toolbar-actions, .detail-top, .detail-actions, .dependency-heading {
   display: flex;
   align-items: center;
 }
@@ -665,16 +667,14 @@ onMounted(async () => {
 .catalog-status { font-size: 12px; color: #e6b46b; }
 .review-detail { font: 11px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
 .review-disclaimer { padding: 12px; border: var(--t-page-panel-border); border-radius: 6px; line-height: 1.6; }
-.toolbar-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-.toolbar-title h1 { margin: 0; flex: none; font-size: 18px; font-weight: 700; }
-.toolbar-title span, .scope-note, .section-hint, .muted-copy {
+.toolbar-left { flex: 1 1 auto; min-width: 0; gap: 10px; }
+.toolbar-left label { flex: none; font-size: 12px; font-weight: 650; }
+.scope-note, .section-hint, .muted-copy {
   color: rgba(var(--theme-text-secondary-rgb), .78);
   font-size: 12px;
 }
 .toolbar-actions { flex: none; gap: 8px; }
 .toolbar-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.game-scope { gap: 10px; padding: 8px 12px; border: var(--t-page-panel-border); border-radius: 8px; background: var(--t-page-panel-bg); }
-.game-scope label { flex: none; font-size: 12px; font-weight: 650; }
 .game-select { width: min(220px, 32vw); }
 .scope-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .marketplace-layout { display: grid; grid-template-columns: minmax(255px, 310px) minmax(0, 1fr); gap: 12px; flex: 1; min-height: 550px; }
@@ -753,10 +753,10 @@ onMounted(async () => {
   .detail-meta { border-left: 0; border-top: 1px solid var(--market-line); padding: 16px 0 0; }
 }
 @media (max-width: 660px) {
-  .marketplace-toolbar, .toolbar-title { align-items: flex-start; flex-direction: column; }
+  .marketplace-toolbar { align-items: flex-start; flex-direction: column; }
   .marketplace-layout { grid-template-columns: minmax(0, 1fr); }
   .marketplace-sidebar { max-height: 300px; }
-  .game-scope { flex-wrap: wrap; }
+  .toolbar-left { flex-wrap: wrap; }
   .scope-note { white-space: normal; }
 }
 </style>
