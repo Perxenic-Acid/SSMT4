@@ -127,7 +127,7 @@ fn merge_value(section: &str, key: &str, left: &str, right: &str) -> Result<Stri
     })
 }
 
-fn set_entry(text: &mut String, section: &str, key: &str, value: &str) {
+pub(crate) fn set_entry(text: &mut String, section: &str, key: &str, value: &str) {
     let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     let wanted_section = section.to_ascii_lowercase();

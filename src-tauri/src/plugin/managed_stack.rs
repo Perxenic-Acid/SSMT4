@@ -442,6 +442,23 @@ pub fn inspect_routes(
     executable: &Path,
     api_override: &str,
 ) -> Result<Dlss5RouteScan, String> {
+    if super::gimi_hot_runtime::applies(executable) {
+        if !registry
+            .find(DLSS5_PLUGIN_ID)
+            .is_some_and(|plugin| plugin.enabled)
+        {
+            return Err("请先为原神启用 DLSS5 插件".into());
+        }
+        return Ok(Dlss5RouteScan {
+            routes: vec!["gimi-hot".into()],
+            api: "d3d11".into(),
+            api_label: "DirectX 11".into(),
+            installed_route: None,
+            managed_host: true,
+            owner: Some("SSMT".into()),
+            anti_cheat_warning: false,
+        });
+    }
     query_routes(registry, executable, api_override).map(|(status, _)| status)
 }
 
@@ -610,6 +627,9 @@ pub fn prepare(
     state: &Dlss5ManagedState,
     include_hoyoshade_effects: bool,
 ) -> Result<(), String> {
+    if super::gimi_hot_runtime::applies(game_executable) {
+        return Err("原神只允许热注入，禁止暂存或放回 Swapper 代理 DLL".into());
+    }
     inspect(registry, game_executable, state)?;
     let mut system = System::new();
     refresh_processes(&mut system);
@@ -788,6 +808,9 @@ pub fn install_route(
     api_override: &str,
     anti_cheat_acknowledged: bool,
 ) -> Result<Dlss5RouteScan, String> {
+    if super::gimi_hot_runtime::applies(game_executable) {
+        return Err("原神只允许热注入，请导入 GIMI 热注入组件；不安装 Swapper 冷替换路线".into());
+    }
     if !["native", "feeder", "renodx"].contains(&route) {
         return Err("select a ReShade route supported by managed mode".to_string());
     }
@@ -895,6 +918,38 @@ mod tests {
     use super::*;
     use super::super::dlss5::Dlss5Route;
     use serde_json::json;
+
+    #[test]
+    fn gimi_rejects_cold_routes_before_resolving_external_tools() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-gimi-no-cold-{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let game = root.join("game");
+        fs::create_dir_all(&game).unwrap();
+        let executable = game.join("YuanShen.exe");
+        fs::write(&executable, b"original game").unwrap();
+        let registry = PluginRegistry::new(root.join("plugins")).unwrap();
+        for route in ["native", "feeder", "renodx", "optiscaler"] {
+            let error = install_route(&registry, &executable, route, "auto", false).unwrap_err();
+            assert!(error.contains("只允许热注入"), "{error}");
+        }
+        let state = Dlss5ManagedState {
+            route: Dlss5Route::Feeder,
+            manifest_path: game.join("_DLSS5_Backup/manifest.json"),
+            game_executable: executable.clone(),
+            game_api: "dxgi".into(),
+            uses_reshade: true,
+            uses_proxy: true,
+            added_files: vec![PathBuf::from("dxgi.dll")],
+            replaced_files: Vec::new(),
+            external_host: None,
+        };
+        assert!(prepare(&registry, &executable, &state, true).unwrap_err().contains("只允许热注入"));
+        assert_eq!(fs::read(&executable).unwrap(), b"original game");
+        assert_eq!(fs::read_dir(&game).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn detects_files_missing_from_managed_installation() {

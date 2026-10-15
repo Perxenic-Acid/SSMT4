@@ -39,6 +39,12 @@ interface PluginLaunchProgram {
     postLaunchDelayMs: number;
 }
 
+interface HotRuntimePlan {
+    dlls: string[];
+    environment: Record<string, string | null>;
+    runtimeDirectory: string;
+}
+
 type GraphicsLaunchDecision =
     | "continue_this_launch"
     | "prepare_managed_stack"
@@ -617,7 +623,13 @@ export class LaunchGame {
             // Construct programs list
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
 
-            const hoyoshade = !pureDirectTarget && launchTargetProgram && targetExe
+            const hotRuntime = !pureDirectTarget && useRunInjector && targetExe
+                ? await invoke<HotRuntimePlan | null>("prepare_gimi_hot_runtime", { gameName, gameExecutable: targetExe })
+                : null;
+            if (hotRuntime && (!launchTargetProgram || useShell)) {
+                throw new Error("原神 DLSS5 热注入需要由 SSMT 直接创建挂起的游戏进程，请关闭手动启动与官方启动器模式");
+            }
+            const hoyoshade = !hotRuntime && !pureDirectTarget && launchTargetProgram && targetExe
                 ? await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
                       gameName,
                       gameExecutable: targetExe,
@@ -650,6 +662,21 @@ export class LaunchGame {
                 });
             }
 
+            if (hotRuntime) {
+                const configuredExtras = Array.isArray(config.extraDlls)
+                    ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
+                    : [];
+                const legacyExtra = typeof config.extraDll === "string" ? config.extraDll.trim() : "";
+                const extras = configuredExtras.length ? configuredExtras : legacyExtra ? [legacyExtra] : [];
+                const owned = hotRuntime.dlls.map(path => this.getProcessNameFromPath(path).toLowerCase());
+                for (const dll of extras) {
+                    if ([...owned, "d3d11.dll", "dxgi.dll"].includes(this.getProcessNameFromPath(dll).toLowerCase())) {
+                        throw new Error(`热注入组件与额外 DLL 重复或所有权冲突：${dll}`);
+                    }
+                }
+                await MigotoManager.patchD3dxForLaunch(gameName, { extraDlls: [...hotRuntime.dlls, ...extras] });
+            }
+
             // 仅在本次启动确实包含 HoYoShade 时覆盖用户的原始延迟配置。
             if (hoyoshade) {
                 await MigotoManager.patchD3dxForLaunch(gameName, {
@@ -659,6 +686,12 @@ export class LaunchGame {
 
             if (useRunInjector) {
                 const injectorArgs: string[] = [];
+                if (hotRuntime) {
+                    injectorArgs.push("--preload-runtime");
+                    for (const [name, value] of Object.entries(hotRuntime.environment)) {
+                        injectorArgs.push(value === null ? `--unset-env ${name}` : `--set-env "${name}=${value}"`);
+                    }
+                }
                 if (effectivePluginHostConfig) {
                     injectorArgs.push(`--plugin-host-config "${effectivePluginHostConfig.replace(/"/g, '\\"')}"`);
                 }

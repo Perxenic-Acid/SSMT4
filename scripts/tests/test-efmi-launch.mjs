@@ -48,6 +48,7 @@ function harness(config, hostConfig = null) {
       calls.push({ command, args });
       if (command === 'prepare_plugin_host_config') return hostConfig;
       if (command === 'prepare_hoyoshade_launch') return null;
+      if (command === 'prepare_gimi_hot_runtime') return null;
       if (command === 'launch_programs') return;
       assert.fail(`Unexpected IPC: ${command}`);
     } },

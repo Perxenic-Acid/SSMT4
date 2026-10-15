@@ -1,0 +1,638 @@
+use super::{
+    dlss5::DLSS5_PLUGIN_ID,
+    hoyoshade::{HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID},
+    managed_reshade,
+    registry::PluginRegistry,
+    settings::PluginSettingsStore,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+// 这组组件属于 CXP GIMI 集成链；禁止用其 GIMI DLL 覆盖 SSMT Runtime。
+// 固定二进制组来自 cc46971 的 package-manifest.sha256，NR Runtime 按显卡 Profile 配对。
+const COMMON: &[(&str, &str)] = &[
+    (
+        "components/ReShade/ReShade64.dll",
+        "084fa6b41ac9fc0cf66055e95c91c69a5bef153612dda15e18eacb21c9f52c54",
+    ),
+    (
+        "components/Bridge/Dx11FsrBridge.dll",
+        "1ab7fbd90b69d8f57851fdfc039aa3890aee46aea2dcb4db72c8049282140310",
+    ),
+    (
+        "components/OptiScaler/OptiScaler.dll",
+        "2d86c3e6728f018f259aabc052f78e53a039a1b0d6bbbc3aeb7571bb67d61f44",
+    ),
+    (
+        "components/OptiScaler/nvngx_dlss.dll",
+        "c85f971ce023c9f3492fc7455f0b01a24ba18ea39636407a846902c4360b0b7e",
+    ),
+    (
+        "components/OptiScaler/D3D12_Optiscaler/D3D12Core.dll",
+        "07d286c306f8117321422affd9e6388c12d0fb4be1c7fc689d9e899324feeb24",
+    ),
+];
+const ADDON_HASH: &str = "522d979cbff335710f362b9fc2f330988673d7f8c7a1a2d93da9980ec8dda695";
+
+pub fn applies(executable: &Path) -> bool {
+    executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("YuanShen.exe")
+                || name.eq_ignore_ascii_case("GenshinImpact.exe")
+        })
+}
+
+fn enabled(registry: &PluginRegistry) -> bool {
+    registry
+        .find(DLSS5_PLUGIN_ID)
+        .is_some_and(|plugin| plugin.enabled)
+}
+
+fn setting_key(game_name: &str) -> String {
+    format!(
+        "gimiHotRuntime.{:x}",
+        Sha256::digest(game_name.trim().to_lowercase().as_bytes())
+    )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HotRuntimeInstallation {
+    pub root: PathBuf,
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotRuntimePlan {
+    pub dlls: Vec<PathBuf>,
+    pub environment: BTreeMap<String, Option<String>>,
+    pub runtime_directory: PathBuf,
+}
+
+fn profile_files(profile: &str) -> Result<(String, Vec<(String, String)>), String> {
+    let (directory, chain, runtime) = match profile {
+        "rtx50" => (
+            "pre-nr",
+            "db26e486592b252072ba5734fc2b27412863b8526826225640c837d4b4d11b60",
+            "e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e",
+        ),
+        "rtx30" => (
+            "pre-nr-rtx30",
+            "46041a5ff91ae2fd907e310d132aabc3c4a1ecd48dace511b8672909d5d9c2fb",
+            "6eb209e764f39872625debd6abaf45e2bb6322f6f270f781f70c059ae30b3927",
+        ),
+        _ => return Err("请选择 RTX 50 或 RTX 30/40 组件 Profile".into()),
+    };
+    let directory = format!("components/DLSS5/Addons/{directory}");
+    let mut files = COMMON
+        .iter()
+        .map(|(path, hash)| (path.to_string(), hash.to_string()))
+        .collect::<Vec<_>>();
+    for (name, hash) in [
+        ("nr-before-sr.zh-CN.addon64", ADDON_HASH),
+        ("nrchain_nvngx.dll", chain),
+        ("nvngx_dlssnr.dll", runtime),
+    ] {
+        files.push((format!("{directory}/{name}"), hash.into()));
+    }
+    Ok((directory, files))
+}
+
+fn canonical_path(path: &Path) -> Result<PathBuf, std::io::Error> {
+    let canonical = path.canonicalize()?;
+    // canonicalize 在 Windows 返回 \\?\ 路径；第三方 INI/路径拼接可能含正斜杠，
+    // 不满足 verbatim 路径规则。身份校验后以普通绝对路径传给组件。
+    #[cfg(windows)]
+    if let Some(text) = canonical.to_str() {
+        if let Some(unc) = text.strip_prefix("\\\\?\\UNC\\") {
+            return Ok(PathBuf::from(format!("\\\\{unc}")));
+        }
+        if let Some(disk) = text.strip_prefix("\\\\?\\") {
+            return Ok(PathBuf::from(disk));
+        }
+    }
+    Ok(canonical)
+}
+
+fn checked_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let canonical = canonical_path(&root.join(relative))
+        .map_err(|error| format!("热注入组件缺失 {relative}：{error}"))?;
+    if !canonical.starts_with(root) || !canonical.is_file() {
+        return Err(format!("热注入组件越出目录或不是文件：{relative}"));
+    }
+    Ok(canonical)
+}
+
+fn verify(path: &Path, expected: &str) -> Result<(), String> {
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let length = file.metadata().map_err(|error| error.to_string())?.len();
+    if length == 0 || length > 256 * 1024 * 1024 {
+        return Err(format!("组件大小无效：{}", path.display()));
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    if format!("{:x}", digest.finalize()) != expected {
+        return Err(format!("组件版本或显卡 Profile 不匹配：{}", path.display()));
+    }
+    Ok(())
+}
+
+fn validate(installation: &HotRuntimeInstallation) -> Result<(PathBuf, String), String> {
+    let root = canonical_path(&installation.root).map_err(|error| error.to_string())?;
+    let (addon, files) = profile_files(&installation.profile)?;
+    for (relative, hash) in files {
+        verify(&checked_path(&root, &relative)?, &hash)?;
+    }
+    for path in [
+        "components/Bridge/Dx11FsrBridge.ini".to_string(),
+        "components/OptiScaler/OptiScaler.ini".into(),
+        format!("{addon}/nr_before_sr.ini"),
+    ] {
+        checked_path(&root, &path)?;
+    }
+    Ok((root, addon))
+}
+
+fn read_text(path: &Path) -> Result<String, String> {
+    if fs::metadata(path).map_err(|error| error.to_string())?.len() > 4 * 1024 * 1024 {
+        return Err(format!("配置文件过大：{}", path.display()));
+    }
+    fs::read_to_string(path)
+        .map(|text| text.trim_start_matches('\u{feff}').to_string())
+        .map_err(|error| error.to_string())
+}
+
+fn rebase_search_paths(text: &mut String, base: &Path) {
+    for key in ["EffectSearchPaths", "TextureSearchPaths"] {
+        let value = text.lines().find_map(|line| {
+            line.trim()
+                .split_once('=')
+                .filter(|(name, _)| name.trim().eq_ignore_ascii_case(key))
+                .map(|(_, value)| value.to_string())
+        });
+        if let Some(value) = value {
+            let paths = value
+                .split(',')
+                .map(|part| {
+                    let path = Path::new(part.trim());
+                    if path.is_absolute() {
+                        path.to_string_lossy().into_owned()
+                    } else {
+                        base.join(path).to_string_lossy().into_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            managed_reshade::set_entry(text, "GENERAL", key, &paths);
+        }
+    }
+}
+
+fn prepare_at(
+    registry: &PluginRegistry,
+    installation: &HotRuntimeInstallation,
+) -> Result<HotRuntimePlan, String> {
+    let (root, addon) = validate(installation)?;
+    let reshade = root.join("state/reshade-runtime");
+    fs::create_dir_all(&reshade).map_err(|error| error.to_string())?;
+    // FX 贡献跟随 Shade Bridge 的按游戏启用状态，DLSS5 独立启用不加载其效果。
+    let mut base = String::new();
+    let mut preset = String::new();
+    let mut addons = vec!["nr-before-sr.zh-CN.addon64".to_string()];
+    if let Some(plugin) = registry
+        .find(HOYOSHADE_PLUGIN_ID)
+        .filter(|plugin| plugin.enabled)
+    {
+        let dependency = plugin
+            .external_dependencies
+            .get(HOYOSHADE_DEPENDENCY_ID)
+            .filter(|dependency| {
+                dependency.status == super::registry::ExternalDependencyStatus::Ready
+            })
+            .and_then(|dependency| dependency.path.as_ref())
+            .ok_or("Shade Bridge 的资源目录尚未就绪")?;
+        let dependency = canonical_path(dependency).map_err(|error| error.to_string())?;
+        base = read_text(&checked_path(&dependency, "ReShade.ini")?)?;
+        rebase_search_paths(&mut base, &dependency);
+        let source_preset = dependency.join("Presets/Mod OFF.ini");
+        if source_preset.is_file() {
+            preset = read_text(&source_preset)?;
+        }
+        let sources = dependency.join("reshade-shaders/Addons");
+        if sources.is_dir() {
+            for entry in fs::read_dir(&sources).map_err(|error| error.to_string())? {
+                let path = entry.map_err(|error| error.to_string())?.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .ok_or("Shade Add-on 文件名无效")?
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.to_ascii_lowercase().ends_with(".addon64") {
+                    continue;
+                }
+                if addons.iter().any(|other| other.eq_ignore_ascii_case(&name)) {
+                    return Err(format!("Add-on 资源所有权冲突：{name}"));
+                }
+                let canonical = canonical_path(&path).map_err(|error| error.to_string())?;
+                if !canonical.starts_with(&dependency) {
+                    return Err("Shade Add-on 越出声明的资源目录".into());
+                }
+                fs::copy(canonical, root.join(&addon).join(&name))
+                    .map_err(|error| error.to_string())?;
+                addons.push(name);
+            }
+        }
+    }
+    // 启用组合改变时清除上次贡献的 Add-on，不能让未启用的插件继续加载。
+    for entry in fs::read_dir(root.join(&addon)).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name.to_ascii_lowercase().ends_with(".addon64")
+            && !addons
+                .iter()
+                .any(|active| active.eq_ignore_ascii_case(&name))
+        {
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+    }
+    // 只强制启用本路线所需的 NR；Shade 自己禁用的 Add-on 必须继续保持禁用。
+    let mut composed = managed_reshade::compose(
+        &base,
+        "",
+        &preset,
+        "",
+        &["nr-before-sr.zh-CN.addon64".into()],
+    )
+    .map_err(|error| error.to_string())?;
+    for (section, key, value) in [
+        (
+            "ADDON",
+            "AddonPath",
+            root.join(&addon).to_string_lossy().into_owned(),
+        ),
+        (
+            "ADDON",
+            "LoadFromDllMain",
+            "nr-before-sr.zh-CN.addon64".into(),
+        ),
+        (
+            "GENERAL",
+            "PresetPath",
+            reshade
+                .join("ReShadePreset.ini")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "GENERAL",
+            "IntermediateCachePath",
+            reshade.join("cache").to_string_lossy().into_owned(),
+        ),
+    ] {
+        managed_reshade::set_entry(&mut composed.game_ini, section, key, &value);
+    }
+    fs::write(reshade.join("ReShade.ini"), composed.game_ini).map_err(|error| error.to_string())?;
+    fs::write(reshade.join("ReShadePreset.ini"), composed.preset_ini)
+        .map_err(|error| error.to_string())?;
+    let opti = root.join("components/OptiScaler");
+    let mut ini = read_text(&opti.join("OptiScaler.ini"))?;
+    for (key, value) in [
+        ("OptiDllPath", opti.clone()),
+        ("NvngxDlssPath", opti.join("nvngx_dlss.dll")),
+        ("NvngxFeaturePath", opti.clone()),
+    ] {
+        managed_reshade::set_entry(&mut ini, "Libraries", key, &value.to_string_lossy());
+    }
+    managed_reshade::set_entry(&mut ini, "Upscalers", "Dx11Upscaler", "dlss_12");
+    // NR 由同一条前置 Add-on 链负责，避免 OptiScaler 再运行一次后置 NR。
+    managed_reshade::set_entry(&mut ini, "DlssNr", "Enabled", "false");
+    fs::write(opti.join("OptiScaler.ini"), ini).map_err(|error| error.to_string())?;
+    let dlls = [
+        "components/ReShade/ReShade64.dll",
+        "components/Bridge/Dx11FsrBridge.dll",
+        "components/OptiScaler/OptiScaler.dll",
+    ]
+    .iter()
+    .map(|path| root.join(path))
+    .collect();
+    let environment = [
+        (
+            "GIMI_HOSTED_RESHADE_DLL",
+            Some(
+                root.join("components/ReShade/ReShade64.dll")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ),
+        (
+            "GIMI_HOSTED_RESHADE_CONFIG",
+            Some(reshade.join("ReShade.ini").to_string_lossy().into_owned()),
+        ),
+        (
+            "RESHADE_BASE_PATH_OVERRIDE",
+            Some(reshade.to_string_lossy().into_owned()),
+        ),
+        ("RESHADE_DISABLE_GRAPHICS_HOOK", Some("1".into())),
+        ("RESHADE_DISABLE_INPUT_HOOK", None),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_string(), value))
+    .collect();
+    Ok(HotRuntimePlan {
+        dlls,
+        environment,
+        runtime_directory: root,
+    })
+}
+
+#[tauri::command]
+pub fn import_gimi_hot_runtime(
+    game_name: String,
+    game_executable: String,
+    source_directory: String,
+    profile: String,
+) -> Result<HotRuntimeInstallation, String> {
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
+    if !enabled(&registry) || !applies(Path::new(&game_executable)) {
+        return Err("请先为原神启用 DLSS5 插件".into());
+    }
+    ensure_stopped(Path::new(&game_executable))?;
+    let source = HotRuntimeInstallation {
+        root: PathBuf::from(source_directory),
+        profile,
+    };
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let root = crate::config::path_manager::PathManager::ssmt_global_config_folder()
+        .join("PluginAssets")
+        .join(DLSS5_PLUGIN_ID)
+        .join("gimi-hot")
+        .join(unique);
+    let installation = import_at(&source, root)?;
+    // 保存的是 SSMT 管理的副本；之后不会覆写用户提供的第三方目录。
+    PluginSettingsStore::from_default_location()
+        .map_err(|error| error.to_string())?
+        .set(
+            DLSS5_PLUGIN_ID,
+            &setting_key(&game_name),
+            serde_json::to_value(&installation).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(installation)
+}
+
+fn import_at(
+    source: &HotRuntimeInstallation,
+    root: PathBuf,
+) -> Result<HotRuntimeInstallation, String> {
+    let (source_root, addon) = validate(source)?;
+    let (_, binaries) = profile_files(&source.profile)?;
+    for relative in binaries.into_iter().map(|(relative, _)| relative).chain([
+        "components/Bridge/Dx11FsrBridge.ini".into(),
+        "components/OptiScaler/OptiScaler.ini".into(),
+        format!("{addon}/nr_before_sr.ini"),
+    ]) {
+        let source_file = checked_path(&source_root, &relative)?;
+        let destination = root.join(&relative);
+        fs::create_dir_all(destination.parent().ok_or("组件路径无效")?)
+            .map_err(|error| error.to_string())?;
+        fs::copy(source_file, destination).map_err(|error| error.to_string())?;
+    }
+    let installation = HotRuntimeInstallation {
+        root,
+        profile: source.profile.clone(),
+    };
+    validate(&installation)?;
+    Ok(installation)
+}
+
+fn ensure_stopped(executable: &Path) -> Result<(), String> {
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessRefreshKind::new().with_exe(sysinfo::UpdateKind::Always),
+    );
+    let canonical = executable
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if system.processes().values().any(|process| {
+        process
+            .exe()
+            .and_then(|path| path.canonicalize().ok())
+            .as_ref()
+            == Some(&canonical)
+    }) {
+        return Err("请关闭原神后再准备热注入组件".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn gimi_hot_runtime_status(
+    game_name: String,
+) -> Result<Option<HotRuntimeInstallation>, String> {
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|error| error.to_string())?
+        .for_game(&game_name);
+    if !enabled(&registry) {
+        return Ok(None);
+    }
+    PluginSettingsStore::from_default_location()
+        .map_err(|error| error.to_string())?
+        .get(DLSS5_PLUGIN_ID, &setting_key(&game_name))
+        .map_err(|error| error.to_string())?
+        .map(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
+        .transpose()
+}
+
+#[tauri::command]
+pub fn prepare_gimi_hot_runtime(
+    game_name: String,
+    game_executable: String,
+) -> Result<Option<HotRuntimePlan>, String> {
+    if !applies(Path::new(&game_executable)) {
+        return Ok(None);
+    }
+    let Some(registry) = super::commands::installed_plugin_registry()? else {
+        return Ok(None);
+    };
+    let registry = registry.for_game(&game_name);
+    if !enabled(&registry) {
+        return Ok(None);
+    }
+    ensure_stopped(Path::new(&game_executable))?;
+    if !matches!(
+        super::dlss5::inspect_game_executable(Path::new(&game_executable)),
+        super::dlss5::Dlss5State::NotManaged
+    ) {
+        return Err(
+            "请先在 DLSS5 设置中恢复旧的 Swapper 安装，再使用原神热注入组件；不会临时放回代理 DLL"
+                .into(),
+        );
+    }
+    let value = PluginSettingsStore::from_default_location().map_err(|error| error.to_string())?
+        .get(DLSS5_PLUGIN_ID, &setting_key(&game_name)).map_err(|error| error.to_string())?
+        .ok_or("请先在原神 DLSS5 设置中导入匹配显卡的 GIMI 热注入组件；仅启用插件不会生成 DLSS5 Runtime")?;
+    let installation = serde_json::from_value(value)
+        .map_err(|error| format!("原神热注入组件配置无效：{error}"))?;
+    prepare_at(&registry, &installation).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn profiles_keep_chain_and_nr_runtime_paired() {
+        let (a, x) = profile_files("rtx50").unwrap();
+        let (b, y) = profile_files("rtx30").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(x.last().unwrap().1, y.last().unwrap().1);
+        assert!(profile_files("auto").is_err());
+        assert!(applies(Path::new("C:/Game/YuanShen.exe")));
+        assert!(applies(Path::new("C:/Game/GenshinImpact.exe")));
+        assert!(!applies(Path::new("C:/Game/Endfield.exe")));
+    }
+    #[test]
+    fn search_paths_follow_the_declared_effect_owner() {
+        let mut ini = "[GENERAL]\nEffectSearchPaths=.\\Shaders\\**,C:\\Shared\\Shaders\nTextureSearchPaths=Textures\n".to_string();
+        rebase_search_paths(&mut ini, Path::new("C:/Shade"));
+        assert!(ini.contains("C:/Shade\\.\\Shaders\\**"));
+        assert!(ini.contains("C:\\Shared\\Shaders"));
+        assert!(ini.contains("C:/Shade\\Textures"));
+    }
+    #[test]
+    fn content_hash_and_file_boundary_are_checked() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-hot-runtime-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("component.dll"), b"fixture").unwrap();
+        let canonical = canonical_path(&root).unwrap();
+        let path = checked_path(&canonical, "component.dll").unwrap();
+        verify(&path, &format!("{:x}", Sha256::digest(b"fixture"))).unwrap();
+        assert!(verify(&path, &"0".repeat(64)).is_err());
+        assert!(checked_path(&canonical, "../").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "需要 SSMT_HOT_TEST_SOURCE 指定含 NR Runtime 的完整组件包，可选 SSMT_HOT_TEST_SHADE_ROOT"]
+    fn prepares_real_components_without_game_directory_writes() {
+        let source = HotRuntimeInstallation {
+            root: std::env::var_os("SSMT_HOT_TEST_SOURCE")
+                .expect("缺少组件包目录")
+                .into(),
+            profile: std::env::var("SSMT_HOT_TEST_PROFILE").unwrap_or("rtx50".into()),
+        };
+        let before = fs::read(source.root.join("components/OptiScaler/OptiScaler.ini")).unwrap();
+        let temp = std::env::temp_dir().join(format!(
+            "ssmt-real-hot-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let installation = import_at(&source, temp.join("owned 组件")).unwrap();
+        let mut registry = PluginRegistry::new(temp.join("plugins")).unwrap();
+        let plan = prepare_at(&registry, &installation).unwrap();
+        assert_eq!(plan.dlls.len(), 3);
+        assert!(plan.dlls[0].ends_with("ReShade64.dll"));
+        assert!(plan.dlls[1].ends_with("Dx11FsrBridge.dll"));
+        assert!(plan.dlls[2].ends_with("OptiScaler.dll"));
+        let config = installation.root.join("state/reshade-runtime/ReShade.ini");
+        assert_eq!(
+            canonical_path(Path::new(
+                plan.environment["GIMI_HOSTED_RESHADE_CONFIG"]
+                    .as_ref()
+                    .unwrap()
+            ))
+            .unwrap(),
+            canonical_path(&config).unwrap()
+        );
+        assert!(read_text(&config)
+            .unwrap()
+            .contains("LoadFromDllMain=nr-before-sr.zh-CN.addon64"));
+        if let Some(shade) = std::env::var_os("SSMT_HOT_TEST_SHADE_ROOT") {
+            let package = registry
+                .plugins_root()
+                .join(HOYOSHADE_PLUGIN_ID)
+                .join("0.1.0");
+            fs::create_dir_all(&package).unwrap();
+            fs::write(package.join("ssmt-plugin.json"), include_str!("../../../native/official-plugin-packages/ssmt.hoyoshade.bridge/0.1.0/ssmt-plugin.json")).unwrap();
+            registry.refresh().unwrap();
+            registry
+                .set_external_dependency_path(
+                    HOYOSHADE_PLUGIN_ID,
+                    HOYOSHADE_DEPENDENCY_ID,
+                    Path::new(&shade),
+                )
+                .unwrap();
+            registry
+                .set_game_enabled("GIMI", HOYOSHADE_PLUGIN_ID, true)
+                .unwrap();
+            let combined = prepare_at(&registry.for_game("GIMI"), &installation).unwrap();
+            assert_eq!(combined.dlls, plan.dlls);
+            let text = read_text(&config).unwrap();
+            let shade_ini = read_text(&Path::new(&shade).join("ReShade.ini")).unwrap();
+            if let Some(disabled) = shade_ini
+                .lines()
+                .find(|line| line.starts_with("DisabledAddons="))
+            {
+                assert!(text.lines().any(|line| line == disabled));
+            }
+            assert!(text.contains(
+                &canonical_path(Path::new(&shade))
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            ));
+            let (addon, _) = profile_files(&installation.profile).unwrap();
+            fs::write(
+                installation.root.join(&addon).join("stale-shade.addon64"),
+                "owned fixture",
+            )
+            .unwrap();
+            registry
+                .set_game_enabled("GIMI", HOYOSHADE_PLUGIN_ID, false)
+                .unwrap();
+            prepare_at(&registry.for_game("GIMI"), &installation).unwrap();
+            assert!(!installation
+                .root
+                .join(addon)
+                .join("stale-shade.addon64")
+                .exists());
+            assert!(!read_text(&config).unwrap().contains(
+                &canonical_path(Path::new(&shade))
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            ));
+        }
+        assert_eq!(
+            fs::read(source.root.join("components/OptiScaler/OptiScaler.ini")).unwrap(),
+            before
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+}

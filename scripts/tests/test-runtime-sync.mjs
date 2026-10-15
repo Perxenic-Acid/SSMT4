@@ -39,7 +39,9 @@ async function harness(t, options = {}) {
   const gameExe = path.join(root, 'Game.exe');
   await fs.writeFile(gameExe, 'game fixture');
   await fs.writeFile(path.join(migotoDir, 'd3dx.ini'), '[Loader]\nmodule = d3d11.dll\n');
-  const config = { gamePreset: options.gamePreset || 'GIMI', targetExePath: gameExe, installDir: migotoDir, useUpx: !!options.useUpx, configureGame: options.configureGame };
+  const config = { gamePreset: options.gamePreset || 'GIMI', targetExePath: gameExe, installDir: migotoDir, useUpx: !!options.useUpx, configureGame: options.configureGame, ...options.config };
+  if (config.useShell) config.launcherExePath = gameExe;
+  if (options.hostConfig) await fs.writeFile(path.join(resourceDir, 'SSMT-PluginHost.dll'), 'host fixture');
   const calls = [];
   const messages = [];
   const dialogs = [];
@@ -79,7 +81,9 @@ async function harness(t, options = {}) {
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
       if (command === 'bundled_player_tweaks_enabled_for_game') return false;
       if (command === 'configure_gimi_launch_settings') return null;
-      if (['prepare_hoyoshade_launch', 'prepare_plugin_host_config', 'launch_programs'].includes(command)) return null;
+      if (command === 'prepare_gimi_hot_runtime') return options.hotRuntime ?? null;
+      if (command === 'prepare_plugin_host_config') return options.hostConfig ?? null;
+      if (['prepare_hoyoshade_launch', 'launch_programs'].includes(command)) return null;
       if (command === 'execute_external_program') return options.upxResult?.(args) ?? { code: 1, stdout: '', stderr: 'UPX failed' };
       assert.fail(`Unexpected IPC: ${command}`);
     } },
@@ -219,6 +223,50 @@ test('GIMI configuration follows the saved switch before injection', async t => 
   assert.ok(configure >= 0);
   assert.equal(h.calls[configure].args.options.configureGame, false);
   assert.ok(configure < h.calls.findIndex(call => call.command === 'launch_programs'));
+});
+
+const hotPlan = {
+  dlls: ['C:/Managed/ReShade64.dll', 'C:/Managed/Dx11FsrBridge.dll', 'C:/Managed/OptiScaler.dll'],
+  environment: { GIMI_HOSTED_RESHADE_DLL: 'C:/Managed/ReShade64.dll', RESHADE_DISABLE_GRAPHICS_HOOK: '1', RESHADE_DISABLE_INPUT_HOOK: null },
+  runtimeDirectory: 'C:/Managed',
+};
+
+for (const hostConfig of [null, 'C:/Plugins/all-enabled.json']) {
+  test(`hot DLSS5 uses one host and keeps ordered extras; PluginHost=${!!hostConfig}`, async t => {
+    const h = await harness(t, { hotRuntime: hotPlan, hostConfig, config: { extraDlls: ['C:/Extra/Other.dll'] } });
+    await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+    const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+    const injector = programs.find(program => program.path.endsWith('Run.exe'));
+    assert.equal(programs.length, 2); // Run.exe 和目标等待项。
+    assert.match(injector.args, /--preload-runtime/);
+    assert.match(injector.args, /--set-env "GIMI_HOSTED_RESHADE_DLL=C:\/Managed\/ReShade64.dll"/);
+    assert.match(injector.args, /--unset-env RESHADE_DISABLE_INPUT_HOOK/);
+    assert.equal(injector.args.includes('--plugin-host-config'), !!hostConfig);
+    assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
+    const ini = await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8');
+    assert.match(ini, /inject_dlls = C:\/Managed\/ReShade64.dll\|C:\/Managed\/Dx11FsrBridge.dll\|C:\/Managed\/OptiScaler.dll\|C:\/Extra\/Other.dll/);
+  });
+}
+
+for (const config of [{ extraDlls: ['C:/Other/ReShade64.dll'] }, { launchTargetProgram: false }, { useShell: true, launcherExePath: 'C:/Launcher.exe' }]) {
+  test(`unsafe hot-loading plan fails before starting processes: ${JSON.stringify(config)}`, async t => {
+    const h = await harness(t, { hotRuntime: hotPlan, config });
+    await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+    assert.equal(h.calls.some(call => call.command === 'launch_programs'), false);
+    assert.ok(h.dialogs.some(dialog => dialog.kind === 'alert'));
+  });
+}
+
+test('disabling hot DLSS5 removes its prior INI entries and per-launch environment', async t => {
+  const options = { hotRuntime: hotPlan };
+  const h = await harness(t, options);
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+  options.hotRuntime = null;
+  h.calls.length = 0;
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+  const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+  assert.doesNotMatch(programs[0].args || '', /preload-runtime|set-env/);
+  assert.doesNotMatch(await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8'), /inject_dlls\s*=/);
 });
 
 test('already packed runtime passes UPX validation without repacking', async t => {

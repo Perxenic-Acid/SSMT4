@@ -211,6 +211,33 @@ fn inspect_graphics_for_executable(
             Dlss5State::NotManaged
         },
     };
+    if dlss5_enabled && super::gimi_hot_runtime::applies(game_executable) {
+        let clean = matches!(state.dlss5, Dlss5State::NotManaged);
+        return Ok(GraphicsLaunchInspection {
+            hoyoshade_requested,
+            dlss5_requested: true,
+            host_requested: true,
+            dlss5: Dlss5GameStateSnapshot::from(&state.dlss5),
+            resolution: GraphicsStackResolution {
+                level: if clean {
+                    CompatibilityLevel::Compatible
+                } else {
+                    CompatibilityLevel::Conflict
+                },
+                issues: if clean {
+                    Vec::new()
+                } else {
+                    vec![super::graphics_stack::GraphicsCompatibilityIssue {
+                        level: CompatibilityLevel::Conflict,
+                        components: vec![DLSS5_PLUGIN_ID.into()],
+                        code: "gimi_legacy_cold_install".into(),
+                        message: "原神只允许热注入。请先在 DLSS5 设置中恢复旧的 Swapper 安装，再导入 GIMI 热注入组件。".into(),
+                        possible_actions: vec![super::graphics_stack::GraphicsConflictAction::CancelLaunch],
+                    }]
+                },
+            },
+        });
+    }
     let host_requested = hoyoshade_requested
         || (dlss5_enabled && matches!(state.dlss5, Dlss5State::Managed(_) | Dlss5State::Broken { .. }));
     let resolution = GraphicsStackResolver::resolve(
@@ -251,7 +278,7 @@ fn installed_plugin_registry_at(plugins_root: PathBuf) -> Result<Option<PluginRe
     Ok(None)
 }
 
-fn installed_plugin_registry() -> Result<Option<PluginRegistry>, String> {
+pub(crate) fn installed_plugin_registry() -> Result<Option<PluginRegistry>, String> {
     installed_plugin_registry_at(crate::config::path_manager::PathManager::ssmt_plugins_folder())
 }
 
@@ -707,6 +734,13 @@ pub fn prepare_hoyoshade_launch(
         return Ok(None);
     };
     let game_executable = PathBuf::from(game_executable);
+    if super::gimi_hot_runtime::applies(&game_executable)
+        && registry
+            .find(DLSS5_PLUGIN_ID)
+            .is_some_and(|plugin| plugin.enabled)
+    {
+        return Err("原神 DLSS5 必须由热注入计划启动，不能另起 ReShade 注入器".into());
+    }
     let inspection = inspect_graphics_for_executable(&registry, &game_executable)?;
     if !should_launch_hoyoshade(&inspection, graphics_decision)? {
         return Ok(None);
@@ -985,6 +1019,80 @@ mod tests {
             capabilities,
             vec!["filesystem.read", "launch.start", "plugin.settings"]
         );
+    }
+
+    #[test]
+    fn gimi_hot_preflight_covers_official_plugin_combinations() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-gimi-combinations-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let game = root.join("game");
+        fs::create_dir_all(game.join("_DLSS5_Backup")).unwrap();
+        let executable = game.join("YuanShen.exe");
+        fs::write(&executable, b"fixture").unwrap();
+        let official =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../native/official-plugin-packages");
+        let mut ids = Vec::new();
+        for id in fs::read_dir(official)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+        {
+            let mut versions = fs::read_dir(id.path())
+                .unwrap()
+                .flatten()
+                .filter(|entry| entry.path().join("ssmt-plugin.json").is_file())
+                .collect::<Vec<_>>();
+            versions.sort_by_key(|entry| entry.file_name());
+            let package = versions.last().unwrap().path();
+            let raw = fs::read_to_string(package.join("ssmt-plugin.json")).unwrap();
+            let manifest = PluginManifest::from_json_str(&raw).unwrap();
+            let installed = root
+                .join("plugins")
+                .join(&manifest.id)
+                .join(&manifest.version);
+            fs::create_dir_all(&installed).unwrap();
+            fs::write(installed.join("ssmt-plugin.json"), raw).unwrap();
+            ids.push(manifest.id);
+        }
+        assert!(ids.len() >= 3);
+        let mut registry = PluginRegistry::new(root.join("plugins")).unwrap();
+        let mut combinations = vec![Vec::new(), ids.clone()];
+        for (index, id) in ids.iter().enumerate() {
+            combinations.push(vec![id.clone()]);
+            for other in &ids[index + 1..] {
+                combinations.push(vec![id.clone(), other.clone()]);
+            }
+        }
+        for combination in combinations {
+            for id in &ids {
+                registry
+                    .set_game_enabled("GIMI", id, combination.contains(id))
+                    .unwrap();
+            }
+            let scoped = registry.for_game("GIMI");
+            let dlss5 = combination.iter().any(|id| id == "ssmt.dlss5.integration");
+            let shade = combination.iter().any(|id| id == "ssmt.hoyoshade.bridge");
+            let clean = inspect_graphics_for_executable(&scoped, &executable).unwrap();
+            assert_eq!(clean.resolution.level, CompatibilityLevel::Compatible);
+            assert_eq!(clean.host_requested, dlss5 || shade);
+            fs::write(game.join("_DLSS5_Backup/manifest.json"), b"invalid").unwrap();
+            let broken = inspect_graphics_for_executable(&scoped, &executable).unwrap();
+            assert_eq!(
+                broken.resolution.level,
+                if dlss5 {
+                    CompatibilityLevel::Conflict
+                } else {
+                    CompatibilityLevel::Compatible
+                }
+            );
+            fs::remove_file(game.join("_DLSS5_Backup/manifest.json")).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
