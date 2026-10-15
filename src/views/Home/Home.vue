@@ -480,10 +480,12 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
           <button v-for="tab in gameNewsTabs" :key="tab.key" type="button" :class="{ active: gameNewsTab === tab.key }"
             @click="gameNewsTab = tab.key">{{ tab.label }}</button>
         </div>
-        <button v-for="post in gameNewsPosts" :key="post.id" class="home-news-item" type="button"
-          @click="openHomeLink(post.link)"><span>{{ post.title }}</span><time>{{ post.date }}</time></button>
-        <div v-if="!gameNewsLoading && gameNewsPosts.length === 0" class="home-news-empty">{{ t('home.gameNews.empty')
-          }}
+        <div class="home-news-list">
+          <button v-for="post in gameNewsPosts" :key="post.id" class="home-news-item" type="button"
+            @click="openHomeLink(post.link)"><span>{{ post.title }}</span><time>{{ post.date }}</time></button>
+          <div v-if="!gameNewsLoading && gameNewsPosts.length === 0" class="home-news-empty">{{ t('home.gameNews.empty')
+            }}
+          </div>
         </div>
       </section>
     </div>
@@ -706,10 +708,6 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
   text-align: left;
 }
 
-.home-news-item {
-  flex: 0 0 auto;
-}
-
 .home-news-item span {
   min-width: 0;
   overflow: hidden;
@@ -730,6 +728,33 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
   padding: 13px 0 4px;
   color: rgba(255, 255, 255, .45);
   font-size: 11px;
+}
+
+.home-news-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .22) transparent;
+}
+
+.home-news-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.home-news-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.home-news-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .22);
+  border-radius: 4px;
+}
+
+.home-news-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, .4);
 }
 
 .home-background-hotzone {
