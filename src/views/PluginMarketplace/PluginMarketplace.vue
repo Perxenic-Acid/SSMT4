@@ -9,6 +9,7 @@ import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 import { AppStateManager } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
+import { getGamePresetPriority } from '../../store/GamePreset'
 
 const PlayerTweaksCameraSettings = defineAsyncComponent(
   () => import('../../plugin/components/PlayerTweaksCameraSettings.vue'),
@@ -86,6 +87,10 @@ interface OfficialCatalogEntry {
 const { t } = useI18n()
 const router = useRouter()
 const gamesList = AppStateManager.gamesList
+// 游戏选择器按预设优先级排序,重要游戏置顶。
+const orderedGamesList = computed(() =>
+  [...gamesList].sort((a, b) => getGamePresetPriority(a.name) - getGamePresetPriority(b.name)),
+)
 const selectedGameName = ref(AppStateManager.appSettings.CurrentGameName === 'Default'
   ? '' : AppStateManager.appSettings.CurrentGameName)
 
@@ -420,7 +425,7 @@ watch(visibleEntries, (entries) => {
 onMounted(async () => {
   if (!gamesList.length) await AppStateManager.loadGames()
   if (!gamesList.some(game => game.name === selectedGameName.value)) {
-    selectedGameName.value = gamesList[0]?.name ?? ''
+    selectedGameName.value = orderedGamesList.value[0]?.name ?? ''
   }
   initialized = true
   await refreshAll()
@@ -434,7 +439,7 @@ onMounted(async () => {
         <label for="plugin-game-select">{{ t('pluginMarketplace.gameSelection') }}</label>
         <el-select id="plugin-game-select" v-model="selectedGameName" size="small"
           :placeholder="t('pluginMarketplace.chooseGame')" class="game-select">
-          <el-option v-for="game in gamesList" :key="game.name" :label="game.name" :value="game.name" />
+          <el-option v-for="game in orderedGamesList" :key="game.name" :label="game.name" :value="game.name" />
         </el-select>
         <span class="scope-note">{{ selectedPlugin?.appScoped
           ? t('pluginMarketplace.appScopeHint')

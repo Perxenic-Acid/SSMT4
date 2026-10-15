@@ -109,6 +109,15 @@ export function isMihoyoGamePreset(gamePreset: unknown): boolean {
   return MIHOYO_GAME_PRESET_SET.has(normalizedPreset)
 }
 
+/**
+ * 返回预设的置顶优先级(数值越小越靠前)。未知/未支持的预设排最后。
+ */
+export function getGamePresetPriority(gamePreset: string | null | undefined): number {
+  const normalized = (gamePreset || '').trim().toUpperCase()
+  const index = (GAME_PRESET_VALUES as readonly string[]).indexOf(normalized)
+  return index < 0 ? Number.MAX_SAFE_INTEGER : index
+}
+
 export const AUTO_UPDATE_SUPPORTED_PRESETS = [
   'GIMI',
   'HIMI',
