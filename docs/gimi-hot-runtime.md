@@ -68,6 +68,16 @@ Shell 只是启动方式，不能据 `useShell=true` 推断使用了官方启动
 
 ## 验证与实机验收
 
+### 2026-10-15 启动崩溃修复
+
+21:20:47 与 21:21:59 的两份游戏 dump 均为执行空地址的 `0xC0000005`，首个返回地址位于当时加载的 SSMT Runtime `d3d11.dll + 0xAC914`。将已部署 DLL 的副本解包后，核对本地构建的 PDB 标识与调用指令，定位为 `FrameAnalysisContext::VSSetShaderResources` 调用虚表偏移 `0x430` 的帧分析日志方法。ReShade、Bridge 与 OptiScaler 均已载入；这不是“没有注入”。Migoto 的 `calls=0`，旧 `d3d11_log.txt` 的时间不能代表本次启动。
+
+Bridge 按 COM 接口长度复制 Context 虚表，Runtime 原先追加的三个内部方法不在副本中。修复将日志、选项与资源导出的内部派发移到对象成员，保留普通 Context 的空操作和帧分析 Context 的具体实现，不关闭 hunting，不修改 Mod 或插件启用状态。修改局限于 Runtime 内部 C++ 类，Plugin ABI 不变，需完整重编译 Runtime。
+
+回归入口位于 `runtime/tests/context-interop`：独立 WARP 设备覆盖 hunting=0/2、原始虚表和 128/134 项副本。旧版本四项副本测试均复现空地址崩溃，新版本六项通过；真实 ReShade + Bridge 组件在旧版同样崩溃，新版可完成接口调用。既有 DXGI 桌面复制的纯系统、Runtime、ReShade、二者组合四项也通过。
+
+完整 Bridge + OptiScaler 组合的独立夹具未能确认返回对象的 Runtime 私有身份，测试拒绝将其计为通过；它不提供游戏内 NR 结论。本次修复后尚未启动真实游戏，仍须按下方日志检查 FSR2 dispatch、Feature 18 与 Mod 画面。修复后的 DLL 部署到应用资源，由正常启动的静默同步流程更新 Migoto 目录，不向游戏目录放置代理文件。
+
 源码验证入口：
 
 ```powershell

@@ -15,6 +15,8 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 - 对照 XXMI 时记录本地 commit，读具体游戏默认项和 `MigotoInjector` 调用链。不要推广成所有预设都该更换注入方式。
 - 原神模型/贴图异常先区分同一 INI 重复载入、不同文件内容冲突和实际缓冲绑定；重复节告警不能证明重复载入。检查动态角色分辨率的两份注册表画质记录，GIMI 的“配置游戏设置”需与 XXMI 一样关闭该项。未知结构不猜测，写入前保留原始记录；纯净启动不得修改。
 - 原神 DLSS5 只允许热注入/Hook；把 DLL 或链接临时放回游戏目录再恢复仍属于冷替换。启动成功、仅有 ReShade 或 Feature 1 创建均不等于 NR 生效，应核对同次日志中的 Feature 18 成功帧及 Mod 画面。
+- 游戏已退出时先查当次 Unity 日志与 `%TEMP%/mihoyocrash_*` 的 dump；`error.log` 可能是无 BOM 的 UTF-16 LE，显式指定编码。根据 dump 的模块基址计算 RVA，并核对实际 DLL、PDB 标识与指令；UPX 解包只处理隔离副本。`calls=0` 时旧 Migoto 日志不会更新，不能据此断言没有注入。
+- Context 的 COM 虚表可能被 Bridge 按标准接口长度复制，Runtime 私有方法不得依赖追加的虚表尾部。内部帧分析派发使用对象成员，不能靠关闭 hunting 规避。回归 `runtime/tests/context-interop`，同时检查 Runtime 对象身份、进程退出码和完成标记；只用 GetProcAddress 或 DLL 载入夹具可能绕过实际 Runtime，完整组件未确认身份时不得计为通过。独立接口测试仍不能替代游戏内 NR 验收。
 - 热注入所需的环境必须在提权后的 Run.exe 内显式设置，再由挂起创建的目标继承；不能依赖 SSMT 环境跨 ShellExecute 提权继承。先加载 SSMT Runtime，再按计划加载 ReShade Host、Bridge、OptiScaler、额外 DLL 和可选 PluginHost，最后恢复目标线程。只为已安装且按游戏启用的插件准备资源，禁止再启动第二个 ReShade 注入器。
 - 复制组件前核对固定版本及显卡 Profile 的完整哈希，使用 SSMT 管理的副本；绝不为了复用组件包而替换其 GIMI DLL。组合配置中第三方 FX 的相对路径应基于实际资源所有者转为绝对路径，Windows canonicalize 的 verbatim 前缀不能直接与第三方正斜杠路径拼接。保留用户禁用的非必要 Add-on，插件关闭后清除它的本次贡献。
 - 插件设置应能从插件市场找到。组件由设置中的显式操作自动下载，离线导入作为补充；先核验实际可下载的完整 Profile，再固化 URL、版本、大小和哈希，不能把不含 NR 的仓库 ZIP 当成完整安装。复用资源缓存，在新自有目录准备后再切换设置，失败保留旧组件；普通启动不等待下载，可选组件失败只横幅说明本次未加载，不改变保存的插件启用状态。7z 固实压缩必须读完跳过的项，只将需要的项写入固定目标。切换游戏时丢弃旧资源状态/进度，回归入口为 `scripts/tests/test-plugin-graphics-settings.mjs`。
