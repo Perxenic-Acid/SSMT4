@@ -1,5 +1,9 @@
 # 图形插件组合与 SSMT 资源管理
 
+## 2026-10-15 Runtime 静默同步与失败回退
+
+运行时继续使用随 SSMT 提供的适配版本，XXMI 上游 Changelog 按设计保留为只读说明。启动部署改为暂存校验、暂存 UPX 处理后再替换；更新失败仅显示横幅，使用原路径中的旧文件。没有旧文件时停止该次启动，纯净启动跳过部署。调用链与回归入口见[本次处理记录](runtime-and-graphics-fixes-20261015.md)。
+
 ## 2026-10-06 SSMT Runtime 来源收敛
 
 游戏设置不再提供 Dev、Play、ssice-a 三种 DLL 来源。D3D11 启动统一从 SSMT 随应用提供的 `resources/d3d11.dll` 部署；原有 DX12 预设继续使用 `resources/DX12/d3d12.dll`。旧来源配置在读取时移除，启动前也不再下载上游 DLL。设置页保留 `SpectrumQT/XXMI-Libs-Package` Release 的只读更新记录，不能从该列表安装 DLL。发布脚本构建并暂存 SSMT Runtime；本次只做前端构建与资源暂存检查，没有运行发布构建或游戏热测。下文带日期的测试记录保留当时的实现和结论，其中旧来源现状不代表此项改动后的状态。

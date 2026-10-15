@@ -734,16 +734,6 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         return getGithubReleaseList(repo, githubToken, { includePrerelease });
     }
 
-    async function getXXMILibsLatestRelease(
-        githubToken?: string,
-        includePrerelease = false,
-    ): Promise<UpdateInfo> {
-        const releases = await getXXMILibsReleaseList(githubToken, includePrerelease);
-        const release = releases[0];
-        if (!release) throw new Error(t('resourceManager.messages.releaseNotFoundForCriteria'));
-        return release;
-    }
-
     async function getAppLatestRelease(
         githubToken?: string,
         includePrerelease = false,
@@ -1049,7 +1039,6 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         // Release fetchers
         get3DMigotoLatestRelease,
         get3DMigotoReleaseList,
-        getXXMILibsLatestRelease,
         getAppLatestRelease,
         getXXMILibsReleaseList,
         // Install
@@ -1094,7 +1083,6 @@ export const ResourceManager = new Proxy({} as Record<string, unknown>, {
     getMissingSSMTRuntimeFiles: (gameName?: string) => Promise<string[]>;
     get3DMigotoLatestRelease: (gamePreset: string, githubToken?: string, includePrerelease?: boolean) => Promise<UpdateInfo | null>;
     get3DMigotoReleaseList: (gamePreset: string, githubToken?: string, includePrerelease?: boolean) => Promise<UpdateInfo[] | null>;
-    getXXMILibsLatestRelease: (githubToken?: string, includePrerelease?: boolean) => Promise<UpdateInfo>;
     getAppLatestRelease: (githubToken?: string, includePrerelease?: boolean) => Promise<UpdateInfo>;
     getXXMILibsReleaseList: (githubToken?: string, includePrerelease?: boolean) => Promise<UpdateInfo[]>;
     install3DMigotoUpdate: (gameName: string, downloadUrl: string, cacheDir?: string, installDir?: string) => Promise<void>;

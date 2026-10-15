@@ -1,4 +1,5 @@
 import { join } from '@tauri-apps/api/path'
+import { invoke } from '@tauri-apps/api/core'
 import { exists, remove, writeTextFile, copyFile, rename } from '@tauri-apps/plugin-fs'
 import { D3dxIniManager } from './D3dxIniManager'
 import { ResourceManager } from './ResourceManager'
@@ -70,6 +71,11 @@ export interface SpecificIbDumpOptions {
 export interface SpecificIbDumpResult {
   restoreAnalyseOptions: string
   logicName: string
+}
+
+export interface RuntimeSyncResult {
+  status: 'updated' | 'unchanged' | 'kept_existing' | 'unavailable'
+  error?: unknown
 }
 
 const normalizeSpecificIbDumpLogicName = (logicName: unknown, gamePreset: unknown): string => {
@@ -145,50 +151,62 @@ export class MigotoManager {
     return exists(d3dxPath)
   }
 
-  static async applySSMTRuntimeToMigotoDir(gameName: string, migotoDir: string, config?: GameConfig): Promise<void> {
+  static async syncRuntimeFile(
+    sourcePath: string,
+    destPath: string,
+    prepareStagedFile?: (path: string) => Promise<void>,
+  ): Promise<RuntimeSyncResult> {
+    const stagingPath = `${destPath}.ssmt-staging-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+    try {
+      if (!(await exists(sourcePath))) {
+        throw new Error(t('migotoManager.messages.ssmtRuntimeSourceMissing', { path: sourcePath }))
+      }
+
+      const sourceHash = await invoke<string>('file_md5', { path: sourcePath })
+      if (await exists(destPath)) {
+        const currentHash = await invoke<string>('file_md5', { path: destPath })
+        if (sourceHash === currentHash && !prepareStagedFile) {
+          return { status: 'unchanged' }
+        }
+      }
+
+      await copyFile(sourcePath, stagingPath)
+      if (sourceHash !== await invoke<string>('file_md5', { path: stagingPath })) {
+        throw new Error('SSMT Runtime 暂存文件校验失败')
+      }
+      await prepareStagedFile?.(stagingPath)
+
+      // 同目录 rename 会替换目标文件。提交前不移动或删除旧版，
+      // 因占用、权限或暂存处理失败时，旧 DLL/注入器始终仍在原路径。
+      await rename(stagingPath, destPath)
+      return { status: 'updated' }
+    } catch (error) {
+      try {
+        if (await exists(stagingPath)) await remove(stagingPath)
+      } catch (cleanupError) {
+        console.warn('清理 Runtime 暂存文件失败：', cleanupError)
+      }
+      return {
+        status: await exists(destPath).catch(() => false) ? 'kept_existing' : 'unavailable',
+        error,
+      }
+    }
+  }
+
+  static async applySSMTRuntimeToMigotoDir(
+    gameName: string,
+    migotoDir: string,
+    config?: GameConfig,
+    prepareStagedDll?: (path: string) => Promise<void>,
+  ): Promise<RuntimeSyncResult> {
     const effectiveConfig = config || await ResourceManager.loadGameConfig(gameName)
     const dllSource = await ResourceManager.resolveMigotoDllSource(effectiveConfig)
     const sourcePath = dllSource.sourcePath
     const destPath = await join(migotoDir, dllSource.targetFileName)
 
-    if (!(await exists(sourcePath))) {
-      throw new Error(t('migotoManager.messages.ssmtRuntimeSourceMissing', { path: sourcePath }))
-    }
-
-    const stagingPath = `${destPath}.ssmt-staging-${Date.now()}-${Math.random().toString(16).slice(2)}`
-    const backupPath = `${destPath}.ssmt-backup-${Date.now()}-${Math.random().toString(16).slice(2)}`
-    let backupCreated = false
-
-    try {
-      // Stage beside the destination so the final rename stays on the same
-      // volume. Keep the existing DLL available until the staged copy is ready.
-      await copyFile(sourcePath, stagingPath)
-
-      if (await exists(destPath)) {
-        await rename(destPath, backupPath)
-        backupCreated = true
-      }
-
-      await rename(stagingPath, destPath)
-
-      if (backupCreated && await exists(backupPath)) {
-        await remove(backupPath)
-      }
-    } catch (error) {
-      try {
-        if (await exists(stagingPath)) {
-          await remove(stagingPath)
-        }
-        if (backupCreated && !(await exists(destPath)) && await exists(backupPath)) {
-          await rename(backupPath, destPath)
-        }
-      } catch (restoreError) {
-        throw new Error(`${String(error)}; failed to restore the previous ${dllSource.label}: ${String(restoreError)}`)
-      }
-
-      throw error
-    }
-
+    return this.syncRuntimeFile(sourcePath, destPath,
+      dllSource.targetFileName === 'd3d11.dll' ? prepareStagedDll : undefined)
   }
 
   /**

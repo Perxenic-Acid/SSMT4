@@ -3,7 +3,7 @@ import { exists, mkdir, copyFile, remove, writeTextFile } from "@tauri-apps/plug
 import { join } from "@tauri-apps/api/path";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ResourceManager } from "../store/ResourceManager";
-import { MigotoManager } from "../store/MigotoManager";
+import { MigotoManager, type RuntimeSyncResult } from "../store/MigotoManager";
 import { GlobalConfig } from "../store/GlobalConfig";
 import { PathHelper } from "../helper/PathHelper";
 import { i18n } from "../i18n";
@@ -318,16 +318,6 @@ export class LaunchGame {
         return programs;
     }
 
-    private static async ensureSSMTRuntimeReady(gameName: string): Promise<boolean> {
-        const missingFiles =
-            await ResourceManager.getMissingSSMTRuntimeFiles(gameName);
-        if (missingFiles.length === 0) {
-            return true;
-        }
-        ElMessage.error(`SSMT Runtime 缺少文件：${missingFiles.join(", ")}`);
-        return false;
-    }
-
     static async resolveMigotoDirForLaunch(
         _gameName: string,
         _cfg: GameConfig,
@@ -498,12 +488,13 @@ export class LaunchGame {
         // 启动前将随应用提供的 SSMT Runtime 部署到 Migoto 目录。
         // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
         const useUpx = getEffectiveUseUpx(migotoCfg);
-        await this.prepareGameEnvironment(
+        const environmentReady = await this.prepareGameEnvironment(
             gameName,
             migotoDir,
             migotoCfg,
             useUpx,
         );
+        if (!environmentReady) return null;
 
         if (!pureMode || !launchTargetProgram) {
             const runExePath = await join(migotoDir, "Run.exe");
@@ -529,14 +520,6 @@ export class LaunchGame {
             const pureMode =
                 appSettings.gameLaunchMode === "always-pure" ||
                 (appSettings.gameLaunchMode === "ctrl-pure" && ctrlPressed);
-            const pureDirectLaunch =
-                pureMode &&
-                (await ResourceManager.loadGameConfig(gameName))?.launchTargetProgram !== false;
-            const libsReady = pureDirectLaunch
-                ? true
-                : await this.ensureSSMTRuntimeReady(gameName);
-            if (!libsReady) return;
-
             const preflight = await this.prepareLaunch(
                 gameName,
                 appSettings,
@@ -773,16 +756,6 @@ export class LaunchGame {
     ): Promise<void> {
         const resourcesDir = await GlobalConfig.SSMTResourcesFolder();
 
-        // Run.exe is the base injector/launcher used by the default flow.
-        const runSourcePath = await join(resourcesDir, "Run.exe");
-        const runTargetPath = await join(migotoDir, "Run.exe");
-
-        if (!(await exists(runSourcePath))) {
-            throw new Error(`Missing SSMT runtime file: ${runSourcePath}`);
-        }
-
-        await copyFile(runSourcePath, runTargetPath);
-
         // Run.exe 会注入同目录中的 Player Tweaks。只在本游戏明确启用时部署，
         // 否则移除旧副本，避免插件市场的禁用状态与实际注入不一致。
         const isGimi = (gamePreset || "").trim().toUpperCase() === "GIMI";
@@ -848,12 +821,48 @@ export class LaunchGame {
         await copyFile(source, await join(migotoDir, "SSMT-PluginHost.dll"));
     }
 
+    private static runtimeSyncReady(result: RuntimeSyncResult, file: string): boolean {
+        if (result.status === "updated" || result.status === "unchanged") return true;
+        console.warn(`SSMT Runtime 同步失败 (${file})：`, result.error);
+        ElMessage.warning({
+            message: t(result.status === "kept_existing"
+                ? "launchGame.messages.ssmtRuntimeUpdateFallback"
+                : "launchGame.messages.ssmtRuntimeUnavailable", { file }),
+            showClose: true,
+            duration: 10000,
+        });
+        return result.status === "kept_existing";
+    }
+
+    private static async packStagedSSMTRuntime(resourceDir: string, stagingPath: string): Promise<void> {
+        const candidates = [
+            await join(resourceDir, "upx.exe"),
+            await join(resourceDir, "resources", "upx.exe"),
+            await join("resources", "upx.exe"),
+        ];
+        let upxPath = "";
+        for (const candidate of candidates) {
+            if (await exists(candidate)) { upxPath = candidate; break; }
+        }
+        if (!upxPath) throw new Error("SSMT Runtime 所需的 upx.exe 不存在");
+
+        const execute = (args: string[]) => invoke<{ code: number; stdout: string; stderr: string }>(
+            "execute_external_program", { programPath: upxPath, args },
+        );
+        // 发行资源可能已经打包；先验证，避免把 AlreadyPacked 当成更新失败。
+        if ((await execute(["-t", stagingPath])).code === 0) return;
+        const output = await execute([stagingPath]);
+        if (output.code !== 0) {
+            throw new Error(`UPX (${output.code}): ${output.stderr || output.stdout}`);
+        }
+    }
+
     private static async prepareGameEnvironment(
         gameName: string,
         migotoPath: string,
         config: GameConfig,
         useUpx: boolean,
-    ): Promise<void> {
+    ): Promise<boolean> {
         try {
             if (!(await exists(migotoPath))) {
                 await mkdir(migotoPath, { recursive: true });
@@ -866,134 +875,24 @@ export class LaunchGame {
                 const destPath = await join(migotoPath, file);
                 const sourcePath = await join(resourceDir, file);
                 if (!(await exists(destPath))) {
-                    try {
-                        console.log(`Copying ${file} to ${destPath}`);
-                        await copyFile(sourcePath, destPath);
-                    } catch (e) {
-                        const msg = t(
-                            "launchGame.messages.copyFailedEnsureClosed",
-                            { file, error: String(e) },
-                        );
-                        console.error(msg);
-                        throw new Error(msg);
-                    }
+                    const result = await MigotoManager.syncRuntimeFile(sourcePath, destPath);
+                    if (!this.runtimeSyncReady(result, file)) return false;
                 }
             }
 
             const runSourcePath = await join(resourceDir, "Run.exe");
             const runDestPath = await join(migotoPath, "Run.exe");
-            if (await exists(runSourcePath)) {
-                const sourceMd5 = await invoke<string>("file_md5", {
-                    path: runSourcePath,
-                });
-                let shouldCopyRun = !(await exists(runDestPath));
+            const runResult = await MigotoManager.syncRuntimeFile(runSourcePath, runDestPath);
+            if (!this.runtimeSyncReady(runResult, "Run.exe")) return false;
 
-                if (!shouldCopyRun) {
-                    const destMd5 = await invoke<string>("file_md5", {
-                        path: runDestPath,
-                    }).catch(() => "");
-                    shouldCopyRun = sourceMd5 !== destMd5;
-                }
-
-                if (shouldCopyRun) {
-                    try {
-                        if (await exists(runDestPath)) {
-                            await remove(runDestPath);
-                        }
-                        console.log(
-                            `Copying Run.exe to ${runDestPath} because md5 differs`,
-                        );
-                        await copyFile(runSourcePath, runDestPath);
-                    } catch (e) {
-                        const msg = t(
-                            "launchGame.messages.copyFailedEnsureClosed",
-                            { file: "Run.exe", error: String(e) },
-                        );
-                        console.error(msg);
-                        throw new Error(msg);
-                    }
-                }
-            }
-
-            await MigotoManager.applySSMTRuntimeToMigotoDir(
+            const dllResult = await MigotoManager.applySSMTRuntimeToMigotoDir(
                 gameName,
                 migotoPath,
                 config,
+                useUpx ? path => this.packStagedSSMTRuntime(resourceDir, path) : undefined,
             );
-
-            if (useUpx) {
-                debugLog(
-                    "GameLauncher",
-                    "UPX packing enabled. Packing d3d11.dll...",
-                );
-                const d3d11Path = await join(migotoPath, "d3d11.dll");
-
-                if (await exists(d3d11Path)) {
-                    let upxToUse = await join(resourceDir, "upx.exe");
-
-                    if (!(await exists(upxToUse))) {
-                        const nestedUpx = await join(
-                            resourceDir,
-                            "resources",
-                            "upx.exe",
-                        );
-                        if (await exists(nestedUpx)) {
-                            upxToUse = nestedUpx;
-                        } else {
-                            const devUpx = await join("resources", "upx.exe");
-                            if (await exists(devUpx)) {
-                                upxToUse = devUpx;
-                            }
-                        }
-                    }
-
-                    if (await exists(upxToUse)) {
-                        debugLog(
-                            "GameLauncher",
-                            `Running UPX: ${upxToUse} ${d3d11Path}`,
-                        );
-                        try {
-                            const output = await invoke<{
-                                code: number;
-                                stdout: string;
-                                stderr: string;
-                            }>("execute_external_program", {
-                                programPath: upxToUse,
-                                args: [d3d11Path],
-                            });
-
-                            if (output.code !== 0) {
-                                debugLog(
-                                    "GameLauncher",
-                                    `UPX failed with exit code: ${output.code}`,
-                                );
-                                debugLog(
-                                    "GameLauncher",
-                                    `UPX stdout: ${output.stdout}`,
-                                );
-                                debugLog(
-                                    "GameLauncher",
-                                    `UPX stderr: ${output.stderr}`,
-                                );
-                            } else {
-                                debugLog(
-                                    "GameLauncher",
-                                    "UPX packing successful.",
-                                );
-                            }
-                        } catch (e) {
-                            console.error(
-                                `Failed to execute UPX process: ${e}`,
-                            );
-                        }
-                    } else {
-                        debugLog(
-                            "GameLauncher",
-                            "Warning: upx.exe not found. Skipping packing.",
-                        );
-                    }
-                }
-            }
+            const dllSource = await ResourceManager.resolveMigotoDllSource(config);
+            return this.runtimeSyncReady(dllResult, dllSource.targetFileName);
         } catch (error) {
             console.error("Failed to prepare game environment: ", error);
             throw error;

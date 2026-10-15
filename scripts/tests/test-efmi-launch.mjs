@@ -61,7 +61,6 @@ function harness(config, hostConfig = null) {
   }).MigotoManager;
   migoto.check3DmigotoIntegrity = async () => true;
   const launch = load('../../src/common/LaunchGame.ts', { ...mocks, '../store/MigotoManager': { MigotoManager: migoto } }).LaunchGame;
-  launch.ensureSSMTRuntimeReady = async () => true;
   launch.ensureSSMTRuntimeFiles = async () => {};
   launch.ensureSSMTPluginHostFile = async () => {};
   const preflight = launch.prepareLaunch.bind(launch);

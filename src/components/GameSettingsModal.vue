@@ -495,7 +495,7 @@ const loadDllReleaseList = async (force = false) => {
     dllReleaseListLoaded.value = true;
     dllVisibleCount.value = DLL_RELEASE_PAGE_SIZE;
   } catch (e) {
-    console.error('Failed to load d3d11.dll release list:', e);
+    console.error('Failed to load XXMI Runtime release list:', e);
     dllReleaseListError.value = String(e);
   } finally {
     isDllReleaseLoading.value = false;
@@ -1329,7 +1329,7 @@ defineExpose({
             </div>
 
             <div v-if="activeTab === 'dllUpdate'" class="tab-pane">
-              <!-- SSMT Runtime is bundled with SSMT; upstream notes are read-only. -->
+              <!-- 运行时由 SSMT 静默部署，这里只展示 XXMI 上游的发布记录。 -->
               <div class="dll-top-bar runtime-top-bar">
                 <div class="dll-version-badge">
                   <div class="dll-version-badge-inner">
