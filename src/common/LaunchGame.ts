@@ -550,7 +550,7 @@ export class LaunchGame {
             }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
-            const useShell = launchTargetProgram && (config.useShell || false);
+            let useShell = launchTargetProgram && (config.useShell || false);
             const useRunInjector = !pureMode || !launchTargetProgram;
             const useEfmiDirectWait = useRunInjector &&
                 (config.gamePreset || "").trim().toUpperCase() === "EFMI";
@@ -639,8 +639,22 @@ export class LaunchGame {
                     });
                 }
             }
-            if (hotRuntime && (!launchTargetProgram || useShell)) {
-                throw new Error("原神 DLSS5 热注入需要由 SSMT 直接创建挂起的游戏进程，请关闭手动启动与官方启动器模式");
+            if (hotRuntime) {
+                if (!launchTargetProgram) {
+                    throw new Error(t("launchGame.messages.gimiHotManualLaunchUnsupported"));
+                }
+                if (useShell) {
+                    const [launcherPath, targetPath] = await Promise.all([join(launcherExePath), join(targetExe)]);
+                    const comparablePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").toLowerCase();
+                    if (comparablePath(launcherPath) !== comparablePath(targetPath)) {
+                        throw new Error(t("launchGame.messages.gimiHotExternalLauncherUnsupported", {
+                            launcher: launcherExePath, target: targetExe,
+                        }));
+                    }
+                    // Shell 可以直接指向游戏。仅本次改由 Run.exe 创建目标，
+                    // 以便注入前设置环境；INI 与队列必须一起切换，避免遗漏或重复启动。
+                    useShell = false;
+                }
             }
             let hoyoshade: PluginLaunchProgram | null = null;
             if (!hotRuntime && !pureDirectTarget && launchTargetProgram && targetExe) {
@@ -699,7 +713,10 @@ export class LaunchGame {
                         throw new Error(`热注入组件与额外 DLL 重复或所有权冲突：${dll}`);
                     }
                 }
-                await MigotoManager.patchD3dxForLaunch(gameName, { extraDlls: [...hotRuntime.dlls, ...extras] });
+                await MigotoManager.patchD3dxForLaunch(gameName, {
+                    extraDlls: [...hotRuntime.dlls, ...extras],
+                    useShell: false,
+                });
             }
 
             // 仅在本次启动确实包含 HoYoShade 时覆盖用户的原始延迟配置。

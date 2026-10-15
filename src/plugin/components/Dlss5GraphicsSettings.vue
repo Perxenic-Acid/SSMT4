@@ -266,7 +266,7 @@ onUnmounted(() => {
         <h4>{{ label('启动前', 'Before launching') }}</h4>
         <ul>
           <li>{{ label('游戏内抗锯齿选择 FSR2，渲染精度至少 1.0。', 'Select FSR2 and render resolution 1.0 or higher in game.') }}</li>
-          <li>{{ label('由 SSMT 直接启动游戏，关闭手动启动和官方启动器模式。', 'Launch directly through SSMT; turn off manual and official-launcher modes.') }}</li>
+          <li>{{ label('保持“启动目标程序”开启；使用 Shell 启动时，将启动路径设为同一个游戏程序。', 'Keep Launch target program enabled. For Shell launch, set the launch path to the same game executable.') }}</li>
         </ul>
         <p>{{ label('组件配置成功仅代表安装完成，NR 效果需进入游戏验证。', 'Configured components indicate installation only; verify NR rendering in game.') }}</p>
       </div>

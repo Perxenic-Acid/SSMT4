@@ -40,7 +40,7 @@ async function harness(t, options = {}) {
   await fs.writeFile(gameExe, 'game fixture');
   await fs.writeFile(path.join(migotoDir, 'd3dx.ini'), '[Loader]\nmodule = d3d11.dll\n');
   const config = { gamePreset: options.gamePreset || 'GIMI', targetExePath: gameExe, installDir: migotoDir, useUpx: !!options.useUpx, configureGame: options.configureGame, ...options.config };
-  if (config.useShell) config.launcherExePath = gameExe;
+  if (config.useShell && !config.launcherExePath) config.launcherExePath = gameExe;
   if (options.hostConfig) await fs.writeFile(path.join(resourceDir, 'SSMT-PluginHost.dll'), 'host fixture');
   const calls = [];
   const messages = [];
@@ -255,26 +255,93 @@ for (const hostConfig of [null, 'C:/Plugins/all-enabled.json']) {
   });
 }
 
-for (const config of [{ extraDlls: ['C:/Other/ReShade64.dll'] }, { launchTargetProgram: false }, { useShell: true, launcherExePath: 'C:/Launcher.exe' }]) {
-  test(`unsafe hot-loading plan fails before starting processes: ${JSON.stringify(config)}`, async t => {
-    const h = await harness(t, { hotRuntime: hotPlan, config });
+for (const hostConfig of [null, 'C:/Plugins/all-enabled.json']) {
+  test(`Shell 直接启动同一游戏时使用单次挂起热注入，保留设置与参数；PluginHost=${!!hostConfig}`, async t => {
+    const h = await harness(t, { hotRuntime: hotPlan, hostConfig, config: { useShell: true, launchArgs: '-force-d3d11 -test="a b"' } });
     await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
-    assert.equal(h.calls.some(call => call.command === 'launch_programs'), false);
-    assert.ok(h.dialogs.some(dialog => dialog.kind === 'alert'));
+    assert.equal(h.dialogs.length, 0);
+    const programs = h.calls.find(call => call.command === 'launch_programs')?.args.programs;
+    assert.ok(programs);
+    assert.equal(programs.length, 2);
+    assert.ok(programs[0].path.endsWith('Run.exe'));
+    assert.match(programs[0].args, /--preload-runtime/);
+    assert.equal(programs[0].args.includes('--plugin-host-config'), !!hostConfig);
+    assert.equal(programs[0].waitForProcessName, undefined);
+    assert.equal(programs[1].waitOnly, true);
+    assert.equal(programs.some(program => program.path === h.config.targetExePath), false, '游戏只能由 Run.exe 创建一次');
+    const ini = await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8');
+    assert.ok(ini.includes(`launch = ${h.config.targetExePath}`));
+    assert.match(ini, /launch_args = -force-d3d11 -test="a b"/);
+    assert.match(ini, /inject_dlls = C:\/Managed\/ReShade64.dll\|C:\/Managed\/Dx11FsrBridge.dll\|C:\/Managed\/OptiScaler.dll/);
+    assert.equal(h.config.useShell, true, '仅改变本次启动方式，不写回用户设置');
+    assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
   });
 }
 
-test('disabling hot DLSS5 removes its prior INI entries and per-launch environment', async t => {
-  const options = { hotRuntime: hotPlan };
-  const h = await harness(t, options);
+test('同一目标路径中的分隔符和点目录不导致 Shell 热注入误判', async t => {
+  const h = await harness(t, { hotRuntime: hotPlan, config: { useShell: true } });
+  h.config.launcherExePath = `${h.root}/./Game.exe`;
   await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
-  options.hotRuntime = null;
-  h.calls.length = 0;
-  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
-  const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
-  assert.doesNotMatch(programs[0].args || '', /preload-runtime|set-env/);
-  assert.doesNotMatch(await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8'), /inject_dlls\s*=/);
+  assert.equal(h.dialogs.length, 0);
+  assert.ok(h.calls.find(call => call.command === 'launch_programs')?.args.programs[0].args.includes('--preload-runtime'));
 });
+
+for (const differentLauncher of [false, true]) {
+  test(`没有热注入计划时保留原有 Shell 启动队列；不同启动程序=${differentLauncher}`, async t => {
+    const h = await harness(t, { config: { useShell: true, launchArgs: '-force-d3d11' } });
+    if (differentLauncher) {
+      h.config.launcherExePath = path.join(h.root, 'Launcher.exe');
+      await fs.writeFile(h.config.launcherExePath, 'launcher fixture');
+    }
+    await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+    assert.equal(h.dialogs.length, 0);
+    const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+    assert.equal(programs.length, 2);
+    assert.equal(programs[0].waitForProcessName, 'Run.exe');
+    assert.doesNotMatch(programs[0].args || '', /preload-runtime|set-env/);
+    assert.equal(programs[1].path, h.config.launcherExePath);
+    assert.equal(programs[1].args, '-force-d3d11');
+    assert.doesNotMatch(await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8'), /^\s*launch(?:_args)?\s*=/m);
+  });
+}
+
+for (const config of [{ extraDlls: ['C:/Other/ReShade64.dll'] }, { launchTargetProgram: false }, { useShell: true }]) {
+  test(`unsafe hot-loading plan fails before starting processes: ${JSON.stringify(config)}`, async t => {
+    const h = await harness(t, { hotRuntime: hotPlan, config });
+    if (config.useShell) {
+      const otherGame = path.join(h.root, 'OtherGame');
+      await fs.mkdir(otherGame);
+      h.config.launcherExePath = path.join(otherGame, 'Game.exe');
+      await fs.writeFile(h.config.launcherExePath, 'launcher fixture');
+    }
+    await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+    assert.ok(h.calls.some(call => call.command === 'prepare_gimi_hot_runtime'), '必须验证模式检查，不能因无效路径提前返回');
+    assert.equal(h.calls.some(call => call.command === 'launch_programs'), false);
+    assert.ok(h.dialogs.some(dialog => dialog.kind === 'alert'));
+    const error = h.dialogs.find(dialog => dialog.kind === 'alert').args[0];
+    if (config.useShell) assert.match(error, /gimiHotExternalLauncherUnsupported/, '不同完整路径不能仅按相同文件名放行');
+    if (config.launchTargetProgram === false) assert.match(error, /gimiHotManualLaunchUnsupported/);
+  });
+}
+
+for (const useShell of [false, true]) {
+  test(`disabling hot DLSS5 removes its prior INI entries and per-launch environment; Shell=${useShell}`, async t => {
+    const options = { hotRuntime: hotPlan, config: { useShell } };
+    const h = await harness(t, options);
+    await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+    options.hotRuntime = null;
+    h.calls.length = 0;
+    await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+    const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+    assert.doesNotMatch(programs[0].args || '', /preload-runtime|set-env/);
+    const ini = await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8');
+    assert.doesNotMatch(ini, /inject_dlls\s*=/);
+    if (useShell) {
+      assert.doesNotMatch(ini, /^\s*launch(?:_args)?\s*=/m);
+      assert.equal(programs[1].path, h.config.launcherExePath);
+    }
+  });
+}
 
 for (const shade of [null, { path: 'C:/Shade/inject.exe', args: 'YuanShen.exe', workDir: 'C:/Shade', runAsAdministrator: true, postLaunchDelayMs: 150 }]) {
   for (const hostConfig of [null, 'C:/Plugins/player-tweaks.json']) {

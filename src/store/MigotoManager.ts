@@ -215,7 +215,7 @@ export class MigotoManager {
    */
   static async patchD3dxForLaunch(
     gameName: string,
-    options: { dllInitializationDelay?: number; extraDlls?: string[] } = {},
+    options: { dllInitializationDelay?: number; extraDlls?: string[]; useShell?: boolean } = {},
   ): Promise<void> {
     const gameConfig = await ResourceManager.loadGameConfig(gameName)
     const cfg = gameConfig || {}
@@ -235,7 +235,7 @@ export class MigotoManager {
       lines = D3dxIniManager.setIniValue(lines, 'Loader', 'target', cfg.targetExePath)
     }
 
-    const runShell = !!cfg.useShell
+    const runShell = options.useShell ?? !!cfg.useShell
     const officialLauncherRequired = (cfg.gamePreset || '').trim().toUpperCase() === 'EFMI'
     // 手动模式不能留下 launch；终末地由官方启动器创建进程，以保留其启动上下文。
     if (runShell || cfg.launchTargetProgram === false || officialLauncherRequired) {
