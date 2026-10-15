@@ -180,6 +180,14 @@ fn inspect_graphics_for_executable(
     registry: &PluginRegistry,
     game_executable: &std::path::Path,
 ) -> Result<GraphicsLaunchInspection, String> {
+    inspect_graphics_for_launch(registry, game_executable, false)
+}
+
+fn inspect_graphics_for_launch(
+    registry: &PluginRegistry,
+    game_executable: &std::path::Path,
+    skip_dlss5: bool,
+) -> Result<GraphicsLaunchInspection, String> {
     if !game_executable.is_file() {
         return Err(format!(
             "game executable does not exist: {}",
@@ -201,7 +209,7 @@ fn inspect_graphics_for_executable(
         .transpose()?
         .unwrap_or(false);
     // 只有启用了 DLSS5 才读取其游戏文件，普通启动不受外部安装记录影响。
-    let dlss5_enabled = registry
+    let dlss5_enabled = !skip_dlss5 && registry
         .find(DLSS5_PLUGIN_ID)
         .is_some_and(|plugin| plugin.enabled);
     let state = GameGraphicsState {
@@ -729,19 +737,22 @@ pub fn prepare_hoyoshade_launch(
     game_name: String,
     game_executable: String,
     graphics_decision: Option<GraphicsLaunchDecision>,
+    skip_dlss5: Option<bool>,
 ) -> Result<Option<PluginLaunchProgram>, String> {
     let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name)) else {
         return Ok(None);
     };
     let game_executable = PathBuf::from(game_executable);
+    let skip_dlss5 = skip_dlss5.unwrap_or(false) && super::gimi_hot_runtime::applies(&game_executable);
     if super::gimi_hot_runtime::applies(&game_executable)
+        && !skip_dlss5
         && registry
             .find(DLSS5_PLUGIN_ID)
             .is_some_and(|plugin| plugin.enabled)
     {
         return Err("原神 DLSS5 必须由热注入计划启动，不能另起 ReShade 注入器".into());
     }
-    let inspection = inspect_graphics_for_executable(&registry, &game_executable)?;
+    let inspection = inspect_graphics_for_launch(&registry, &game_executable, skip_dlss5)?;
     if !should_launch_hoyoshade(&inspection, graphics_decision)? {
         return Ok(None);
     }
@@ -969,7 +980,7 @@ pub fn set_plugin_setting(
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities_for_permissions, inspect_graphics_for_executable, installed_plugin_registry_at,
+        capabilities_for_permissions, inspect_graphics_for_executable, inspect_graphics_for_launch, installed_plugin_registry_at,
         lifecycle_status,
         should_launch_hoyoshade, Dlss5GameStateSnapshot, GraphicsLaunchDecision,
         GraphicsLaunchInspection, PluginLifecycleStatus, inspect_dlss5_last_run_log,
@@ -1090,6 +1101,10 @@ mod tests {
                     CompatibilityLevel::Compatible
                 }
             );
+            let fallback = inspect_graphics_for_launch(&scoped, &executable, true).unwrap();
+            assert!(!fallback.dlss5_requested);
+            assert_eq!(fallback.host_requested, shade);
+            assert_eq!(fallback.resolution.level, CompatibilityLevel::Compatible);
             fs::remove_file(game.join("_DLSS5_Backup/manifest.json")).unwrap();
         }
         fs::remove_dir_all(root).unwrap();

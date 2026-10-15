@@ -14,6 +14,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "gimi_hot_download.rs"]
+pub mod download;
+
 // 这组组件属于 CXP GIMI 集成链；禁止用其 GIMI DLL 覆盖 SSMT Runtime。
 // 固定二进制组来自 cc46971 的 package-manifest.sha256，NR Runtime 按显卡 Profile 配对。
 const COMMON: &[(&str, &str)] = &[
@@ -382,27 +385,34 @@ pub fn import_gimi_hot_runtime(
         root: PathBuf::from(source_directory),
         profile,
     };
-    let unique = format!(
-        "{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    );
-    let root = crate::config::path_manager::PathManager::ssmt_global_config_folder()
+    let installation = import_at(&source, new_installation_root())?;
+    save_installation(&game_name, &installation)?;
+    Ok(installation)
+}
+
+fn new_installation_root() -> PathBuf {
+    crate::config::path_manager::PathManager::ssmt_global_config_folder()
         .join("PluginAssets")
         .join(DLSS5_PLUGIN_ID)
         .join("gimi-hot")
-        .join(unique);
-    let installation = import_at(&source, root)?;
+        .join(format!(
+            "{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ))
+}
+
+fn save_installation(game_name: &str, installation: &HotRuntimeInstallation) -> Result<(), String> {
     // 保存的是 SSMT 管理的副本；之后不会覆写用户提供的第三方目录。
     PluginSettingsStore::from_default_location()
         .map_err(|error| error.to_string())?
         .set(
             DLSS5_PLUGIN_ID,
-            &setting_key(&game_name),
+            &setting_key(game_name),
             serde_json::to_value(&installation).map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())?;
-    Ok(installation)
+    Ok(())
 }
 
 fn import_at(
@@ -493,9 +503,13 @@ pub fn prepare_gimi_hot_runtime(
                 .into(),
         );
     }
-    let value = PluginSettingsStore::from_default_location().map_err(|error| error.to_string())?
-        .get(DLSS5_PLUGIN_ID, &setting_key(&game_name)).map_err(|error| error.to_string())?
-        .ok_or("请先在原神 DLSS5 设置中导入匹配显卡的 GIMI 热注入组件；仅启用插件不会生成 DLSS5 Runtime")?;
+    let value = PluginSettingsStore::from_default_location()
+        .map_err(|error| error.to_string())?
+        .get(DLSS5_PLUGIN_ID, &setting_key(&game_name))
+        .map_err(|error| error.to_string())?
+        .ok_or(
+            "原神 DLSS5 组件尚未配置，请到插件市场的 DLSS5 功能设置中选择显卡，自动下载并配置",
+        )?;
     let installation = serde_json::from_value(value)
         .map_err(|error| format!("原神热注入组件配置无效：{error}"))?;
     prepare_at(&registry, &installation).map(Some)

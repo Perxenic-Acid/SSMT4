@@ -41,6 +41,17 @@ pub async fn download_verified(
     expected_size: u64,
     cache_root: &Path,
 ) -> Result<PathBuf, String> {
+    download_verified_with_progress(client, url, sha256, expected_size, cache_root, |_| {}).await
+}
+
+pub async fn download_verified_with_progress(
+    client: &reqwest::Client,
+    url: &str,
+    sha256: &str,
+    expected_size: u64,
+    cache_root: &Path,
+    mut progress: impl FnMut(u64),
+) -> Result<PathBuf, String> {
     let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
     if parsed.scheme() != "https" { return Err("resource URL must use HTTPS".into()) }
     if expected_size == 0 || expected_size > MAX_ASSET_BYTES {
@@ -50,8 +61,11 @@ pub async fn download_verified(
     let destination = cache_path(cache_root, &expected)?;
     if destination.exists() {
         let (size, actual) = hash_file(&destination, MAX_ASSET_BYTES)?;
-        if size == expected_size && actual == expected { return Ok(destination) }
-        return Err(format!("cached resource is damaged: {}", destination.display()));
+        if size == expected_size && actual == expected {
+            progress(expected_size);
+            return Ok(destination)
+        }
+        // 损坏缓存仅在新下载完整校验后替换；重试不必要求玩家手动清缓存。
     }
     fs::create_dir_all(cache_root).map_err(|error| error.to_string())?;
     let suffix = SystemTime::now().duration_since(UNIX_EPOCH)
@@ -75,6 +89,7 @@ pub async fn download_verified(
         if total > expected_size { return Err("resource exceeds declared size".into()) }
         file.write_all(&chunk).map_err(|error| error.to_string())?;
         digest.update(&chunk);
+        progress(total);
     }
     file.sync_all().map_err(|error| error.to_string())?;
     drop(file);
@@ -84,7 +99,6 @@ pub async fn download_verified(
     if destination.exists() {
         let (size, actual) = hash_file(&destination, MAX_ASSET_BYTES)?;
         if size == expected_size && actual == expected { return Ok(destination) }
-        return Err("another download left a conflicting cached resource".into());
     }
     fs::rename(&staged.0, &destination).map_err(|error| error.to_string())?;
     Ok(destination)
@@ -110,11 +124,12 @@ mod tests {
         let path = cache_path(&root, &sha256).unwrap();
         fs::write(&path, bytes).unwrap();
         let client = reqwest::Client::new();
-        assert_eq!(download_verified(&client, "https://example.com/unreachable", &sha256,
+        assert_eq!(download_verified(&client, "https://127.0.0.1:1/unreachable", &sha256,
             bytes.len() as u64, &root).await.unwrap(), path);
         fs::write(&path, b"damaged").unwrap();
-        assert!(download_verified(&client, "https://example.com/unreachable", &sha256,
+        assert!(download_verified(&client, "https://127.0.0.1:1/unreachable", &sha256,
             bytes.len() as u64, &root).await.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"damaged");
         fs::remove_dir_all(root).unwrap();
     }
 }

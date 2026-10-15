@@ -81,9 +81,16 @@ async function harness(t, options = {}) {
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
       if (command === 'bundled_player_tweaks_enabled_for_game') return false;
       if (command === 'configure_gimi_launch_settings') return null;
-      if (command === 'prepare_gimi_hot_runtime') return options.hotRuntime ?? null;
+      if (command === 'prepare_gimi_hot_runtime') {
+        if (options.hotError) throw new Error(options.hotError);
+        return options.hotRuntime ?? null;
+      }
       if (command === 'prepare_plugin_host_config') return options.hostConfig ?? null;
-      if (['prepare_hoyoshade_launch', 'launch_programs'].includes(command)) return null;
+      if (command === 'prepare_hoyoshade_launch') {
+        if (options.shadeError) throw new Error(options.shadeError);
+        return options.shade ?? null;
+      }
+      if (command === 'launch_programs') return null;
       if (command === 'execute_external_program') return options.upxResult?.(args) ?? { code: 1, stdout: '', stderr: 'UPX failed' };
       assert.fail(`Unexpected IPC: ${command}`);
     } },
@@ -267,6 +274,46 @@ test('disabling hot DLSS5 removes its prior INI entries and per-launch environme
   const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
   assert.doesNotMatch(programs[0].args || '', /preload-runtime|set-env/);
   assert.doesNotMatch(await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8'), /inject_dlls\s*=/);
+});
+
+for (const shade of [null, { path: 'C:/Shade/inject.exe', args: 'YuanShen.exe', workDir: 'C:/Shade', runAsAdministrator: true, postLaunchDelayMs: 150 }]) {
+  for (const hostConfig of [null, 'C:/Plugins/player-tweaks.json']) {
+    test(`unavailable DLSS5 warns without blocking other contributions: Shade=${!!shade}, Host=${!!hostConfig}`, async t => {
+      const h = await harness(t, { hotError: 'component package is missing or damaged', shade, hostConfig });
+      await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));
+      const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+      const injector = programs.find(program => program.path.endsWith('Run.exe'));
+      assert.ok(injector);
+      assert.doesNotMatch(injector.args || '', /preload-runtime|set-env/);
+      assert.equal(injector.args?.includes('--plugin-host-config') || false, !!hostConfig);
+      assert.equal(programs.some(program => program.path === 'C:/Shade/inject.exe'), !!shade);
+      assert.equal(h.calls.find(call => call.command === 'prepare_hoyoshade_launch').args.skipDlss5, true);
+      assert.equal(h.messages.some(message => message.kind === 'warning'), true);
+      assert.equal(h.dialogs.length, 0);
+      assert.doesNotMatch(await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8'), /ReShade64.dll|Dx11FsrBridge.dll|OptiScaler.dll/);
+    });
+  }
+}
+
+test('unavailable DLSS5 and Shade resources still allow ordinary Mod launch', async t => {
+  const h = await harness(t, { hotError: 'missing NR runtime', shadeError: 'missing Shade resources' });
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));
+  assert.ok(h.calls.some(call => call.command === 'launch_programs'));
+  assert.equal(h.dialogs.length, 0);
+  assert.equal(h.messages.filter(message => message.kind === 'warning').length, 2);
+});
+
+test('DLSS5 preparation failure removes a prior hot plan without changing saved options', async t => {
+  const options = { hotRuntime: hotPlan };
+  const h = await harness(t, options);
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+  options.hotError = 'NR Runtime was moved';
+  h.calls.length = 0;
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.ok(h.calls.some(call => call.command === 'launch_programs'));
+  assert.equal(h.dialogs.length, 0);
+  assert.doesNotMatch(await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8'), /inject_dlls\s*=/);
+  assert.equal(h.config.extraDlls, undefined);
 });
 
 test('already packed runtime passes UPX validation without repacking', async t => {

@@ -17,6 +17,9 @@ const PlayerTweaksCameraSettings = defineAsyncComponent(
 const PlayerTweaksGameplaySettings = defineAsyncComponent(
   () => import('../../plugin/components/PlayerTweaksGameplaySettings.vue'),
 )
+const Dlss5GraphicsSettings = defineAsyncComponent(
+  () => import('../../plugin/components/Dlss5GraphicsSettings.vue'),
+)
 
 type DependencyStatus = 'missing' | 'invalid' | 'ready'
 
@@ -109,6 +112,7 @@ const detailTab = ref<'features' | 'dependencies' | 'permissions'>('features')
 const searchQuery = ref('')
 const selectedId = ref('')
 const installed = ref<InstalledPlugin[]>([])
+const installedGameName = ref('')
 const loading = ref(false)
 let refreshRequestId = 0
 const logDialogOpen = ref(false)
@@ -127,6 +131,10 @@ const installedById = computed(() => {
   return byId
 })
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
+const graphicsTargetExe = ref('')
+const graphicsConfigLoading = ref(false)
+const graphicsConfigError = ref('')
+let graphicsConfigRequestId = 0
 const availableCatalog = computed(() => {
   const byId = new Map<string, CatalogEntry>()
   for (const entry of [...catalog.value, ...localCatalog.value]) {
@@ -201,7 +209,10 @@ const refreshInstalled = async () => {
     const snapshot = await invoke<InstalledPlugin[]>('plugin_registry_snapshot_for_game', {
       gameName,
     })
-    if (requestId === refreshRequestId) installed.value = snapshot
+    if (requestId === refreshRequestId) {
+      installed.value = snapshot
+      installedGameName.value = gameName
+    }
   } catch (error) {
     if (requestId === refreshRequestId) {
       console.error('Failed to load plugin registry:', error)
@@ -366,7 +377,10 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
       enabled: !plugin.enabled,
       gameExecutable,
     })
-    if (requestId === refreshRequestId) installed.value = snapshot
+    if (requestId === refreshRequestId) {
+      installed.value = snapshot
+      installedGameName.value = gameName
+    }
     ElMessage.success(plugin.enabled
       ? t('pluginMarketplace.messages.disabled')
       : t('pluginMarketplace.messages.enabled'))
@@ -406,6 +420,10 @@ const clearSelectedPluginLog = async () => {
 }
 
 const openPluginSettings = () => {
+  if (selectedEntry.value?.id === 'ssmt.dlss5.integration') {
+    detailTab.value = 'features'
+    return
+  }
   if (selectedEntry.value?.id === 'ssmt.hoyoshade.bridge') {
     void router.push({ name: 'Settings', hash: '#settings-plugins' })
   }
@@ -415,6 +433,23 @@ const dependencyStatusLabel = (status: DependencyStatus) => t(`pluginMarketplace
 const dependencyStatusClass = (status: DependencyStatus) => `is-${status}`
 
 let initialized = false
+watch(() => [selectedGameName.value, installedGameName.value, selectedPlugin.value?.manifest.id, selectedPlugin.value?.enabled], async () => {
+  const requestId = ++graphicsConfigRequestId
+  const gameName = selectedGameName.value
+  graphicsTargetExe.value = ''
+  graphicsConfigError.value = ''
+  graphicsConfigLoading.value = false
+  if (!gameName || installedGameName.value !== gameName || selectedPlugin.value?.manifest.id !== 'ssmt.dlss5.integration' || !selectedPlugin.value.enabled) return
+  graphicsConfigLoading.value = true
+  try {
+    const config = await ResourceManager.loadGameConfig(gameName)
+    if (requestId === graphicsConfigRequestId) graphicsTargetExe.value = config.targetExePath?.trim() || ''
+  } catch (error) {
+    if (requestId === graphicsConfigRequestId) graphicsConfigError.value = String(error)
+  } finally {
+    if (requestId === graphicsConfigRequestId) graphicsConfigLoading.value = false
+  }
+}, { immediate: true })
 watch(selectedGameName, () => {
   if (initialized) void refreshInstalled()
 })
@@ -528,7 +563,7 @@ onMounted(async () => {
               :disabled="(!selectedGameName && !selectedPlugin.appScoped) || loading || selectedPlugin.lifecycleStatus === 'incompatible'" :loading="loading" @click="togglePlugin(selectedPlugin)">
               {{ selectedPlugin.enabled ? t('pluginMarketplace.actions.disable') : t('pluginMarketplace.actions.enable') }}
             </el-button>
-            <el-button v-if="selectedEntry.id === 'ssmt.hoyoshade.bridge'" size="small" :icon="Setting"
+            <el-button v-if="['ssmt.hoyoshade.bridge', 'ssmt.dlss5.integration'].includes(selectedEntry.id)" size="small" :icon="Setting"
               @click="openPluginSettings">{{ t('pluginMarketplace.actions.openSettings') }}</el-button>
             <el-button size="small" :icon="Document" :loading="logLoading" @click="openPluginLog">
               {{ t('pluginMarketplace.actions.viewLog') }}
@@ -555,7 +590,17 @@ onMounted(async () => {
         <div class="detail-body">
           <div class="detail-main">
             <section v-if="detailTab === 'features'" class="detail-section">
-              <template v-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'">
+              <template v-if="selectedEntry.id === 'ssmt.dlss5.integration' && selectedPlugin">
+                <p class="section-hint">{{ t('pluginMarketplace.dlss5SettingsHint') }}</p>
+                <div v-if="!selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5SelectGame') }}</div>
+                <div v-else-if="graphicsConfigLoading || installedGameName !== selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5LoadingGame') }}</div>
+                <div v-else-if="!selectedPlugin.enabled" class="muted-copy">{{ t('pluginMarketplace.dlss5EnableFirst') }}</div>
+                <div v-else-if="graphicsConfigError" class="muted-copy">{{ graphicsConfigError }}</div>
+                <Dlss5GraphicsSettings v-else-if="graphicsTargetExe"
+                  :game-name="selectedGameName" :target-exe-path="graphicsTargetExe" />
+                <div v-else class="muted-copy">{{ t('pluginMarketplace.dlss5ConfigureTarget') }}</div>
+              </template>
+              <template v-else-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'">
                 <PlayerTweaksCameraSettings
                   :game-name="selectedGameName"
                   :enabled="selectedPlugin.enabled"

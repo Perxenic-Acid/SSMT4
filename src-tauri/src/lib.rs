@@ -156,6 +156,7 @@ pub fn run() {
             plugin::commands::prepare_hoyoshade_launch,
             plugin::gimi_hot_runtime::prepare_gimi_hot_runtime,
             plugin::gimi_hot_runtime::import_gimi_hot_runtime,
+            plugin::gimi_hot_runtime::download::download_gimi_hot_runtime,
             plugin::gimi_hot_runtime::gimi_hot_runtime_status,
             plugin::commands::prepare_plugin_host_config,
             plugin::commands::inspect_graphics_launch,

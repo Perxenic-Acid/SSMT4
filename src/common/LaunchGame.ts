@@ -623,19 +623,44 @@ export class LaunchGame {
             // Construct programs list
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
 
-            const hotRuntime = !pureDirectTarget && useRunInjector && targetExe
-                ? await invoke<HotRuntimePlan | null>("prepare_gimi_hot_runtime", { gameName, gameExecutable: targetExe })
-                : null;
+            let hotRuntime: HotRuntimePlan | null = null;
+            let skipDlss5 = false;
+            if (!pureDirectTarget && useRunInjector && targetExe) {
+                try {
+                    hotRuntime = await invoke<HotRuntimePlan | null>("prepare_gimi_hot_runtime", { gameName, gameExecutable: targetExe });
+                } catch (error) {
+                    // 可选组件未配置或校验失败只影响本次 DLSS5，不改保存的启用状态。
+                    skipDlss5 = true;
+                    console.warn("DLSS5 热注入准备失败，继续普通启动：", error);
+                    ElMessage.warning({
+                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "DLSS5", error: String(error) }),
+                        showClose: true,
+                        duration: 12000,
+                    });
+                }
+            }
             if (hotRuntime && (!launchTargetProgram || useShell)) {
                 throw new Error("原神 DLSS5 热注入需要由 SSMT 直接创建挂起的游戏进程，请关闭手动启动与官方启动器模式");
             }
-            const hoyoshade = !hotRuntime && !pureDirectTarget && launchTargetProgram && targetExe
-                ? await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
+            let hoyoshade: PluginLaunchProgram | null = null;
+            if (!hotRuntime && !pureDirectTarget && launchTargetProgram && targetExe) {
+                try {
+                    hoyoshade = await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
                       gameName,
                       gameExecutable: targetExe,
                       graphicsDecision,
-                  })
-                : null;
+                      skipDlss5,
+                    });
+                } catch (error) {
+                    if (!skipDlss5) throw error;
+                    console.warn("Shade Bridge 准备失败，继续普通启动：", error);
+                    ElMessage.warning({
+                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "Shade Bridge", error: String(error) }),
+                        showClose: true,
+                        duration: 12000,
+                    });
+                }
+            }
             // Runtime plugins are injected by Run.exe, including configured-target mode.
             const effectivePluginHostConfig = useRunInjector
                 ? await invoke<string | null>("prepare_plugin_host_config", {

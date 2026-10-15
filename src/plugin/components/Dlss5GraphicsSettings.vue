@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { open } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 const props = defineProps<{ gameName: string; targetExePath: string }>();
 const { t, locale } = useI18n();
 const label = (zh: string, en: string) => String(locale.value).startsWith('zh') ? zh : en;
 const hotRuntime = ref<{ root: string; profile: string } | null>(null);
 const hotProfile = ref('rtx50');
+const downloadProgress = ref<{ phase: string; downloadedBytes: number; totalBytes: number } | null>(null);
 const isGimi = () => /(?:^|[\\/])(?:YuanShen|GenshinImpact)\.exe$/i.test(props.targetExePath.trim());
+const openComponentSource = () => openUrl('https://github.com/CXP-2024/GIMI_reshade_dlss_integration/tree/cc4697187cb57bacc7c932b7f53f16be24af152a').catch(error => ElMessage.error(String(error)));
 
 interface Dlss5StateSnapshot {
   state: 'not_managed' | 'managed' | 'broken';
@@ -93,9 +96,13 @@ const refreshGraphicsState = async () => {
   }
 };
 
-const installSelectedDlss5Route = async () => {
+const installSelectedDlss5Route = async (offline = false) => {
+  if (graphicsActionBusy.value) return;
+  const gameName = props.gameName;
   const gameExecutable = props.targetExePath.trim();
   const route = graphicsSelectedRoute.value;
+  const profile = hotProfile.value;
+  const stillCurrent = () => props.gameName === gameName && props.targetExePath.trim() === gameExecutable;
   if (!gameExecutable || !route) return;
   if (route === 'optiscaler') {
     try { await invoke('open_dlss5_swapper', { gameName: props.gameName }); }
@@ -103,15 +110,21 @@ const installSelectedDlss5Route = async () => {
     return;
   }
   graphicsActionBusy.value = true;
+  graphicsStatusError.value = '';
+  downloadProgress.value = null;
   try {
     if (route === 'gimi-hot') {
-      const directory = await open({ directory: true, multiple: false, title: label('选择 GIMI 热注入组件包目录', 'Select the GIMI hot-injection component package') });
-      if (typeof directory !== 'string') return;
-      await invoke('import_gimi_hot_runtime', {
-        gameName: props.gameName, gameExecutable, sourceDirectory: directory, profile: hotProfile.value,
-      });
-      ElMessage.success(label('热注入组件已导入，启动时使用 SSMT Runtime', 'Hot-injection components imported; launch uses SSMT Runtime'));
-      await refreshGraphicsState();
+      if (offline) {
+        const directory = await open({ directory: true, multiple: false, title: label('选择 GIMI 热注入组件包目录', 'Select the GIMI hot-injection component package') });
+        if (typeof directory !== 'string' || !stillCurrent()) return;
+        await invoke('import_gimi_hot_runtime', { gameName, gameExecutable, sourceDirectory: directory, profile });
+      } else {
+        const onProgress = new Channel<{ phase: string; downloadedBytes: number; totalBytes: number }>();
+        onProgress.onmessage = event => { if (stillCurrent()) downloadProgress.value = event; };
+        await invoke('download_gimi_hot_runtime', { gameName, gameExecutable, profile, onProgress });
+      }
+      ElMessage.success(label(`${gameName} 热注入组件已配置`, `${gameName} hot-injection components configured`));
+      if (stillCurrent()) await refreshGraphicsState();
       return;
     }
     let antiCheatAcknowledged = false;
@@ -128,10 +141,11 @@ const installSelectedDlss5Route = async () => {
     ElMessage.success(t('gameSettingsModal.messages.graphicsInstalled', { route }));
     await refreshGraphicsState();
   } catch (error) {
-    graphicsStatusError.value = String(error);
+    if (stillCurrent()) graphicsStatusError.value = String(error);
     ElMessage.error(String(error));
   } finally {
     graphicsActionBusy.value = false;
+    downloadProgress.value = null;
   }
 };
 
@@ -175,7 +189,7 @@ onUnmounted(() => {
         <span v-if="availableGraphicsRoutes.length"> · {{ t('gameSettingsModal.fields.graphicsRoutes', { routes: availableGraphicsRoutes.join(', ') }) }}</span>
         <span v-if="graphicsStatusError" style="color:var(--el-color-danger)"> · {{ graphicsStatusError }}</span>
       </span>
-      <el-button size="small" @click="refreshGraphicsState">{{ t('gameSettingsModal.actions.refreshGraphicsState') }}</el-button>
+      <el-button size="small" :disabled="graphicsActionBusy" @click="refreshGraphicsState">{{ t('gameSettingsModal.actions.refreshGraphicsState') }}</el-button>
     </div>
     <div class="graphics-path-row graphics-controls">
       <el-select v-if="!isGimi()" v-model="graphicsApiOverride" size="small" style="width:140px" :aria-label="t('gameSettingsModal.fields.graphicsApi')">
@@ -183,22 +197,33 @@ onUnmounted(() => {
         <el-option value="d3d11" label="DirectX 11" />
         <el-option value="d3d12" label="DirectX 12" />
       </el-select>
-      <el-select v-if="isGimi()" v-model="hotProfile" size="small" style="width:140px" :aria-label="label('显卡组件 Profile', 'GPU component profile')">
+      <el-select v-if="isGimi()" v-model="hotProfile" size="small" style="width:140px" :disabled="graphicsActionBusy" :aria-label="label('显卡组件 Profile', 'GPU component profile')">
         <el-option value="rtx50" label="RTX 50" />
-        <el-option value="rtx30" label="RTX 30 / 40" />
+        <el-option value="rtx30" :label="label('RTX 30 / 40（40 为实验支持）', 'RTX 30 / 40 (40 experimental)')" />
       </el-select>
-      <el-select v-model="graphicsSelectedRoute" size="small" style="width:150px" :aria-label="t('gameSettingsModal.fields.graphicsRoute')" :disabled="!availableGraphicsRoutes.length">
+      <el-select v-model="graphicsSelectedRoute" size="small" style="width:150px" :aria-label="t('gameSettingsModal.fields.graphicsRoute')" :disabled="graphicsActionBusy || !availableGraphicsRoutes.length">
         <el-option v-for="route in availableGraphicsRoutes" :key="route" :value="route" :label="route" />
       </el-select>
-      <el-button size="small" type="primary" :loading="graphicsActionBusy" :disabled="!graphicsSelectedRoute" @click="installSelectedDlss5Route">
-        {{ graphicsSelectedRoute === 'gimi-hot' ? label('导入热注入组件', 'Import hot-injection components') : graphicsSelectedRoute === 'optiscaler' ? t('gameSettingsModal.actions.openSwapper') : dlss5State?.state === 'managed' && !dlss5State.managedHost ? t('gameSettingsModal.actions.migrateGraphicsRoute') : t('gameSettingsModal.actions.installGraphicsRoute') }}
+      <el-button size="small" type="primary" :loading="graphicsActionBusy" :disabled="!graphicsSelectedRoute" @click="installSelectedDlss5Route()">
+        {{ graphicsSelectedRoute === 'gimi-hot' ? label('自动下载并配置', 'Download and configure') : graphicsSelectedRoute === 'optiscaler' ? t('gameSettingsModal.actions.openSwapper') : dlss5State?.state === 'managed' && !dlss5State.managedHost ? t('gameSettingsModal.actions.migrateGraphicsRoute') : t('gameSettingsModal.actions.installGraphicsRoute') }}
+      </el-button>
+      <el-button v-if="graphicsSelectedRoute === 'gimi-hot'" size="small" :disabled="graphicsActionBusy" @click="installSelectedDlss5Route(true)">
+        {{ label('离线导入', 'Import offline') }}
       </el-button>
       <el-button v-if="dlss5State?.state === 'managed'" size="small" :loading="graphicsActionBusy" @click="restoreDlss5Route">
         {{ t('gameSettingsModal.actions.restoreGraphicsRoute') }}
       </el-button>
     </div>
+    <div v-if="downloadProgress" class="graphics-last-run" role="status" aria-live="polite">
+      {{ downloadProgress.phase === 'downloading' ? label('正在下载并校验', 'Downloading and verifying') : label('正在提取并校验组件', 'Extracting and verifying components') }}
+      · {{ (downloadProgress.downloadedBytes / 1048576).toFixed(1) }} / {{ (downloadProgress.totalBytes / 1048576).toFixed(1) }} MiB
+      <el-progress :percentage="Math.min(100, Math.floor(downloadProgress.downloadedBytes * 100 / Math.max(1, downloadProgress.totalBytes)))" />
+    </div>
     <div v-if="isGimi()" class="graphics-last-run">
-      {{ label('原神使用热注入，不向游戏目录放置代理 DLL。组件包需含匹配 Profile 的 nvngx_dlssnr.dll。游戏内请选择 FSR2，渲染精度至少 1.0；由 SSMT 直接启动。', 'Genshin uses hot injection without game-local proxy DLLs. The package must include nvngx_dlssnr.dll for the selected profile. Select FSR2 and render resolution 1.0 or higher in game, then launch directly through SSMT.') }}
+      {{ label('自动下载约 302 MiB，包含所选显卡的完整 NR Runtime。下载失败保留原组件，可重试或离线导入；不影响普通游戏启动。', 'Downloads about 302 MiB including the matching NR Runtime. Failure preserves existing components; retry or import offline. Normal game launch remains available.') }}
+      {{ label('来源：CXP GIMI 集成项目（GitHub）及其 Runtime 包（Google Drive）。属于第三方实验组件，校验不代表兼容性保证。', 'Source: CXP GIMI integration (GitHub) and its runtime package (Google Drive). These are experimental third-party components; verification does not guarantee compatibility.') }}
+      <el-button link type="primary" size="small" @click="openComponentSource">{{ label('查看组件来源', 'View component source') }}</el-button>
+      {{ label('原神使用热注入，不向游戏目录放置代理 DLL。游戏内请选择 FSR2，渲染精度至少 1.0；由 SSMT 直接启动。', 'Genshin uses hot injection without game-local proxy DLLs. Select FSR2 and render resolution 1.0 or higher in game, then launch directly through SSMT.') }}
       <span v-if="hotRuntime"> · {{ label('组件已配置，尚不代表 NR 生效：', 'Components configured; NR activation still requires verification: ') }}{{ hotRuntime.root }}</span>
     </div>
     <div v-if="dlss5State?.state === 'managed'" class="graphics-last-run"

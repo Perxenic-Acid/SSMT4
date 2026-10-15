@@ -16,10 +16,12 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 - 原神 DLSS5 只允许热注入/Hook；把 DLL 或链接临时放回游戏目录再恢复仍属于冷替换。启动成功、仅有 ReShade 或 Feature 1 创建均不等于 NR 生效，应核对同次日志中的 Feature 18 成功帧及 Mod 画面。
 - 热注入所需的环境必须在提权后的 Run.exe 内显式设置，再由挂起创建的目标继承；不能依赖 SSMT 环境跨 ShellExecute 提权继承。先加载 SSMT Runtime，再按计划加载 ReShade Host、Bridge、OptiScaler、额外 DLL 和可选 PluginHost，最后恢复目标线程。只为已安装且按游戏启用的插件准备资源，禁止再启动第二个 ReShade 注入器。
 - 复制组件前核对固定版本及显卡 Profile 的完整哈希，使用 SSMT 管理的副本；绝不为了复用组件包而替换其 GIMI DLL。组合配置中第三方 FX 的相对路径应基于实际资源所有者转为绝对路径，Windows canonicalize 的 verbatim 前缀不能直接与第三方正斜杠路径拼接。保留用户禁用的非必要 Add-on，插件关闭后清除它的本次贡献。
+- 插件设置应能从插件市场找到。组件由设置中的显式操作自动下载，离线导入作为补充；先核验实际可下载的完整 Profile，再固化 URL、版本、大小和哈希，不能把不含 NR 的仓库 ZIP 当成完整安装。复用资源缓存，在新自有目录准备后再切换设置，失败保留旧组件；普通启动不等待下载，可选组件失败只横幅说明本次未加载，不改变保存的插件启用状态。7z 固实压缩必须读完跳过的项，只将需要的项写入固定目标。切换游戏时丢弃旧资源状态/进度，回归入口为 `scripts/tests/test-plugin-graphics-settings.mjs`。
 - 目标必须匹配完整 EXE 文件身份。系统 `d3d11.dll` 与自定义 Runtime 同名，模块验证也必须匹配实际文件；枚举被拒绝不能报告 `runtime_detected`。
 - 外部创建的进程不归注入器所有。失败时不得结束游戏；远程线程超时后不能释放仍可能被读取的参数或结束远程线程。
 - 保留额外 DLL 顺序与已启用 PluginHost 的启动入口；没有插件时不要求插件文件。真实插件组合与测试 Host 是不同证据。
 - 运行时部署从应用资源取得 SSMT Runtime，设置页有意保留 XXMI 上游只读 Changelog，不重复撰写上游说明；阅读 Changelog 不得触发上游 DLL 安装。更新失败用非模态横幅并保留已有文件；首次安装无旧文件才停止。复制校验与 UPX 都在同目录暂存文件完成，最后一次 rename 替换，不能预先删除旧文件或随后再覆盖注入器。回归入口为 `scripts/tests/test-runtime-sync.mjs`；纯净启动跳过这些部署。
+- 先按调用链区分 GIMI Core Package 的正常更新详情、XXMI 上游只读 Changelog 与 Runtime DLL 部署；上游说明中出现“XXMI Launcher”不能证明启动了旧 DLL 更新流程，不因此删除正常 Core Package 更新入口。
 - 用独立 `SSMT_INJECTOR_REQUIRE_ADMIN=OFF` 的夹具构建验证真实进程注入，正式目标继续使用管理员 manifest。脚本面向 Windows PowerShell 5 时保留 UTF-8 BOM，并显式按 UTF-8 读取 JSONL。
 - 没有游戏时交付可执行的原生目标、日志脚本和测试步骤；区分旧客户端通过 CLI 选择新模式与新前端的集成路径。不要把夹具加载成功当作反作弊、图形初始化或 Mod 渲染已验收。
 - 主仓库与 Native 子仓库分别检查 diff；仅在用户要求提交时，先提交 Native 源码，再提交主仓库及子模块指针。不运行主应用发布包构建脚本。

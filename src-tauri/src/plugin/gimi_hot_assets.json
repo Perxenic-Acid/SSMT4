@@ -1,0 +1,171 @@
+{
+  "revision": "cc4697187cb57bacc7c932b7f53f16be24af152a",
+  "assets": [
+    {
+      "path": "components/ReShade/ReShade64.dll",
+      "source": "components/ReShade/ReShade64.dll",
+      "sha256": "084fa6b41ac9fc0cf66055e95c91c69a5bef153612dda15e18eacb21c9f52c54",
+      "size": 5587968,
+      "profile": null
+    },
+    {
+      "path": "components/Bridge/Dx11FsrBridge.dll",
+      "source": "components/Bridge/Dx11FsrBridge.dll",
+      "sha256": "1ab7fbd90b69d8f57851fdfc039aa3890aee46aea2dcb4db72c8049282140310",
+      "size": 486400,
+      "profile": null
+    },
+    {
+      "path": "components/OptiScaler/OptiScaler.dll",
+      "source": "components/OptiScaler/OptiScaler.dll",
+      "sha256": "2d86c3e6728f018f259aabc052f78e53a039a1b0d6bbbc3aeb7571bb67d61f44",
+      "size": 25871872,
+      "profile": null
+    },
+    {
+      "path": "components/OptiScaler/nvngx_dlss.dll",
+      "source": "components/OptiScaler/nvngx_dlss.dll",
+      "sha256": "c85f971ce023c9f3492fc7455f0b01a24ba18ea39636407a846902c4360b0b7e",
+      "size": 58956400,
+      "profile": null
+    },
+    {
+      "path": "components/OptiScaler/D3D12_Optiscaler/D3D12Core.dll",
+      "source": "components/OptiScaler/D3D12_Optiscaler/D3D12Core.dll",
+      "sha256": "07d286c306f8117321422affd9e6388c12d0fb4be1c7fc689d9e899324feeb24",
+      "size": 3351064,
+      "profile": null
+    },
+    {
+      "path": "components/Bridge/Dx11FsrBridge.ini",
+      "source": "components/Bridge/Dx11FsrBridge.ini",
+      "sha256": "a4a4b21c7246f0a8ccfc788ba40e3951cfb406c46c67c1726a9899f9175fec3c",
+      "size": 9112,
+      "profile": null
+    },
+    {
+      "path": "components/OptiScaler/OptiScaler.ini",
+      "source": "components/OptiScaler/OptiScaler.template.ini",
+      "sha256": "e81be412155d8a55b10ed00ef4dc5515ef9d4420e0071cbb5f3aa4f5eda474b7",
+      "size": 54459,
+      "profile": null
+    },
+    {
+      "path": "components/ReShade/LICENSE-ReShade-BSD-3-Clause.txt",
+      "source": "components/ReShade/LICENSE-ReShade-BSD-3-Clause.txt",
+      "sha256": "0cbaa03f1acf27d2b5da0874ca0767500e46e2cbdac18d18e35e78a9c62271e3",
+      "size": 1517,
+      "profile": null
+    },
+    {
+      "path": "LICENSES/Dx11FsrBridge-GPL-3.0.txt",
+      "source": "LICENSES/Dx11FsrBridge-GPL-3.0.txt",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "size": 35149,
+      "profile": null
+    },
+    {
+      "path": "LICENSES/OptiScaler-GPL-3.0.txt",
+      "source": "LICENSES/OptiScaler-GPL-3.0.txt",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "size": 35149,
+      "profile": null
+    },
+    {
+      "path": "components/OptiScaler/nvngx_dlss.license.txt",
+      "source": "components/OptiScaler/nvngx_dlss.license.txt",
+      "sha256": "d4216e39ebef5f9b50a6712ebb37beeb5379862a67733a9999c651f21592aaf0",
+      "size": 26620,
+      "profile": null
+    },
+    {
+      "path": "components/OptiScaler/Licenses/DirectX_LICENSE.txt",
+      "source": "components/OptiScaler/Licenses/DirectX_LICENSE.txt",
+      "sha256": "95598665ca96fc6a9355e57be75fe3afcdf2501bb39f3b40ac6b91d0ed85915c",
+      "size": 12989,
+      "profile": null
+    },
+    {
+      "path": "third_party/UPSTREAM-COMMITS.md",
+      "source": "third_party/UPSTREAM-COMMITS.md",
+      "sha256": "023af4bf8a6b13689f181dce363761a42b2919e881a177d7dc1a7779b4d5125e",
+      "size": 4991,
+      "profile": null
+    },
+    {
+      "path": "LICENSE",
+      "source": "LICENSE",
+      "sha256": "67399d47363302187df4baaf500d9d79a6b1b86c9136db58f59809c05ae0181b",
+      "size": 1154,
+      "profile": null
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr/nr-before-sr.zh-CN.addon64",
+      "source": "components/DLSS5/Addons/pre-nr/nr-before-sr.zh-CN.addon64",
+      "sha256": "522d979cbff335710f362b9fc2f330988673d7f8c7a1a2d93da9980ec8dda695",
+      "size": 593408,
+      "profile": "rtx50"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr/nrchain_nvngx.dll",
+      "source": "components/DLSS5/Addons/pre-nr/nrchain_nvngx.dll",
+      "sha256": "db26e486592b252072ba5734fc2b27412863b8526826225640c837d4b4d11b60",
+      "size": 49664,
+      "profile": "rtx50"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr/nr_before_sr.ini",
+      "source": "components/DLSS5/Addons/pre-nr/nr_before_sr.ini",
+      "sha256": "a7d1e9b2e91de8a43b165a153de73f9c50a3e3e1c448fe9656aee993ffd64690",
+      "size": 722,
+      "profile": "rtx50"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr/THIRD_PARTY_NOTICES.txt",
+      "source": "components/DLSS5/Addons/pre-nr/THIRD_PARTY_NOTICES.txt",
+      "sha256": "d59db7ce5f18ab42da70b43dfb7bb49a2d779d935667c2b04c0ef4e1ff553375",
+      "size": 2426,
+      "profile": "rtx50"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr-rtx30/nr-before-sr.zh-CN.addon64",
+      "source": "components/DLSS5/Addons/pre-nr-rtx30/nr-before-sr.zh-CN.addon64",
+      "sha256": "522d979cbff335710f362b9fc2f330988673d7f8c7a1a2d93da9980ec8dda695",
+      "size": 593408,
+      "profile": "rtx30"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr-rtx30/nrchain_nvngx.dll",
+      "source": "components/DLSS5/Addons/pre-nr-rtx30/nrchain_nvngx.dll",
+      "sha256": "46041a5ff91ae2fd907e310d132aabc3c4a1ecd48dace511b8672909d5d9c2fb",
+      "size": 8192,
+      "profile": "rtx30"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr-rtx30/nr_before_sr.ini",
+      "source": "components/DLSS5/Addons/pre-nr-rtx30/nr_before_sr.ini",
+      "sha256": "eab65ed896c132d5f70acb03dc49c27b0531961b4262130b25db2b46c2acb9bb",
+      "size": 670,
+      "profile": "rtx30"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr-rtx30/THIRD_PARTY_NOTICES.txt",
+      "source": "components/DLSS5/Addons/pre-nr-rtx30/THIRD_PARTY_NOTICES.txt",
+      "sha256": "3da539f776a925153ee2f6ee127b80b7bc140ad1a9c38af0203016bcbd1aa717",
+      "size": 977,
+      "profile": "rtx30"
+    },
+    {
+      "path": "components/DLSS5/Addons/pre-nr-rtx30/RTX30_PROFILE_NOTICE.txt",
+      "source": "components/DLSS5/Addons/pre-nr-rtx30/RTX30_PROFILE_NOTICE.txt",
+      "sha256": "eaf106c8438ab4f8d7cb18c20e6fca5b86663101cfb2f1e4241077fb900ee470",
+      "size": 1122,
+      "profile": "rtx30"
+    }
+  ],
+  "nrArchive": {
+    "url": "https://drive.usercontent.google.com/download?id=1d-aaUEo_ftRpY7mFCO7zUTugBKg7pW-j&export=download&confirm=t",
+    "sha256": "95a87bc1b5c981a7afa63e9e18bb68410b1697d3f20108418ac9b7a4050388cf",
+    "size": 221201410
+  }
+}
