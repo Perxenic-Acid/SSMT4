@@ -208,6 +208,140 @@ impl FrameAnalysisSingleLog {
         None
     }
 
+    /// 读取指定 drawcall 的 `IASetVertexBuffers` 块，返回「槽位索引 -> 资源hash」映射。
+    ///
+    /// 例如 `{"0": "83c82ff6", "1": "5e9d4833", "2": "4a6f7397"}`。
+    pub fn get_ia_vertex_buffer_hash_map(&self, drawcall_index: &str) -> HashMap<String, String> {
+        let mut out: HashMap<String, String> = HashMap::new();
+
+        let mut find_ia_set_vb = false;
+        for call_line in self.get_line_list_by_index(drawcall_index) {
+            if call_line.contains("IASetVertexBuffers") && !find_ia_set_vb {
+                find_ia_set_vb = true;
+                continue;
+            }
+
+            if find_ia_set_vb {
+                if !call_line.starts_with("00") {
+                    let ia_resource = ShaderResource::new(&call_line);
+                    if !ia_resource.hash.is_empty() {
+                        out.entry(ia_resource.index.clone())
+                            .or_insert(ia_resource.hash.clone());
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
+        out
+    }
+
+    /// 读取指定 drawcall 中 `SOSetTargets` 写出的资源 hash 列表。
+    ///
+    /// GPU-PreSkinning 的预蒙皮 draw 会把蒙皮结果写进这份缓冲，
+    /// 之后的渲染 draw 再把它当作顶点缓冲读回来。
+    pub fn get_so_set_targets_hash_list(&self, drawcall_index: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut in_so_set_targets = false;
+
+        for call_line in self.get_line_list_by_index(drawcall_index) {
+            if call_line.contains("SOSetTargets") {
+                in_so_set_targets = true;
+                continue;
+            }
+
+            if in_so_set_targets {
+                if !call_line.starts_with("00") {
+                    let so_resource = ShaderResource::new(&call_line);
+                    if !so_resource.hash.is_empty() {
+                        out.push(so_resource.hash.clone());
+                    }
+                } else {
+                    in_so_set_targets = false;
+                }
+            }
+        }
+
+        out
+    }
+
+    /// 通过指定渲染 draw 的 vb1(贴图坐标) hash 精确定位它对应的 PointList 索引。
+    ///
+    /// 与 `get_last_pointlist_index_by_hash` 的区别：
+    /// 同一个 IB 的多个部件会共用同一份 GPU-PreSkinning 顶点缓冲，
+    /// 只按 vb0 hash 收集候选再「取最后一个」会把别的部件的预蒙皮 draw 挑进来。
+    /// 这里额外要求候选 draw 同时满足：
+    /// 1) `IASetVertexBuffers` 的 vb1(贴图坐标) hash 与渲染 draw 一致；
+    /// 2) 它通过 `SOSetTargets` 写出了「本渲染 draw 正在读取」的缓冲
+    ///    —— 这条用来把同为渲染 draw 的候选（只读不写）剔除掉。
+    ///
+    /// 若无法匹配则回退到 `get_last_pointlist_index_by_hash` 原来的「取最后一个候选」行为。
+    pub fn get_pointlist_index_by_texcoord_hash(
+        &self,
+        trianglelist_index: &str,
+    ) -> Option<String> {
+        let render_ia = self.get_ia_vertex_buffer_hash_map(trianglelist_index);
+        let vb0_hash = render_ia.get("0").cloned().unwrap_or_default();
+        let vb1_hash = render_ia.get("1").cloned().unwrap_or_default();
+
+        if vb0_hash.is_empty() {
+            return None;
+        }
+
+        let read_hash_list: Vec<String> = render_ia.values().cloned().collect();
+
+        let trianglelist_index_number = match trianglelist_index.parse::<i32>() {
+            Ok(n) => n,
+            Err(_) => return None,
+        };
+
+        let find_str = format!("hash={}", vb0_hash);
+        let mut current_index = "";
+        let mut possible_index_list: Vec<String> = Vec::new();
+        for log_line in self.lines.iter() {
+            if log_line.starts_with("00") {
+                current_index = log_line.get(0..6).unwrap_or("");
+            }
+
+            if log_line.contains(&find_str) && !log_line.to_lowercase().contains("dst") {
+                let pointlist_index_number = match current_index.parse::<i32>() {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
+
+                if pointlist_index_number < trianglelist_index_number
+                    && !possible_index_list.contains(&current_index.to_string())
+                {
+                    possible_index_list.push(current_index.to_string());
+                }
+            }
+        }
+
+        if possible_index_list.is_empty() {
+            return None;
+        }
+
+        if !vb1_hash.is_empty() {
+            for candidate_index in possible_index_list.iter().rev() {
+                let candidate_ia = self.get_ia_vertex_buffer_hash_map(candidate_index);
+                if candidate_ia.get("1") != Some(&vb1_hash) {
+                    continue;
+                }
+                let written_hash_list = self.get_so_set_targets_hash_list(candidate_index);
+                if !written_hash_list
+                    .iter()
+                    .any(|hash| read_hash_list.contains(hash))
+                {
+                    continue;
+                }
+                return Some(candidate_index.to_string());
+            }
+        }
+
+        possible_index_list.last().cloned()
+    }
+
     /// 返回匹配给定 `draw_ib` 的 DrawCall 索引列表。
     /// 若 `only_match_first` 为 true，则找到第一个匹配即返回。
     /// TODO 这个有时候不好用，建议还是用基于FAData分析的方式

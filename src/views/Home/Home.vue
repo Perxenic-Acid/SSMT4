@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 import { AppStateManager, BGType } from '../../store/AppStateManager'
 
 import { openPath, openUrl } from '@tauri-apps/plugin-opener'
-import { exists, mkdir } from '@tauri-apps/plugin-fs'
+import { mkdir } from '@tauri-apps/plugin-fs'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useRouter } from 'vue-router'
 import { ResourceManager, type UpdateInfo, type BackgroundEntry, type GameNewsContent } from '../../store/ResourceManager'
@@ -19,11 +19,10 @@ import SettingsMenu from '../../components/SettingsMenu.vue'
 import ReleaseNotesMarkdown from '../../components/ReleaseNotesMarkdown.vue'
 import LaunchEventOverlay from '../../components/LaunchEventOverlay.vue'
 
-import { MigotoManager } from '../../store/MigotoManager'
 import { LaunchGame } from '../../common/LaunchGame';
 import { pickNewerUpdate, UPDATE_CHECK_TIMEOUT_MS } from '../../common/UpdateCheckUtils';
 
-import { GameConfig, GameConfigManager, type D3d11Mode } from '../../store/GameConfig';
+import { GameConfig, GameConfigManager } from '../../store/GameConfig';
 import { getGithubRepoByGamePreset } from '../../store/GamePreset';
 import {
   checkAndInstallAppUpdate,
@@ -36,9 +35,6 @@ const router = useRouter()
 let unlistenNativeDrop: UnlistenFn | null = null;
 const currentGameConfig = ref<GameConfig>(GameConfigManager.defaultGameConfig())
 const appVersion = ref('')
-
-const currentGamePreset = computed(() => (currentGameConfig.value.gamePreset || '').trim().toUpperCase())
-const isCurrentPresetNtemi = computed(() => currentGamePreset.value === 'NTEMI')
 
 const loadCurrentGameConfig = async () => {
   const gameName = appSettings.CurrentGameName?.trim()
@@ -79,74 +75,14 @@ const packageVersionText = computed(() => {
   return `${repoName} ${packageVersion}`
 })
 
-const currentD3d11Mode = computed<D3d11Mode>(() => ResourceManager.getEffectiveD3d11Mode(currentGameConfig.value))
-
-const getD3d11ModeLabel = (mode: D3d11Mode): string => {
-  if (mode === 'play') {
-    return 'Play'
-  }
-
-  if (mode === 'ssice-a') {
-    return 'ssice-a'
-  }
-
-  return 'Dev'
-}
-
-const CAPPED_DEV_D3D11_PRESETS = new Set(['IDENTITYV', 'NARAKA', 'NARAKAM'])
-const isCappedDevD3d11Mode = (mode: D3d11Mode, gamePreset?: string): boolean => (
-  mode === 'dev' && CAPPED_DEV_D3D11_PRESETS.has((gamePreset || '').trim().toUpperCase())
-)
-
-const getStoredDllVersion = (mode: D3d11Mode, gamePreset?: string): string => {
-  if (isCappedDevD3d11Mode(mode, gamePreset)) {
-    return (appSettings.coreVersionIdentityVDev || '').trim()
-  }
-  if (mode === 'play') {
-    return (appSettings.coreVersionPlay || '').trim()
-  }
-
-  if (mode === 'ssice-a') {
-    return (appSettings.coreVersionSsiceA || '').trim()
-  }
-
-  return (appSettings.coreVersionDev || appSettings.coreVersion || '').trim()
-}
-
-const getStoredDllReleaseDescription = (mode: D3d11Mode, gamePreset?: string): string => {
-  if (isCappedDevD3d11Mode(mode, gamePreset)) {
-    return (appSettings.coreReleaseDescriptionIdentityVDev || '').trim()
-  }
-  if (mode === 'play') {
-    return (appSettings.coreReleaseDescriptionPlay || '').trim()
-  }
-
-  if (mode === 'ssice-a') {
-    return (appSettings.coreReleaseDescriptionSsiceA || '').trim()
-  }
-
-  return (appSettings.coreReleaseDescriptionDev || appSettings.coreReleaseDescription || '').trim()
-}
-
-const coreVersionText = computed(() => {
-  const coreVersion = getStoredDllVersion(currentD3d11Mode.value, currentGameConfig.value.gamePreset)
-  if (!coreVersion) {
-    return ''
-  }
-
-  const modeLabel = getD3d11ModeLabel(currentD3d11Mode.value)
-  return `${modeLabel} Core ${coreVersion}`
-})
+const coreVersionText = 'SSMT Runtime'
 
 const packageReleaseDescriptionText = computed(() => {
   const description = (currentGameConfig.value.packageReleaseDescription || '').trim()
   return description || t('home.versionInfo.noReleaseNotes')
 })
 
-const coreReleaseDescriptionText = computed(() => {
-  const description = getStoredDllReleaseDescription(currentD3d11Mode.value, currentGameConfig.value.gamePreset)
-  return description || t('home.versionInfo.noReleaseNotes')
-})
+const coreReleaseDescriptionText = computed(() => t('gameSettingsModal.fields.ssmtRuntimeHint'))
 
 const appVersionText = computed(() => {
   const version = appVersion.value.trim()
@@ -154,16 +90,6 @@ const appVersionText = computed(() => {
     return ''
   }
   return `SSMT ${version}`
-})
-
-const currentDllModeText = computed(() => {
-  const gameName = appSettings.CurrentGameName?.trim()
-  if (!gameName || gameName === 'Default') {
-    return ''
-  }
-
-  const mode = currentD3d11Mode.value
-  return `${t('home.status.currentDllMode')}: ${getD3d11ModeLabel(mode)}`
 })
 
 const openAppReleasePage = async () => {
@@ -178,7 +104,7 @@ const handleCheckAndInstallAppUpdate = async () => {
   await checkAndInstallAppUpdate('manual')
 }
 
-const hasVersionInfo = computed(() => Boolean(packageVersionText.value || coreVersionText.value || appVersionText.value || currentDllModeText.value))
+const hasVersionInfo = computed(() => Boolean(packageVersionText.value || coreVersionText || appVersionText.value))
 
 const openHomeLink = async (url: string) => {
   if (!url) return
@@ -324,11 +250,10 @@ const isStartButtonDisabled = computed(() => (
 ));
 
 type StartGameUpdateCheckResult = {
-  dllUpdate: UpdateInfo | null;
   packageUpdate: UpdateInfo | null;
 };
 
-type LaunchPrecheckConfig = Pick<GameConfig, 'packageVersion' | 'gamePreset' | 'd3d11Mode' | 'allowDllUpdates' | 'checkDllUpdateBeforeLaunch' | 'check3DmigotoPackageUpdateBeforeLaunch' | 'includePrereleaseUpdates'>;
+type LaunchPrecheckConfig = Pick<GameConfig, 'packageVersion' | 'gamePreset' | 'check3DmigotoPackageUpdateBeforeLaunch' | 'includePrereleaseUpdates'>;
 
 const openSettingsTo3Dmigoto = () => {
   showSettings.value = true;
@@ -352,36 +277,10 @@ const check3DMigotoPackageUpdate = async () => {
   }
 };
 
-const checkD3D11DllUpdate = async () => {
-  if (isUpdatingPackage.value) return;
-  isUpdatingPackage.value = true;
-  try {
-    return await settingsModalRef.value?.runDllUpdate();
-  } finally {
-    isUpdatingPackage.value = false;
-  }
-};
-
 const precheckStartGameUpdates = async (config: LaunchPrecheckConfig): Promise<StartGameUpdateCheckResult> => {
-  const d3d11Mode = ResourceManager.getEffectiveD3d11Mode(config);
   const gamePreset = (config.gamePreset || '').trim();
-  const currentCoreVersion = getStoredDllVersion(d3d11Mode, gamePreset);
   const currentPackageVersion = (config.packageVersion || '').trim();
-  const shouldCheckDllUpdate = config.allowDllUpdates !== false && config.checkDllUpdateBeforeLaunch !== false;
   const shouldCheckPackageUpdate = config.check3DmigotoPackageUpdateBeforeLaunch !== false;
-
-  const dllPromise = shouldCheckDllUpdate && currentCoreVersion
-    ? pickNewerUpdate(
-      () => ResourceManager.getD3d11LatestRelease(
-        d3d11Mode,
-        appSettings.githubToken,
-        config.includePrereleaseUpdates ?? appSettings.includePrereleaseUpdates,
-        gamePreset,
-      ),
-      currentCoreVersion,
-      UPDATE_CHECK_TIMEOUT_MS,
-    )
-    : Promise.resolve(null);
 
   const packagePromise = shouldCheckPackageUpdate && currentPackageVersion && gamePreset && getGithubRepoByGamePreset(gamePreset)
     ? pickNewerUpdate(
@@ -395,10 +294,9 @@ const precheckStartGameUpdates = async (config: LaunchPrecheckConfig): Promise<S
     )
     : Promise.resolve(null);
 
-  const [dllUpdate, packageUpdate] = await Promise.all([dllPromise, packagePromise]);
+  const packageUpdate = await packagePromise;
 
   return {
-    dllUpdate,
     packageUpdate,
   };
 };
@@ -418,15 +316,11 @@ const installPrecheckedUpdatesBeforeLaunch = async () => {
     const latestConfig = await ResourceManager.loadGameConfig(gameName);
     currentGameConfig.value = latestConfig;
 
-    if (latestConfig.checkDllUpdateBeforeLaunch === false && latestConfig.check3DmigotoPackageUpdateBeforeLaunch === false) {
+    if (latestConfig.check3DmigotoPackageUpdateBeforeLaunch === false) {
       return;
     }
 
-    const { dllUpdate, packageUpdate } = await precheckStartGameUpdates(latestConfig);
-
-    if (dllUpdate) {
-      await settingsModalRef.value?.installDllUpdateWithInfo(dllUpdate);
-    }
+    const { packageUpdate } = await precheckStartGameUpdates(latestConfig);
 
     if (packageUpdate) {
       const updated = await settingsModalRef.value?.installPackageUpdateWithInfo(packageUpdate);
@@ -436,41 +330,6 @@ const installPrecheckedUpdatesBeforeLaunch = async () => {
     }
   } finally {
     isUpdatingPackage.value = false;
-  }
-};
-
-const switchD3d11Mode = async (mode: D3d11Mode) => {
-  const gameName = appSettings.CurrentGameName?.trim();
-  if (!gameName || gameName === 'Default') {
-    ElMessage.info(t('home.messages.selectGameConfigFirst'));
-    return;
-  }
-
-  try {
-    const requestedMode = ResourceManager.getEffectiveD3d11Mode({
-      ...currentGameConfig.value,
-      d3d11Mode: mode,
-    });
-    const sourceDllPath = await ResourceManager.resolveD3d11SourcePathByMode(requestedMode, currentGameConfig.value.gamePreset);
-    if (!(await exists(sourceDllPath))) {
-      const updated = await settingsModalRef.value?.runDllUpdate(requestedMode);
-      if (!updated) {
-        return;
-      }
-    }
-
-    const appliedMode = await MigotoManager.switchD3d11Mode(gameName, requestedMode);
-    await loadCurrentGameConfig();
-    ElMessage.success(
-      appliedMode === 'play'
-        ? t('home.messages.switchedToPlayDll')
-        : appliedMode === 'ssice-a'
-          ? t('home.messages.switchedToSsiceADll')
-          : t('home.messages.switchedToDevDll'),
-    );
-  } catch (e) {
-    console.error('Failed to switch d3d11 mode:', e);
-    ElMessage.error(t('home.messages.operationFailed', { error: String(e) }));
   }
 };
 
@@ -495,7 +354,6 @@ const launchGame = async (event?: MouseEvent) => {
       appSettings,
       check3DMigotoPackageUpdate,
       openSettingsTo3Dmigoto,
-      checkD3D11DllUpdate,
       event?.ctrlKey ?? false
     );
   } finally {
@@ -607,7 +465,6 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
         </div>
       </el-popover>
 
-      <div v-if="currentDllModeText" class="version-info-chip version-info-chip-mode">{{ currentDllModeText }}</div>
     </div>
 
     <div
@@ -687,10 +544,10 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
       </div>
 
       <!-- Settings Menu -->
-      <SettingsMenu :show-settings="showSettings" :is-current-preset-ntemi="isCurrentPresetNtemi"
-        @update:show-settings="showSettings = $event" @switch-d3d11-mode="switchD3d11Mode"
+      <SettingsMenu :show-settings="showSettings"
+        @update:show-settings="showSettings = $event"
         @open-3dmigoto-folder="open3dmigotoFolder" @open-d3dx-ini="openD3dxIni"
-        @check-d3-d11-dll-update="checkD3D11DllUpdate" @check-3-d-migoto-package-update="check3DMigotoPackageUpdate" />
+        @check-3-d-migoto-package-update="check3DMigotoPackageUpdate" />
     </div>
 
 

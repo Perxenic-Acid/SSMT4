@@ -6,19 +6,15 @@ import { diagnoseDllLocks } from '../utils/FileLocks';
 import { PathHelper } from '../helper/PathHelper';
 import { MigotoManager } from '../store/MigotoManager';
 import { AppStateManager } from '../store/AppStateManager';
-import type { D3d11Mode } from '../store/GameConfig';
 
 defineProps<{
   showSettings: boolean;
-  isCurrentPresetNtemi: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:showSettings', value: boolean): void;
-  (e: 'switchD3d11Mode', mode: D3d11Mode): void;
   (e: 'open3dmigotoFolder'): void;
   (e: 'openD3dxIni'): void;
-  (e: 'checkD3D11DllUpdate'): void;
   (e: 'check3DMigotoPackageUpdate'): void;
 }>();
 
@@ -104,8 +100,6 @@ const toggleSymlink = async (enable: boolean) => {
   }
 };
 
-// switchD3d11Mode is handled by the parent Home.vue via emit('switchD3d11Mode', mode)
-
 onUnmounted(() => { clearHideTimer() })
 
 </script>
@@ -171,31 +165,7 @@ onUnmounted(() => { clearHideTimer() })
           </div>
         </div>
 
-        <!-- D3D11 Modes submenu -->
-        <div class="submenu-wrapper d3d11-submenu">
-          <div class="menu-item divided d3d11-trigger-item">
-            <span>{{ t('home.actions.d3d11Version') }}</span>
-            <span class="submenu-arrow">›</span>
-          </div>
-          <div class="submenu-card">
-            <div v-if="!isCurrentPresetNtemi" class="submenu-item" @click="emit('switchD3d11Mode', 'dev')">
-              <span class="submenu-item-label">{{ t('home.actions.switchToDevD3d11') }}</span>
-            </div>
-            <div v-if="!isCurrentPresetNtemi" class="submenu-divider"></div>
-            <div v-if="!isCurrentPresetNtemi" class="submenu-item" @click="emit('switchD3d11Mode', 'play')">
-              <span class="submenu-item-label">{{ t('home.actions.switchToPlayD3d11') }}</span>
-            </div>
-            <div class="submenu-divider"></div>
-            <div class="submenu-item" @click="emit('switchD3d11Mode', 'ssice-a')">
-              <span class="submenu-item-label">{{ t('home.actions.switchToSsiceAD3d11') }}</span>
-            </div>
-          </div>
-        </div>
-
         <!-- Updates -->
-        <div class="menu-item divided" @click="emit('checkD3D11DllUpdate')">
-          {{ t('home.actions.checkD3d11DllUpdate') }}
-        </div>
         <div class="menu-item divided" @click="emit('check3DMigotoPackageUpdate')">
           {{ t('home.actions.check3dmigotoPackageUpdate') }}
         </div>

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { exists, mkdir, copyFile, remove } from "@tauri-apps/plugin-fs";
+import { exists, mkdir, copyFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ResourceManager } from "../store/ResourceManager";
@@ -10,6 +10,8 @@ import { i18n } from "../i18n";
 import { getEffectiveUseUpx, type GameConfig, type LaunchProgramConfig } from "../store/GameConfig";
 import type { AppSettings } from "../store/AppSettings";
 import { debugLog, debugWarn } from "../utils/debugLog";
+import { serializePlayerTweaksCamera } from '../plugin/playerTweaksCamera';
+import { serializePlayerTweaksGameplay } from '../plugin/playerTweaksGameplay';
 
 const t = i18n.global.t;
 
@@ -17,6 +19,7 @@ export interface ProgramToLaunch {
     path: string;
     args?: string;
     workDir?: string;
+    postLaunchDelayMs?: number;
     waitForProcessName?: string;
     waitTimeoutSecs?: number;
     waitOnly?: boolean;
@@ -33,11 +36,148 @@ interface PluginLaunchProgram {
     args: string;
     workDir: string;
     runAsAdministrator: boolean;
+    postLaunchDelayMs: number;
+}
+
+type GraphicsLaunchDecision =
+    | "continue_this_launch"
+    | "prepare_managed_stack"
+    | "suppress_hoyoshade_this_launch";
+
+type GraphicsCompatibilityLevel =
+    | "compatible"
+    | "warning"
+    | "requires_managed_stack"
+    | "conflict";
+
+interface GraphicsLaunchInspection {
+    hoyoshadeRequested: boolean;
+    dlss5Requested: boolean;
+    hostRequested: boolean;
+    resolution: {
+        level: GraphicsCompatibilityLevel;
+        issues: Array<{ code: string; message: string }>;
+    };
+}
+
+interface ManagedStackStatus {
+    route: string;
+    availableRoutes: string[];
+    swapperOwner: string;
 }
 
 type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
 
 export class LaunchGame {
+    private static async preflightGraphicsLaunch(
+        gameName: string,
+        targetExe: string,
+    ): Promise<GraphicsLaunchDecision | null> {
+        const inspection = await invoke<GraphicsLaunchInspection>(
+            "inspect_graphics_launch",
+            { gameName, gameExecutable: targetExe },
+        );
+        const { level, issues } = inspection.resolution;
+        if (!inspection.hostRequested || level === "compatible") {
+            return "continue_this_launch";
+        }
+
+        const message = issues[0]?.message || t("launchGame.messages.graphicsConflict");
+        if (level === "requires_managed_stack") {
+            let status: ManagedStackStatus;
+            try {
+                status = await invoke<ManagedStackStatus>("inspect_managed_graphics_stack", {
+                    gameName,
+                    gameExecutable: targetExe,
+                });
+            } catch (error) {
+                if (inspection.dlss5Requested) {
+                    ElMessage.error(`${message}\n${String(error)}`);
+                    return null;
+                }
+                try {
+                    await ElMessageBox.confirm(
+                        `${message}\n\n${String(error)}`,
+                        t("launchGame.messages.graphicsStackTitle"),
+                        {
+                            confirmButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                            cancelButtonText: t("launchGame.common.cancel"),
+                            type: "warning",
+                        },
+                    );
+                    return "suppress_hoyoshade_this_launch";
+                } catch {
+                    return null;
+                }
+            }
+            if (inspection.dlss5Requested) {
+                try {
+                    await ElMessageBox.confirm(
+                        t("launchGame.messages.graphicsManagedReady", {
+                            route: status.route,
+                            routes: status.availableRoutes.join(", "),
+                            owner: status.swapperOwner,
+                        }),
+                        t("launchGame.messages.graphicsStackTitle"),
+                        {
+                            confirmButtonText: t("launchGame.messages.graphicsPrepareManaged"),
+                            cancelButtonText: t("launchGame.common.cancel"),
+                            type: "warning",
+                        },
+                    );
+                    return "prepare_managed_stack";
+                } catch {
+                    return null;
+                }
+            }
+            try {
+                await ElMessageBox.confirm(
+                    t("launchGame.messages.graphicsManagedReady", {
+                        route: status.route,
+                        routes: status.availableRoutes.join(", "),
+                        owner: status.swapperOwner,
+                    }),
+                    t("launchGame.messages.graphicsStackTitle"),
+                    {
+                        confirmButtonText: t("launchGame.messages.graphicsPrepareManaged"),
+                        cancelButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                        distinguishCancelAndClose: true,
+                        showClose: true,
+                        type: "warning",
+                    },
+                );
+                return "prepare_managed_stack";
+            } catch (action) {
+                return action === "cancel" ? "suppress_hoyoshade_this_launch" : null;
+            }
+        }
+        if (level === "warning") {
+            try {
+                await ElMessageBox.confirm(message, t("launchGame.messages.graphicsStackTitle"), {
+                    confirmButtonText: t("launchGame.messages.graphicsContinue"),
+                    cancelButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                    distinguishCancelAndClose: true,
+                    showClose: true,
+                    type: "warning",
+                });
+                return "continue_this_launch";
+            } catch (action) {
+                return action === "cancel" ? "suppress_hoyoshade_this_launch" : null;
+            }
+        }
+
+        try {
+            await ElMessageBox.confirm(message, t("launchGame.messages.graphicsStackTitle"), {
+                confirmButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
+                cancelButtonText: t("launchGame.common.cancel"),
+                type: "warning",
+            });
+            return "suppress_hoyoshade_this_launch";
+        } catch {
+            return null;
+        }
+    }
+
     private static formatProgramSummary(program: ProgramToLaunch): string {
         return [
             `path=${program.path || "<wait-only>"}`,
@@ -134,21 +274,6 @@ export class LaunchGame {
         return `${errorText}\n\n${t("launchGame.messages.d3d11BusyHint")}`;
     }
 
-    private static notifyD3d11CopyFailure(error: unknown, label: string): void {
-        const message = t("launchGame.messages.d3d11CopySkippedContinue", {
-            mode: label,
-            error: String(error),
-        });
-
-        ElMessage({
-            message,
-            type: "error",
-            duration: 8000,
-            showClose: true,
-            offset: 48,
-        });
-    }
-
     private static async buildConfiguredPrograms(
         programsConfig: LaunchProgramConfig[] | undefined,
         phase: LaunchProgramPhase,
@@ -193,49 +318,14 @@ export class LaunchGame {
         return programs;
     }
 
-    private static async ensureXXMILibsReady(
-        gameName: string,
-        onNeedsDllUpdate?: () => Promise<boolean | void>,
-    ): Promise<boolean> {
+    private static async ensureSSMTRuntimeReady(gameName: string): Promise<boolean> {
         const missingFiles =
-            await ResourceManager.getMissingXXMILibsFiles(gameName);
+            await ResourceManager.getMissingSSMTRuntimeFiles(gameName);
         if (missingFiles.length === 0) {
             return true;
         }
-
-        try {
-            await ElMessageBox.confirm(
-                t("launchGame.messages.missingDllPackageConfirmContent", {
-                    files: missingFiles.join(", "),
-                }),
-                t("launchGame.messages.missingDllPackageTitle"),
-                {
-                    confirmButtonText: t("launchGame.common.checkUpdate"),
-                    cancelButtonText: t("launchGame.common.cancel"),
-                    type: "warning",
-                },
-            );
-        } catch {
-            return false;
-        }
-
-        const updateHandled = await onNeedsDllUpdate?.();
-        if (updateHandled === false) {
-            return false;
-        }
-
-        const missingAfterUpdate =
-            await ResourceManager.getMissingXXMILibsFiles(gameName);
-        if (missingAfterUpdate.length > 0) {
-            ElMessage.error(
-                t("launchGame.messages.missingDllPackageStillMissing", {
-                    files: missingAfterUpdate.join(", "),
-                }),
-            );
-            return false;
-        }
-
-        return true;
+        ElMessage.error(`SSMT Runtime 缺少文件：${missingFiles.join(", ")}`);
+        return false;
     }
 
     static async resolveMigotoDirForLaunch(
@@ -254,10 +344,12 @@ export class LaunchGame {
         pureMode: boolean,
         onNeedsConfigureProcessPath?: () => void,
         onNeedsPackageUpdate?: () => Promise<boolean | void> | boolean | void,
+        onGraphicsPreflight?: (targetExe: string) => Promise<GraphicsLaunchDecision | null>,
     ): Promise<{
         migotoDir: string;
         config: GameConfig;
         targetExe: string;
+        graphicsDecision: GraphicsLaunchDecision;
     } | null> {
         const config = await ResourceManager.loadGameConfig(gameName);
         const migotoCfg = config ?? ({} as GameConfig);
@@ -265,9 +357,11 @@ export class LaunchGame {
         let targetExe = (migotoCfg.targetExePath || "").trim();
         const isConfiguredTargetValid =
             targetExe.length > 0 && (await exists(targetExe));
+        const useShell = launchTargetProgram && !!migotoCfg.useShell;
         const configuredLauncher = (migotoCfg.launcherExePath || "").trim();
-        const isConfiguredLauncherValid =
-            configuredLauncher.length > 0 && (await exists(configuredLauncher));
+        const isConfiguredLauncherValid = !useShell || (
+            configuredLauncher.length > 0 && (await exists(configuredLauncher))
+        );
         const gamePreset = (migotoCfg.gamePreset || "").trim().toUpperCase();
         const supportsGameDiscovery = [
             "GIMI",
@@ -278,36 +372,6 @@ export class LaunchGame {
         ].includes(gamePreset);
 
         let configChanged = false;
-        let configuredMigotoDir = (migotoCfg.installDir || "").trim();
-        const configuredD3dxIni = configuredMigotoDir
-            ? await join(configuredMigotoDir, "d3dx.ini")
-            : "";
-        const isMigotoDirValid =
-            configuredMigotoDir.length > 0 &&
-            (await exists(configuredMigotoDir)) &&
-            (await exists(configuredD3dxIni));
-        if (!isMigotoDirValid) {
-            const cacheRoot = await GlobalConfig.SSMT4CustomCacheFolder();
-            configuredMigotoDir = await join(cacheRoot, "3Dmigoto", gameName);
-            migotoCfg.installDir = configuredMigotoDir;
-            configChanged = true;
-            await ResourceManager.saveGameConfig(gameName, migotoCfg);
-            configChanged = false;
-
-            ElMessage.info(
-                t("launchGame.messages.migotoDirectoryRestoring", {
-                    path: configuredMigotoDir,
-                }),
-            );
-            const updateHandled = await onNeedsPackageUpdate?.();
-            const restoredD3dxIni = await join(configuredMigotoDir, "d3dx.ini");
-            if (updateHandled === false || !(await exists(restoredD3dxIni))) {
-                ElMessage.warning(
-                    t("launchGame.messages.migotoDirectoryRestoreFailed"),
-                );
-                return null;
-            }
-        }
 
         if (
             launchTargetProgram &&
@@ -346,10 +410,6 @@ export class LaunchGame {
             }
         }
 
-        if (configChanged) {
-            await ResourceManager.saveGameConfig(gameName, migotoCfg);
-        }
-
         if (launchTargetProgram && !targetExe) {
             ElMessage.warning(
                 t("launchGame.messages.targetProcessPathNotConfigured"),
@@ -361,6 +421,51 @@ export class LaunchGame {
         if (launchTargetProgram && !(await exists(targetExe))) {
             ElMessage.error(t("launchGame.messages.targetProcessFileNotFound"));
             return null;
+        }
+
+        const pureDirectLaunch = pureMode && launchTargetProgram;
+        const graphicsDecision = !pureDirectLaunch && launchTargetProgram && onGraphicsPreflight
+            ? await onGraphicsPreflight(targetExe)
+            : "continue_this_launch";
+        if (!graphicsDecision) return null;
+
+        if (configChanged) {
+            await ResourceManager.saveGameConfig(gameName, migotoCfg);
+        }
+
+        // A pure launch must not depend on, prepare, or mutate the 3DMigoto
+        // runtime. It is intentionally just the configured game executable.
+        if (pureDirectLaunch) {
+            return { migotoDir: "", config: migotoCfg, targetExe, graphicsDecision };
+        }
+
+        let configuredMigotoDir = (migotoCfg.installDir || "").trim();
+        const configuredD3dxIni = configuredMigotoDir
+            ? await join(configuredMigotoDir, "d3dx.ini")
+            : "";
+        const isMigotoDirValid =
+            configuredMigotoDir.length > 0 &&
+            (await exists(configuredMigotoDir)) &&
+            (await exists(configuredD3dxIni));
+        if (!isMigotoDirValid) {
+            const cacheRoot = await GlobalConfig.SSMT4CustomCacheFolder();
+            configuredMigotoDir = await join(cacheRoot, "3Dmigoto", gameName);
+            migotoCfg.installDir = configuredMigotoDir;
+            await ResourceManager.saveGameConfig(gameName, migotoCfg);
+
+            ElMessage.info(
+                t("launchGame.messages.migotoDirectoryRestoring", {
+                    path: configuredMigotoDir,
+                }),
+            );
+            const updateHandled = await onNeedsPackageUpdate?.();
+            const restoredD3dxIni = await join(configuredMigotoDir, "d3dx.ini");
+            if (updateHandled === false || !(await exists(restoredD3dxIni))) {
+                ElMessage.warning(
+                    t("launchGame.messages.migotoDirectoryRestoreFailed"),
+                );
+                return null;
+            }
         }
 
         if (
@@ -389,7 +494,7 @@ export class LaunchGame {
             return null;
         }
 
-        // Initialize Migoto environment and apply the selected d3d11 mode before launch.
+        // 启动前将随应用提供的 SSMT Runtime 部署到 Migoto 目录。
         // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
         const useUpx = getEffectiveUseUpx(migotoCfg);
         await this.prepareGameEnvironment(
@@ -407,7 +512,7 @@ export class LaunchGame {
             }
         }
 
-        return { migotoDir, config: migotoCfg, targetExe };
+        return { migotoDir, config: migotoCfg, targetExe, graphicsDecision };
     }
 
     static async launch(
@@ -415,17 +520,20 @@ export class LaunchGame {
         appSettings: AppSettings,
         onNeedsUpdate: () => Promise<boolean | void> | boolean | void,
         onNeedsConfigureProcessPath?: () => void,
-        onNeedsDllUpdate?: () => Promise<boolean | void>,
         ctrlPressed = false,
     ): Promise<void> {
+        let managedStagedTarget: string | null = null;
+        let launchSubmitted = false;
         try {
             const pureMode =
                 appSettings.gameLaunchMode === "always-pure" ||
                 (appSettings.gameLaunchMode === "ctrl-pure" && ctrlPressed);
-            const libsReady = await this.ensureXXMILibsReady(
-                gameName,
-                onNeedsDllUpdate,
-            );
+            const pureDirectLaunch =
+                pureMode &&
+                (await ResourceManager.loadGameConfig(gameName))?.launchTargetProgram !== false;
+            const libsReady = pureDirectLaunch
+                ? true
+                : await this.ensureSSMTRuntimeReady(gameName);
             if (!libsReady) return;
 
             const preflight = await this.prepareLaunch(
@@ -434,15 +542,20 @@ export class LaunchGame {
                 pureMode,
                 onNeedsConfigureProcessPath,
                 onNeedsUpdate,
+                (targetExe) => this.preflightGraphicsLaunch(gameName, targetExe),
             );
             if (!preflight) return;
 
-            const { migotoDir, config, targetExe } = preflight;
-            await this.ensureSSMTRuntimeFiles(migotoDir, config.gamePreset);
+            const { migotoDir, config, targetExe, graphicsDecision } = preflight;
             const launchTargetProgram = config.launchTargetProgram !== false;
+            const pureDirectTarget = pureMode && launchTargetProgram;
+            if (!pureDirectTarget) {
+                await this.ensureSSMTRuntimeFiles(migotoDir, gameName, config.gamePreset);
+            }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
             const useShell = launchTargetProgram && (config.useShell || false);
+            const useRunInjector = !pureMode || !launchTargetProgram;
 
             if (launchTargetProgram && useShell && !launcherExePath) {
                 ElMessage.warning(
@@ -453,6 +566,7 @@ export class LaunchGame {
 
             if (
                 launchTargetProgram &&
+                useShell &&
                 launcherExePath &&
                 !(await exists(launcherExePath))
             ) {
@@ -465,7 +579,7 @@ export class LaunchGame {
             }
 
             // Check 3Dmigoto Integrity
-            const safe = await MigotoManager.check3DmigotoIntegrity(gameName);
+            const safe = pureDirectTarget || await MigotoManager.check3DmigotoIntegrity(gameName);
             if (!safe) {
                 try {
                     await ElMessageBox.confirm(
@@ -488,7 +602,9 @@ export class LaunchGame {
                 return;
             }
 
-            await MigotoManager.patchD3dxForLaunch(gameName);
+            if (!pureDirectTarget) {
+                await MigotoManager.patchD3dxForLaunch(gameName);
+            }
 
             const preLaunchPrograms = launchTargetProgram
                 ? await this.buildConfiguredPrograms(
@@ -509,11 +625,26 @@ export class LaunchGame {
             // Construct programs list
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
 
-            const hoyoshade = launchTargetProgram && targetExe
+            const hoyoshade = !pureDirectTarget && launchTargetProgram && targetExe
                 ? await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
+                      gameName,
                       gameExecutable: targetExe,
+                      graphicsDecision,
                   })
                 : null;
+            // Runtime plugins are injected by Run.exe, including configured-target mode.
+            const effectivePluginHostConfig = useRunInjector
+                ? await invoke<string | null>("prepare_plugin_host_config", {
+                      gameName,
+                      runtimeDirectory: migotoDir,
+                  })
+                : null;
+            if (effectivePluginHostConfig) {
+                await this.ensureSSMTPluginHostFile(migotoDir);
+            }
+            if (hoyoshade && graphicsDecision === "prepare_managed_stack") {
+                managedStagedTarget = targetExe;
+            }
 
             if (hoyoshade) {
                 // HoYoShade's injector waits for the target process itself, so it
@@ -523,14 +654,29 @@ export class LaunchGame {
                     args: hoyoshade.args,
                     workDir: hoyoshade.workDir,
                     runAsAdministrator: hoyoshade.runAsAdministrator,
+                    postLaunchDelayMs: hoyoshade.postLaunchDelayMs,
                 });
             }
 
-            if (!pureMode || !launchTargetProgram) {
+            // 仅在本次启动确实包含 HoYoShade 时覆盖用户的原始延迟配置。
+            if (hoyoshade) {
+                await MigotoManager.patchD3dxForLaunch(gameName, {
+                    dllInitializationDelay: 150,
+                });
+            }
+
+            if (useRunInjector) {
                 // 1. Default flow launches Run.exe first.
                 programs.push({
                     path: await join(migotoDir, "Run.exe"),
                     workDir: migotoDir,
+                    args: effectivePluginHostConfig
+                        ? `--plugin-host-config "${effectivePluginHostConfig.replace(/"/g, '\\"')}"`
+                        : undefined,
+                    // Run.exe 带有 requireAdministrator manifest。SSMT 未提权时，
+                    // Start-Process 必须显式使用 RunAs，否则 Windows 会返回
+                    // ERROR_ELEVATION_REQUIRED，HoYoShade 也会一直等待不存在的进程。
+                    runAsAdministrator: true,
                     waitForProcessName: useShell ? "Run.exe" : undefined,
                     waitTimeoutSecs: useShell ? 30 : undefined,
                 });
@@ -561,8 +707,7 @@ export class LaunchGame {
             const shouldWaitForTargetProcess =
                 launchTargetProgram &&
                 !!targetProcessName &&
-                ((!pureMode && !useShell && !launcherExePath) ||
-                    postLaunchPrograms.length > 0);
+                ((!pureMode && !useShell) || postLaunchPrograms.length > 0);
 
             if (shouldWaitForTargetProcess) {
                 programs.push({
@@ -582,6 +727,7 @@ export class LaunchGame {
 
             // Execute programs sequentially via Rust tool method
             await invoke("launch_programs", { programs });
+            launchSubmitted = true;
             ElMessage.success(t("launchGame.messages.launchFlowExecuted"));
         } catch (e: unknown) {
             const errorText = String(e);
@@ -596,11 +742,22 @@ export class LaunchGame {
                     confirmButtonText: t("launchGame.common.confirm"),
                 },
             );
+        } finally {
+            if (managedStagedTarget && !launchSubmitted) {
+                try {
+                    await invoke("restore_managed_graphics_stack", {
+                        gameExecutable: managedStagedTarget,
+                    });
+                } catch (error) {
+                    ElMessage.error(t("launchGame.messages.graphicsRestoreFailed", { error: String(error) }));
+                }
+            }
         }
     }
 
     private static async ensureSSMTRuntimeFiles(
         migotoDir: string,
+        gameName: string,
         gamePreset?: string,
     ): Promise<void> {
         const resourcesDir = await GlobalConfig.SSMTResourcesFolder();
@@ -615,30 +772,30 @@ export class LaunchGame {
 
         await copyFile(runSourcePath, runTargetPath);
 
-        // SSMT-Player-Tweaks.dll is only meaningful for GIMI (Genshin).
-        // For other presets do not require/copy it; if a stale copy exists in
-        // this game directory, remove it so Run.exe does not inject it.
+        // Run.exe 会注入同目录中的 Player Tweaks。只在本游戏明确启用时部署，
+        // 否则移除旧副本，避免插件市场的禁用状态与实际注入不一致。
         const isGimi = (gamePreset || "").trim().toUpperCase() === "GIMI";
         const dllSourcePath = await join(
             resourcesDir,
             "SSMT-Player-Tweaks.dll",
         );
         const dllTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.dll");
+        const configTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.ini");
 
         const removeStaleDll = async () => {
-            try {
-                if (await exists(dllTargetPath)) {
-                    await remove(dllTargetPath);
-                }
-            } catch (e) {
-                console.warn(
-                    "Failed to remove stale SSMT-Player-Tweaks.dll:",
-                    e,
-                );
+            if (await exists(dllTargetPath)) {
+                await remove(dllTargetPath);
             }
         };
 
-        if (!isGimi) {
+        const playerTweaksEnabled = isGimi && await invoke<boolean>(
+            "bundled_player_tweaks_enabled_for_game",
+            { gameName, gamePreset: gamePreset || "" },
+        ).catch((error) => {
+            console.warn("Failed to read bundled plugin selection:", error);
+            return false;
+        });
+        if (!playerTweaksEnabled) {
             await removeStaleDll();
             return;
         }
@@ -651,7 +808,33 @@ export class LaunchGame {
             return;
         }
 
-        await copyFile(dllSourcePath, dllTargetPath);
+        try {
+            const gameConfig = await ResourceManager.loadGameConfig(gameName);
+            await writeTextFile(configTargetPath,
+                serializePlayerTweaksCamera(gameConfig?.playerTweaksCamera) +
+                serializePlayerTweaksGameplay(gameConfig?.playerTweaksGameplay));
+        } catch (error) {
+            await removeStaleDll();
+            console.warn('Failed to prepare Player Tweaks config:', error);
+            ElMessage.warning(`Player Tweaks 配置写入失败，已跳过本次注入：${String(error)}`);
+            return;
+        }
+        try {
+            await copyFile(dllSourcePath, dllTargetPath);
+        } catch (error) {
+            await removeStaleDll();
+            console.warn('Failed to deploy Player Tweaks:', error);
+            ElMessage.warning(`Player Tweaks 部署失败，已跳过本次注入：${String(error)}`);
+        }
+    }
+
+    private static async ensureSSMTPluginHostFile(migotoDir: string): Promise<void> {
+        const resourcesDir = await GlobalConfig.SSMTResourcesFolder();
+        const source = await join(resourcesDir, "SSMT-PluginHost.dll");
+        if (!(await exists(source))) {
+            throw new Error(`Missing optional runtime plugin host: ${source}`);
+        }
+        await copyFile(source, await join(migotoDir, "SSMT-PluginHost.dll"));
     }
 
     private static async prepareGameEnvironment(
@@ -681,17 +864,7 @@ export class LaunchGame {
                             { file, error: String(e) },
                         );
                         console.error(msg);
-                        ElMessageBox.alert(
-                            msg,
-                            t("launchGame.messages.copyFailedTitle"),
-                            {
-                                type: "error",
-                                confirmButtonText: t(
-                                    "launchGame.common.confirm",
-                                ),
-                            },
-                        );
-                        return;
+                        throw new Error(msg);
                     }
                 }
             }
@@ -726,42 +899,15 @@ export class LaunchGame {
                             { file: "Run.exe", error: String(e) },
                         );
                         console.error(msg);
-                        ElMessageBox.alert(
-                            msg,
-                            t("launchGame.messages.copyFailedTitle"),
-                            {
-                                type: "error",
-                                confirmButtonText: t(
-                                    "launchGame.common.confirm",
-                                ),
-                            },
-                        );
-                        return;
+                        throw new Error(msg);
                     }
                 }
             }
 
-            await MigotoManager.applyD3d11ModeToMigotoDir(
+            await MigotoManager.applySSMTRuntimeToMigotoDir(
                 gameName,
                 migotoPath,
                 config,
-                {
-                    continueOnCopyFailure: true,
-                    onCopyFailure: (error, context) => {
-                        debugWarn(
-                            "GameLauncher",
-                            "Failed to refresh migoto DLL before launch. Continuing launch flow.",
-                            {
-                                mode: context.mode,
-                                sourcePath: context.sourcePath,
-                                destPath: context.destPath,
-                                dllLabel: context.dllLabel,
-                                error,
-                            },
-                        );
-                        this.notifyD3d11CopyFailure(error, context.dllLabel);
-                    },
-                },
             );
 
             if (useUpx) {

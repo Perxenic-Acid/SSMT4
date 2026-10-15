@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bodyGrad" x1="0.72" y1="0.15" x2="0.28" y2="0.92">
+      <stop offset="0" stop-color="#83c9ff"/>
+      <stop offset="0.37" stop-color="#9fcaff"/>
+      <stop offset="0.62" stop-color="#d6b9e2"/>
+      <stop offset="0.83" stop-color="#ef9fc5"/>
+      <stop offset="1" stop-color="#f59fbe"/>
+    </linearGradient>
+    <linearGradient id="rimGrad" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#dcefff" stop-opacity="0.9"/>
+      <stop offset="0.45" stop-color="#bcdcff" stop-opacity="0.48"/>
+      <stop offset="1" stop-color="#ffbad2" stop-opacity="0.6"/>
+    </linearGradient>
+    <radialGradient id="centerGlow" cx="0.45" cy="0.35" r="0.72">
+      <stop offset="0" stop-color="#f7fbff" stop-opacity="0.95"/>
+      <stop offset="0.45" stop-color="#e9edf8" stop-opacity="0.76"/>
+      <stop offset="1" stop-color="#cad0ec" stop-opacity="0.15"/>
+    </radialGradient>
+    <linearGradient id="bottomGlow" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#ffd3e3" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffd0de" stop-opacity="0.95"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.4"/>
+    </filter>
+    <filter id="soft2" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.4"/>
+    </filter>
+    <clipPath id="shapeClip">
+      <path d="M19 48 C15 53 14.5 61 16.5 68 C19 76 25 79 26.5 88 C28.2 98 39 105 51 108.4 C61 111.3 75 111.8 85.7 108.5 C96 105.4 102.3 98.3 105 89 C111.4 84.3 115.6 77.8 115.5 68 C115.5 60.8 111.3 54 104.7 51 C104.2 42.7 101.2 35.7 94 31 C86.4 26.2 77.4 24.4 67.1 29.8 C61.8 26.8 57.3 25.2 51.2 25.6 C41.4 26.1 34.7 31.9 31 40.7 C25.7 41.1 21.7 43.3 19 48 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- main silhouette -->
+  <path d="M19 48 C15 53 14.5 61 16.5 68 C19 76 25 79 26.5 88 C28.2 98 39 105 51 108.4 C61 111.3 75 111.8 85.7 108.5 C96 105.4 102.3 98.3 105 89 C111.4 84.3 115.6 77.8 115.5 68 C115.5 60.8 111.3 54 104.7 51 C104.2 42.7 101.2 35.7 94 31 C86.4 26.2 77.4 24.4 67.1 29.8 C61.8 26.8 57.3 25.2 51.2 25.6 C41.4 26.1 34.7 31.9 31 40.7 C25.7 41.1 21.7 43.3 19 48 Z" fill="url(#bodyGrad)"/>
+
+  <!-- soft inner rim -->
+  <path d="M21.2 49.7 C17.8 55.1 17.9 62.2 19.6 67.8 C22.3 75.7 28.6 79.3 29.4 88.2 C30.5 97.3 40.1 102.9 51.9 106.1 C63 109.2 75.1 108.8 84.4 106.2 C94.3 103.4 99.6 96.3 102.3 87 C108.7 82.9 112.4 76.9 112.7 68.4 C112.9 61.8 108.8 56.3 102.2 53.6 C101.7 45.7 99.3 38.9 92.4 34.4 C85.8 30.3 77.6 29.1 67.3 33 C62.5 29.9 57.3 28.9 51.7 29.4 C42.6 30.2 37.4 35.1 34.3 43.4 C29.1 43.8 24.6 45.7 21.2 49.7 Z" fill="none" stroke="url(#rimGrad)" stroke-width="4" opacity="0.75"/>
+
+  <g clip-path="url(#shapeClip)">
+    <!-- lower pink fill and shine -->
+    <ellipse cx="61" cy="91" rx="44" ry="29" fill="#ef96bf" opacity="0.45" filter="url(#soft2)"/>
+    <ellipse cx="64" cy="104" rx="38" ry="13" fill="url(#bottomGlow)" opacity="0.9" filter="url(#soft)"/>
+
+    <!-- upper blue pool -->
+    <ellipse cx="72" cy="53" rx="36" ry="26" fill="#82c5ff" opacity="0.34" filter="url(#soft2)"/>
+    <ellipse cx="78" cy="42" rx="28" ry="15" fill="#84c8ff" opacity="0.46" filter="url(#soft2)"/>
+
+    <!-- left pink lobe -->
+    <ellipse cx="31" cy="61" rx="13" ry="18" fill="#f2a1c6" opacity="0.86" filter="url(#soft)"/>
+    <ellipse cx="29" cy="54" rx="6" ry="9" fill="#ffc2d8" opacity="0.75" filter="url(#soft)"/>
+
+    <!-- center pad -->
+    <ellipse cx="61.5" cy="74" rx="17.5" ry="15" fill="url(#centerGlow)"/>
+    <ellipse cx="58" cy="70" rx="9.5" ry="8" fill="#f4f8ff" opacity="0.42" filter="url(#soft)"/>
+
+    <!-- toe pads -->
+    <circle cx="51" cy="45" r="7" fill="#c7e5ff" opacity="0.78"/>
+    <circle cx="80.5" cy="45.5" r="6.7" fill="#bfe2ff" opacity="0.74"/>
+    <circle cx="95" cy="64" r="7.5" fill="#c2e2ff" opacity="0.68"/>
+
+    <!-- toe highlights -->
+    <circle cx="48.5" cy="42.5" r="3.3" fill="#e8f6ff" opacity="0.33"/>
+    <circle cx="78.3" cy="43.3" r="2.8" fill="#e9f8ff" opacity="0.32"/>
+    <circle cx="92.6" cy="61.5" r="3.2" fill="#edf8ff" opacity="0.28"/>
+
+    <!-- glossy mist -->
+    <ellipse cx="66" cy="58" rx="40" ry="27" fill="#ffffff" opacity="0.08" filter="url(#soft2)"/>
+  </g>
+
+  <!-- outer glassy highlight -->
+  <path d="M21 49 C18.2 54 17.4 60.7 19.1 66.1" fill="none" stroke="#ffd8e8" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <path d="M39 32.5 C45 27.7 54.2 27.5 61.9 30.7" fill="none" stroke="#dff1ff" stroke-width="2.8" stroke-linecap="round" opacity="0.62"/>
+  <path d="M69 30.5 C78 26.3 89 28.8 95 34.4" fill="none" stroke="#dceeff" stroke-width="2.8" stroke-linecap="round" opacity="0.56"/>
+  <path d="M28 93 C33 103 47 108 61 109" fill="none" stroke="#ffcada" stroke-width="2.4" stroke-linecap="round" opacity="0.65"/>
+</svg>

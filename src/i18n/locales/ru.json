@@ -76,7 +76,7 @@
     "tabs": {
       "basic": "Основные настройки",
       "migoto": "Настройки 3DMigoto",
-      "dllUpdate": "Обновления d3d11.dll",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "Обновления 3Dmigoto Package",
       "other": "Другие настройки"
     },
@@ -124,8 +124,6 @@
       "autoExitSeconds": "Автовыход через (с)",
       "extraInjectedDll": "Дополнительно внедряемая DLL",
       "options": "Другие параметры",
-      "dllSource": "Источник d3d11.dll",
-      "dllSourceHint": "Dev использует SpectrumQT/XXMI-Libs-Package, Play — Doodle, а ssice-a — ssice-a/XXMI-Libs-Package. После первой установки DLL кэшируется локально; при последующих переключениях режима заменяется только локальный кэшированный файл. Для предустановки NTEMI всегда принудительно используется ssice-a.",
       "currentInstalledDllVersion": "Текущая установленная версия",
       "noDllVersionInstalled": "Установленная версия не записана",
       "availableDllVersions": "Доступные версии",
@@ -157,11 +155,6 @@
       "wwmiDisableWoundedFxHint": "Перед запуском устанавливает SkinDamageMode в Off, чтобы избежать проблем с текстурами после получения урона."
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev (XXMI-Libs-Package)",
-        "play": "Play (Doodle)",
-        "ssiceA": "ssice-a (XXMI-Libs-Package)"
-      },
       "backgroundUpdateMode": {
         "manual": "Вручную",
         "auto": "Автоматически"
@@ -452,7 +445,6 @@
       "altF": "Включить вызов окна по Alt+F",
       "textureMarkStyle": "Стиль маркировки текстур",
       "previewLighting": "Упрощённый рендеринг 3D-предпросмотра",
-      "d3d11Source": "Источник d3d11.dll",
       "launchMode": "Предпочтительный способ запуска",
       "huntingMode": "Отображение режима охоты",
       "showWarnings": "Показывать предупреждения слева сверху",

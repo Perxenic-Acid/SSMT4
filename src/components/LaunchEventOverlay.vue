@@ -22,6 +22,7 @@ const progressByEvent: Record<string, number> = {
   before_resume: 88,
   target_resumed: 94,
   runtime_detected: 98,
+  runtime_verification_unavailable: 98,
   launch_complete: 100,
 }
 

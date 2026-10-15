@@ -78,7 +78,7 @@
     "tabs": {
       "basic": "基本設定",
       "migoto": "3DMigoto 設定",
-      "dllUpdate": "d3d11.dll の更新",
+      "dllUpdate": "SSMT Runtime",
       "packageUpdate": "3Dmigoto Package の更新",
       "other": "その他の設定"
     },
@@ -126,8 +126,6 @@
       "autoExitSeconds": "自動終了までの秒数",
       "extraInjectedDll": "追加で注入する DLL",
       "options": "その他のオプション",
-      "dllSource": "d3d11.dll の入手元",
-      "dllSourceHint": "Dev は SpectrumQT/XXMI-Libs-Package、Play は Doodle、ssice-a は ssice-a/XXMI-Libs-Package を使用します。初回インストール後は DLL がローカルにキャッシュされ、以後のモード切り替えではローカルキャッシュのみが置き換えられます。NTEMI プリセットでは常に ssice-a が強制使用されます。",
       "currentInstalledDllVersion": "現在インストールされているバージョン",
       "noDllVersionInstalled": "インストール済みバージョンの記録なし",
       "availableDllVersions": "インストール可能なバージョン",
@@ -159,11 +157,6 @@
       "wwmiDisableWoundedFxHint": "起動前に SkinDamageMode を Off に設定し、被弾後のテクスチャ異常を防ぎます。"
     },
     "options": {
-      "d3d11Source": {
-        "dev": "Dev（XXMI-Libs-Package）",
-        "play": "Play（Doodle）",
-        "ssiceA": "ssice-a（XXMI-Libs-Package）"
-      },
       "backgroundUpdateMode": {
         "manual": "手動",
         "auto": "自動"
@@ -454,7 +447,6 @@
       "altF": "Alt+F ウィンドウ呼び出しを有効化",
       "textureMarkStyle": "テクスチャマーク方式",
       "previewLighting": "簡易 3D プレビュー描画",
-      "d3d11Source": "d3d11.dll の入手元",
       "launchMode": "優先する起動方法",
       "huntingMode": "狩猟モードの表示設定",
       "showWarnings": "左上の警告を表示",

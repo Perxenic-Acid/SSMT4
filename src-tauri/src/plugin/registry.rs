@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MANIFEST_FILE_NAME: &str = "ssmt-plugin.json";
+pub(crate) const MANIFEST_FILE_NAME: &str = "ssmt-plugin.json";
 const STATE_FILE_NAME: &str = "registry-state.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +59,7 @@ pub struct InstalledPlugin {
     pub package_root: PathBuf,
     pub enabled: bool,
     pub external_dependencies: BTreeMap<String, ExternalDependencyState>,
+    pub official: bool,
 }
 
 impl InstalledPlugin {
@@ -139,6 +140,10 @@ impl From<PluginManifestError> for PluginRegistryError {
 struct RegistryState {
     #[serde(default)]
     plugins: BTreeMap<String, PluginSettings>,
+    #[serde(default)]
+    game_plugins: BTreeMap<String, BTreeMap<String, bool>>,
+    #[serde(default)]
+    managed_game_executables: BTreeMap<String, BTreeMap<String, PathBuf>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -148,8 +153,11 @@ struct PluginSettings {
     enabled: bool,
     #[serde(default)]
     external_paths: BTreeMap<String, PathBuf>,
+    #[serde(default)]
+    official: bool,
 }
 
+#[derive(Clone)]
 pub struct PluginRegistry {
     plugins_root: PathBuf,
     state_path: PathBuf,
@@ -250,6 +258,7 @@ impl PluginRegistry {
                 package_root,
                 enabled: settings.enabled,
                 external_dependencies,
+                official: settings.official,
             });
         }
         Ok(())
@@ -272,12 +281,127 @@ impl PluginRegistry {
             })
     }
 
+    // 仅贡献 SSMT 页面时使用全局启用状态；游戏运行时贡献仍按游戏启用。
+    pub fn for_game(&self, game_name: &str) -> Self {
+        let mut scoped = self.clone();
+        for plugin in &mut scoped.installed {
+            plugin.enabled = if plugin.manifest.is_app_scoped() {
+                self.state.plugins.get(&package_key(plugin.id(), plugin.version()))
+                    .is_some_and(|settings| settings.enabled)
+            } else {
+                self.game_enabled(game_name, &plugin.manifest.id)
+            };
+        }
+        scoped
+    }
+
+    pub fn game_enabled(&self, game_name: &str, id: &str) -> bool {
+        self.state
+            .game_plugins
+            .get(&game_name.trim().to_lowercase())
+            .and_then(|plugins| plugins.get(id))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    pub fn managed_game_executable(&self, game_name: &str, id: &str) -> Option<&Path> {
+        self.state.managed_game_executables
+            .get(&game_name.trim().to_lowercase())
+            .and_then(|plugins| plugins.get(id))
+            .map(PathBuf::as_path)
+    }
+
+    pub fn managed_game_executables_for_plugin(&self, id: &str) -> Vec<PathBuf> {
+        self.state.managed_game_executables.values()
+            .filter_map(|plugins| plugins.get(id).cloned())
+            .collect()
+    }
+
+    pub fn set_managed_game_executable(
+        &mut self,
+        game_name: &str,
+        id: &str,
+        executable: Option<&Path>,
+    ) -> Result<(), PluginRegistryError> {
+        let game_name = game_name.trim().to_lowercase();
+        if game_name.is_empty() {
+            return Err(PluginRegistryError::State("game name is required".to_string()));
+        }
+        if let Some(executable) = executable {
+            if !executable.is_absolute() {
+                return Err(PluginRegistryError::State("managed game executable must be absolute".to_string()));
+            }
+            self.state.managed_game_executables.entry(game_name)
+                .or_default().insert(id.to_string(), executable.to_path_buf());
+        } else if let Some(plugins) = self.state.managed_game_executables.get_mut(&game_name) {
+            plugins.remove(id);
+            if plugins.is_empty() {
+                self.state.managed_game_executables.remove(&game_name);
+            }
+        }
+        write_state(&self.state_path, &self.state)
+    }
+
+    pub fn set_game_enabled(
+        &mut self,
+        game_name: &str,
+        id: &str,
+        enabled: bool,
+    ) -> Result<(), PluginRegistryError> {
+        let game_name = game_name.trim().to_lowercase();
+        if game_name.is_empty() {
+            return Err(PluginRegistryError::State("game name is required".to_string()));
+        }
+        if self.find(id).is_none() {
+            return Err(PluginRegistryError::PluginNotFound(id.to_string()));
+        }
+        self.write_game_enabled(&game_name, id, enabled)
+    }
+
+    // 内置 DLL 不属于可安装包；调用方确认资源与游戏兼容后才可写入选择。
+    pub fn set_bundled_game_enabled(
+        &mut self,
+        game_name: &str,
+        id: &str,
+        enabled: bool,
+    ) -> Result<(), PluginRegistryError> {
+        let game_name = game_name.trim().to_lowercase();
+        if game_name.is_empty() {
+            return Err(PluginRegistryError::State("game name is required".to_string()));
+        }
+        self.write_game_enabled(&game_name, id, enabled)
+    }
+
+    fn write_game_enabled(
+        &mut self,
+        game_name: &str,
+        id: &str,
+        enabled: bool,
+    ) -> Result<(), PluginRegistryError> {
+        self.state
+            .game_plugins
+            .entry(game_name.to_string())
+            .or_default()
+            .insert(id.to_string(), enabled);
+        write_state(&self.state_path, &self.state)?;
+        self.refresh()
+    }
+
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), PluginRegistryError> {
         let plugin = self
             .find(id)
             .ok_or_else(|| PluginRegistryError::PluginNotFound(id.to_string()))?;
         let key = package_key(plugin.id(), plugin.version());
         self.state.plugins.entry(key).or_default().enabled = enabled;
+        write_state(&self.state_path, &self.state)?;
+        self.refresh()
+    }
+
+    pub fn mark_official(&mut self, id: &str, version: &str) -> Result<(), PluginRegistryError> {
+        if !self.installed.iter().any(|plugin| plugin.id() == id && plugin.version() == version) {
+            return Err(PluginRegistryError::PluginNotFound(id.to_string()));
+        }
+        self.state.plugins.entry(package_key(id, version)).or_default().official = true;
         write_state(&self.state_path, &self.state)?;
         self.refresh()
     }
@@ -534,6 +658,25 @@ mod tests {
     }
 
     #[test]
+    fn app_page_enablement_is_global_across_games() {
+        let root = temp_root("app-scope");
+        let source = fixture_package(&root, "thirdparty.app-page", "1.0.0");
+        fs::write(source.join(MANIFEST_FILE_NAME), r#"{
+            "schemaVersion":1,"id":"thirdparty.app-page","name":"App Page","version":"1.0.0","author":"Test",
+            "compatibility":{"ssmt":">=4.0.0","platforms":["windows-x64"]},
+            "contributions":{"uiPages":[{"id":"home","route":"/plugins/app-page","path":"ui/home"}]},
+            "permissions":[]
+        }"#).unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&source).unwrap();
+        assert!(!registry.for_game("GIMI").find("thirdparty.app-page").unwrap().enabled);
+        registry.set_enabled("thirdparty.app-page", true).unwrap();
+        assert!(registry.for_game("GIMI").find("thirdparty.app-page").unwrap().enabled);
+        assert!(registry.for_game("SRMI").find("thirdparty.app-page").unwrap().enabled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn validates_external_path_and_generates_runtime_plugin_list() {
         let root = temp_root("external");
         let source = fixture_package(&root, "ssmt.external", "1.0.0");
@@ -585,6 +728,94 @@ mod tests {
             config.plugins,
             vec!["ssmt.external/1.0.0/native/example.dll"]
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_config_follows_any_enabled_plugin_subset() {
+        let root = temp_root("combinations");
+        let ids = ["ssmt.alpha", "ssmt.beta", "ssmt.gamma"];
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        for id in ids {
+            let source = fixture_package(&root.join(id), id, "1.0.0");
+            registry.install_directory_package(&source).unwrap();
+        }
+
+        for mask in 0..(1 << ids.len()) {
+            for (index, id) in ids.iter().enumerate() {
+                registry.set_enabled(id, mask & (1 << index) != 0).unwrap();
+            }
+            let config = registry.generate_plugin_host_config();
+            let expected = ids
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, id)| format!("{id}/1.0.0/native/example.dll"))
+                .collect::<Vec<_>>();
+            assert_eq!(config.plugins, expected, "enabled subset: {mask:03b}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn game_selection_is_independent_and_survives_restart() {
+        let root = temp_root("game-selection");
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        let ids = ["ssmt.alpha", "ssmt.beta", "ssmt.gamma"];
+        for id in ids {
+            let source = fixture_package(&root.join(id), id, "1.0.0");
+            registry.install_directory_package(&source).unwrap();
+        }
+        registry.set_game_enabled("SRMI", "ssmt.beta", true).unwrap();
+        registry.set_bundled_game_enabled("GIMI", "ssmt.player-tweaks", true).unwrap();
+        for mask in 0..(1 << ids.len()) {
+            for (index, id) in ids.iter().enumerate() {
+                registry
+                    .set_game_enabled("GIMI", id, mask & (1 << index) != 0)
+                    .unwrap();
+            }
+            let config = registry.for_game("GIMI").generate_plugin_host_config();
+            let expected = ids
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, id)| format!("{id}/1.0.0/native/example.dll"))
+                .collect::<Vec<_>>();
+            assert_eq!(config.plugins, expected, "GIMI selection: {mask:03b}");
+            assert_eq!(
+                registry.for_game("SRMI").generate_plugin_host_config().plugins,
+                vec!["ssmt.beta/1.0.0/native/example.dll"]
+            );
+        }
+        drop(registry);
+
+        let registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        let config_for = |game| registry.for_game(game).generate_plugin_host_config().plugins;
+        assert_eq!(config_for("GIMI"), ids.iter().map(|id| format!("{id}/1.0.0/native/example.dll")).collect::<Vec<_>>());
+        assert_eq!(config_for("SRMI"), vec!["ssmt.beta/1.0.0/native/example.dll"]);
+        assert!(registry.game_enabled("GIMI", "ssmt.player-tweaks"));
+        assert!(!registry.game_enabled("SRMI", "ssmt.player-tweaks"));
+        assert!(config_for("WWMI").is_empty());
+        assert!(config_for("").is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_installation_path_is_scoped_and_persistent() {
+        let root = temp_root("managed-installation");
+        let plugins_root = root.join("Plugins");
+        let executable = root.join("game/GenshinImpact.exe");
+        let mut registry = PluginRegistry::new(&plugins_root).unwrap();
+        registry.set_managed_game_executable("GIMI", "ssmt.dlss5.integration", Some(&executable)).unwrap();
+        drop(registry);
+
+        let mut restarted = PluginRegistry::new(&plugins_root).unwrap();
+        assert_eq!(restarted.managed_game_executable("GIMI", "ssmt.dlss5.integration"), Some(executable.as_path()));
+        assert!(restarted.managed_game_executable("SRMI", "ssmt.dlss5.integration").is_none());
+        restarted.set_managed_game_executable("GIMI", "ssmt.dlss5.integration", None).unwrap();
+        drop(restarted);
+        assert!(PluginRegistry::new(&plugins_root).unwrap()
+            .managed_game_executable("GIMI", "ssmt.dlss5.integration").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 }

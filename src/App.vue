@@ -7,7 +7,7 @@ import TitleBar from "./components/TitleBar.vue";
 import { useI18n } from 'vue-i18n';
 import { GlobalConfig } from './store/GlobalConfig';
 import { ResourceManager } from './store/ResourceManager';
-import type { D3d11Mode, HuntingMode } from './store/GameConfig';
+import type { HuntingMode } from './store/GameConfig';
 import CacheFolderPicker from './components/CacheFolderPicker.vue';
 import { getGamePresetDisplayName } from './store/GamePreset';
 
@@ -18,13 +18,13 @@ const gameSwitchRevision = AppStateManager.gameSwitchRevision;
 const { t } = useI18n();
 const selectedFirstRunRole = ref<'author' | 'player' | 'both' | null>(null);
 const firstRunStep = ref(0);
-type FirstRunStepKey = 'language' | 'role' | 'general' | 'authorPreferences' | 'games' | 'd3d11' | 'migoto' | 'background' | 'nsfw';
+type FirstRunStepKey = 'language' | 'role' | 'general' | 'authorPreferences' | 'games' | 'migoto' | 'background' | 'nsfw';
 const firstRunSteps = computed<FirstRunStepKey[]>(() => {
   const role = selectedFirstRunRole.value;
   return [
     'language', 'role', 'general',
     ...(role !== 'player' ? ['authorPreferences' as const] : []),
-    'games', 'd3d11', 'migoto', 'background',
+    'games', 'migoto', 'background',
     ...(role !== 'author' ? ['nsfw' as const] : []),
   ];
 });
@@ -36,11 +36,9 @@ const firstRunDialog = ref<HTMLElement | null>(null);
 watch(firstRunStep, () => firstRunDialog.value?.scrollTo({ top: 0 }));
 const selectedFirstRunGames = ref<string[]>([]);
 const firstRunGamesInitialized = ref(false);
-const firstRunD3d11Mode = ref<D3d11Mode>('dev');
 const firstRunUseShell = ref(false);
 const firstRunHuntingMode = ref<HuntingMode>('2');
 const firstRunShowWarnings = ref(true);
-const firstRunCheckDllUpdate = ref(true);
 const firstRunCheckPackageUpdate = ref(true);
 const firstRunBackgroundType = ref<'Image' | 'Video'>('Video');
 const firstRunBackgroundUpdateMode = ref<'manual' | 'auto'>('auto');
@@ -127,7 +125,6 @@ const confirmFirstRunRole = async () => {
     await ResourceManager.setGameVisibility(game.name, selected);
     if (!selected) continue;
     const config = await ResourceManager.loadGameConfig(game.name);
-    config.d3d11Mode = selectedFirstRunRole.value === 'player' ? 'play' : firstRunD3d11Mode.value;
     config.useShell = firstRunUseShell.value;
     if (firstRunUseShell.value) {
       config.extraDll = '';
@@ -135,7 +132,6 @@ const confirmFirstRunRole = async () => {
     }
     if (selectedFirstRunRole.value !== 'player') config.huntingMode = firstRunHuntingMode.value;
     config.showErrorPopup = firstRunShowWarnings.value;
-    config.checkDllUpdateBeforeLaunch = firstRunCheckDllUpdate.value;
     config.check3DmigotoPackageUpdateBeforeLaunch = firstRunCheckPackageUpdate.value;
     config.backgroundType = firstRunBackgroundType.value;
     config.backgroundUpdateMode = firstRunBackgroundUpdateMode.value;
@@ -353,13 +349,6 @@ onUnmounted(() => {
                 <span>{{ t('firstRun.selectedMoveFront') }}</span>
               </div>
             </div>
-            <div v-else-if="currentFirstRunStep === 'd3d11'" class="first-run-form">
-              <label><span>{{ t('firstRun.fields.d3d11Source') }}</span><el-radio-group
-                  v-model="firstRunD3d11Mode"><el-radio-button v-if="selectedFirstRunRole !== 'player'"
-                    value="dev">dev</el-radio-button><el-radio-button
-                    value="play">play</el-radio-button><el-radio-button v-if="selectedFirstRunRole !== 'player'"
-                    value="ssice-a">ssice-a</el-radio-button></el-radio-group></label>
-            </div>
             <div v-else-if="currentFirstRunStep === 'migoto'" class="first-run-form">
               <label><span>{{ t('firstRun.fields.launchMode') }}</span><el-radio-group
                   v-model="firstRunUseShell"><el-radio-button :value="false">{{ t('firstRun.options.normalLaunch')
@@ -371,8 +360,6 @@ onUnmounted(() => {
                     :label="t('gameSettingsModal.options.huntingMode.toggleByNumpad0')" /></el-select></label>
               <label class="first-run-switch"><span>{{ t('firstRun.fields.showWarnings') }}</span><el-switch
                   v-model="firstRunShowWarnings" /></label>
-              <label class="first-run-switch"><span>{{ t('firstRun.fields.checkDllUpdate') }}</span><el-switch
-                  v-model="firstRunCheckDllUpdate" /></label>
               <label class="first-run-switch"><span>{{ t('firstRun.fields.checkPackageUpdate') }}</span><el-switch
                   v-model="firstRunCheckPackageUpdate" /></label>
             </div>

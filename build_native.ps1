@@ -5,7 +5,13 @@ param(
 
     [switch]$BuildTestPlugin,
 
-    [switch]$DeployToTestRuntime
+    [bool]$BuildPoserProbe = $true,
+
+    [switch]$DeployToTestRuntime,
+
+    [string]$TestRuntimeDir,
+
+    [string]$TestGamePreset = 'GIMI'
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,9 +21,10 @@ $NativeDir = Join-Path $RepoRoot "native"
 $BuildDir = Join-Path $NativeDir "build"
 $DistDir = Join-Path $NativeDir "dist\$Configuration"
 $ResourceDir = Join-Path $RepoRoot "src-tauri\resources"
-$TestRuntimeDir = Join-Path `
-    $env:USERPROFILE `
-    "Desktop\SSMT3\SSMTDefaultCacheFolder\3Dmigoto\GIMI"
+if ($DeployToTestRuntime) {
+    . (Join-Path $RepoRoot 'runtime\TestEnvironment.ps1')
+    $TestRuntimeDir = Resolve-TestRuntimeDirectory -TestRuntimeDir $TestRuntimeDir -GamePreset $TestGamePreset
+}
 
 $CargoProfile = if ($Configuration -eq "Release") {
     "release"
@@ -58,7 +65,9 @@ Invoke-Checked "cargo" $cargoArgs
 
 Invoke-Checked "cmake" @(
     "-S", $NativeDir,
-    "-B", $BuildDir
+    "-B", $BuildDir,
+    "-DSSMT_BUILD_POSER_PROBE=$(if ($BuildPoserProbe) { 'ON' } else { 'OFF' })",
+    "-DSSMT_POSER_ARTIFACT_DIR=$DistDir"
 )
 
 Invoke-Checked "cmake" @(
@@ -114,6 +123,12 @@ foreach ($Name in $Artifacts) {
         -Destination (Join-Path $ResourceDir $Name) `
         -Force
 }
+
+# 可选插件只部署为可发现的安装包，由市场管理安装和启用，不直接注入游戏。
+& (Join-Path $NativeDir 'tools\stage-local-plugins.ps1') `
+    -NativeArtifactDirectory $DistDir `
+    -OutputDirectory (Join-Path $ResourceDir 'PluginPackages') `
+    -ExcludePluginId $(if ($BuildPoserProbe) { @() } else { @('ssmt.poser.genshin-probe') })
 
 if ($BuildTestPlugin) {
     $testPluginArgs = @(

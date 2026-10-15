@@ -63,7 +63,9 @@ uib_screenshot.png
 uib_wrapper_screenshot.png
 
 /src-tauri/resources/Run.exe
+/src-tauri/resources/d3d11.dll
 /src-tauri/resources/SSMT-Player-Tweaks.dll
+/src-tauri/resources/PluginPackages/
 
 # Agent 工具上传与临时工作目录（不提交）
 .dsh/
@@ -75,3 +77,5 @@ BlenderPlugin/
 
 .tmp-*/
 .tmp-*
+# docs/graphics-stack-rhi-integration.md
+docs/SSMT4-鸣潮修复-20261002.zip

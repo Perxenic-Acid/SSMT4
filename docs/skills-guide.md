@@ -167,6 +167,10 @@
 
 ## 当前项目配置
 
+项目自有的 [poser-physics-diagnostics](../skills/poser-physics-diagnostics/SKILL.md)
+用于 Poser 的 STATIC 参考、穿模及跳变调查，配套说明见 [物理验证](poser/physics-validation.md)。
+它独立于上面列出的通用技能，不会自动安装到用户级技能目录。
+
 - **Issue 追踪器**：不使用
 - **Triage 标签**：不使用
 - **领域文档**：单上下文（`CONTEXT.md` + `docs/adr/`）

@@ -85,11 +85,13 @@ $nativeArtifacts = @(
     }
 )
 
-$nativeStagingFiles = @($nativeArtifacts | ForEach-Object { $_.Target })
+$nativeStagingFiles = @($nativeArtifacts | ForEach-Object { $_.Target }) + @((Join-Path $resourcesDir 'd3d11.dll'))
 Remove-Item -LiteralPath $nativeStagingFiles -Force -ErrorAction SilentlyContinue
 
 try {
     & (Join-Path $projectRoot "build_release_cpp.ps1")
+
+    & (Join-Path $projectRoot "scripts/stage-ssmt-runtime.ps1") -Build
 
     foreach ($artifact in $nativeArtifacts) {
         if (-not (Test-Path -LiteralPath $artifact.Source -PathType Leaf)) {

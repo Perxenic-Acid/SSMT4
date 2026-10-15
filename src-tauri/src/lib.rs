@@ -114,6 +114,9 @@ pub fn run() {
             reveal_main_window(app);
         }))
         .setup(|app| {
+            if let Err(error) = plugin::managed_stack::recover_stale_sessions() {
+                eprintln!("[GraphicsStack] Startup recovery failed: {error}");
+            }
             // 初始化 ModWatcher 状态
             app.manage(commands::mod_manager::ModWatcher(Mutex::new(None)));
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
@@ -144,12 +147,29 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             set_show_window_shortcut_enabled,
             plugin::commands::plugin_registry_snapshot,
+            plugin::commands::plugin_registry_snapshot_for_game,
             plugin::commands::plugin_ui_routes,
             plugin::commands::plugin_capabilities,
-            plugin::commands::set_plugin_enabled,
+            plugin::commands::set_plugin_enabled_for_game,
+            plugin::commands::bundled_player_tweaks_enabled_for_game,
             plugin::commands::set_plugin_external_dependency_path,
             plugin::commands::prepare_hoyoshade_launch,
+            plugin::commands::prepare_plugin_host_config,
+            plugin::commands::inspect_graphics_launch,
+            plugin::commands::inspect_dlss5_game_state,
+            plugin::commands::inspect_dlss5_last_run,
+            plugin::commands::inspect_managed_graphics_stack,
+            plugin::commands::restore_managed_graphics_stack,
+            plugin::commands::inspect_dlss5_route_options,
+            plugin::commands::install_managed_dlss5_route,
+            plugin::commands::restore_dlss5_install,
+            plugin::commands::open_dlss5_swapper,
             plugin::commands::install_plugin_package,
+            plugin::commands::inspect_plugin_package,
+            plugin::commands::local_plugin_packages,
+            plugin::commands::install_local_plugin,
+            plugin::commands::official_plugin_catalog,
+            plugin::commands::install_official_plugin,
             plugin::commands::get_plugin_setting,
             plugin::commands::set_plugin_setting,
             plugin::commands::read_plugin_log,

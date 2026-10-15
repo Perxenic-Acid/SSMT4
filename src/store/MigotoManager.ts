@@ -1,10 +1,10 @@
 import { join } from '@tauri-apps/api/path'
-import { exists, remove, writeTextFile, copyFile } from '@tauri-apps/plugin-fs'
+import { exists, remove, writeTextFile, copyFile, rename } from '@tauri-apps/plugin-fs'
 import { D3dxIniManager } from './D3dxIniManager'
 import { ResourceManager } from './ResourceManager'
 import { PathHelper } from '../helper/PathHelper'
 import { i18n } from '../i18n'
-import type { D3d11Mode, GameConfig, HuntingMode } from './GameConfig'
+import type { GameConfig, HuntingMode } from './GameConfig'
 
 const t = i18n.global.t
 
@@ -57,7 +57,6 @@ export interface ThreeDMigotoConfig {
   extraDlls?: string[]
   autoExitSeconds?: number
   useUpx?: boolean
-  d3d11Mode?: D3d11Mode
 }
 
 export interface SpecificIbDumpOptions {
@@ -71,11 +70,6 @@ export interface SpecificIbDumpOptions {
 export interface SpecificIbDumpResult {
   restoreAnalyseOptions: string
   logicName: string
-}
-
-export interface ApplyD3d11ModeOptions {
-  continueOnCopyFailure?: boolean
-  onCopyFailure?: (error: unknown, context: { mode: D3d11Mode; sourcePath: string; destPath: string; dllLabel: string }) => void
 }
 
 const normalizeSpecificIbDumpLogicName = (logicName: unknown, gamePreset: unknown): string => {
@@ -137,10 +131,6 @@ const buildSpecificIbDumpConfigContent = (drawIbs: string[], logicName: string, 
 }
 
 export class MigotoManager {
-  static getEffectiveD3d11Mode(config?: Pick<ThreeDMigotoConfig, 'd3d11Mode' | 'gamePreset'> | null): D3d11Mode {
-    return ResourceManager.getEffectiveD3d11Mode(config)
-  }
-
   static async resolveMigotoDir(_gameName: string, _cfg: ThreeDMigotoConfig): Promise<string> {
     const resolved = await PathHelper.GetCurrentGame3DmigotoFolderPath()
     if (resolved && resolved.trim()) return resolved
@@ -155,60 +145,60 @@ export class MigotoManager {
     return exists(d3dxPath)
   }
 
-  static async applyD3d11ModeToMigotoDir(gameName: string, migotoDir: string, config?: GameConfig, options?: ApplyD3d11ModeOptions): Promise<D3d11Mode> {
+  static async applySSMTRuntimeToMigotoDir(gameName: string, migotoDir: string, config?: GameConfig): Promise<void> {
     const effectiveConfig = config || await ResourceManager.loadGameConfig(gameName)
     const dllSource = await ResourceManager.resolveMigotoDllSource(effectiveConfig)
-    const mode = dllSource.mode
     const sourcePath = dllSource.sourcePath
     const destPath = await join(migotoDir, dllSource.targetFileName)
 
     if (!(await exists(sourcePath))) {
-      throw new Error(t('migotoManager.messages.d3d11SourceMissingForMode', { mode: dllSource.label, path: sourcePath }))
+      throw new Error(t('migotoManager.messages.ssmtRuntimeSourceMissing', { path: sourcePath }))
     }
 
+    const stagingPath = `${destPath}.ssmt-staging-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const backupPath = `${destPath}.ssmt-backup-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    let backupCreated = false
+
     try {
+      // Stage beside the destination so the final rename stays on the same
+      // volume. Keep the existing DLL available until the staged copy is ready.
+      await copyFile(sourcePath, stagingPath)
+
       if (await exists(destPath)) {
-        await remove(destPath)
+        await rename(destPath, backupPath)
+        backupCreated = true
       }
 
-      await copyFile(sourcePath, destPath)
+      await rename(stagingPath, destPath)
+
+      if (backupCreated && await exists(backupPath)) {
+        await remove(backupPath)
+      }
     } catch (error) {
-      if (options?.continueOnCopyFailure) {
-        options.onCopyFailure?.(error, { mode, sourcePath, destPath, dllLabel: dllSource.label })
-        return mode
+      try {
+        if (await exists(stagingPath)) {
+          await remove(stagingPath)
+        }
+        if (backupCreated && !(await exists(destPath)) && await exists(backupPath)) {
+          await rename(backupPath, destPath)
+        }
+      } catch (restoreError) {
+        throw new Error(`${String(error)}; failed to restore the previous ${dllSource.label}: ${String(restoreError)}`)
       }
 
       throw error
     }
 
-    return mode
-  }
-
-  static async applySelectedD3d11Mode(gameName: string): Promise<D3d11Mode> {
-    const gameConfig = await ResourceManager.loadGameConfig(gameName)
-    const cfg = gameConfig || {}
-    const migotoDir = await this.resolveMigotoDir(gameName, cfg)
-    return this.applyD3d11ModeToMigotoDir(gameName, migotoDir, cfg)
-  }
-
-  static async switchD3d11Mode(gameName: string, mode: D3d11Mode): Promise<D3d11Mode> {
-    const gameConfig = await ResourceManager.loadGameConfig(gameName)
-    const nextConfig = {
-      ...gameConfig,
-      d3d11Mode: mode,
-    }
-
-    const migotoDir = await this.resolveMigotoDir(gameName, nextConfig)
-    const appliedMode = await this.applyD3d11ModeToMigotoDir(gameName, migotoDir, nextConfig)
-    await ResourceManager.saveGameConfig(gameName, nextConfig)
-    return appliedMode
   }
 
   /**
    * 将当前配置写入d3dx.ini
    * @param gameName 
    */
-  static async patchD3dxForLaunch(gameName: string): Promise<void> {
+  static async patchD3dxForLaunch(
+    gameName: string,
+    options: { dllInitializationDelay?: number } = {},
+  ): Promise<void> {
     const gameConfig = await ResourceManager.loadGameConfig(gameName)
     const cfg = gameConfig || {}
     const migotoDir = await this.resolveMigotoDir(gameName, cfg)
@@ -219,6 +209,10 @@ export class MigotoManager {
     const dllSource = await ResourceManager.resolveMigotoDllSource(cfg)
     lines = D3dxIniManager.setIniValue(lines, 'Loader', 'module', dllSource.targetFileName)
 
+    // Upstream packages use `loader` as an XXMI-only allowlist. SSMT validates
+    // the exact target path and does not require that external launcher.
+    lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'loader')
+
     if (cfg.targetExePath && cfg.targetExePath.trim()) {
       lines = D3dxIniManager.setIniValue(lines, 'Loader', 'target', cfg.targetExePath)
     }
@@ -228,8 +222,8 @@ export class MigotoManager {
       lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch')
       lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch_args')
     } else {
-      const launchTarget = (cfg.launcherExePath && cfg.launcherExePath.trim())
-        ? cfg.launcherExePath.trim()
+      const launchTarget = (cfg.targetExePath && cfg.targetExePath.trim())
+        ? cfg.targetExePath.trim()
         : ''
 
       // Extra DLL injection in Run.exe only happens on the launch-and-inject path.
@@ -259,11 +253,19 @@ export class MigotoManager {
       )
     }
 
-    if (typeof cfg.delay === 'number') {
-      lines = D3dxIniManager.setIniValue(lines, 'System', 'dll_initialization_delay', String(cfg.delay))
+    const dllInitializationDelay = typeof options.dllInitializationDelay === 'number'
+      ? options.dllInitializationDelay
+      : cfg.delay
+    if (typeof dllInitializationDelay === 'number') {
+      lines = D3dxIniManager.setIniValue(
+        lines,
+        'System',
+        'dll_initialization_delay',
+        String(dllInitializationDelay),
+      )
     }
 
-  lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'hunting', normalizeHuntingMode(cfg.huntingMode))
+    lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'hunting', normalizeHuntingMode(cfg.huntingMode))
     lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'marking_actions', 'clipboard asm hlsl')
 
     if (typeof cfg.autoExitSeconds === 'number') {

@@ -12,6 +12,16 @@
 - SSMT4文档源代码：https://github.com/Perxenic-Acid/SSMT4-Documents
 - SSMT4文档阅读地址：https://perxenic-acid.github.io/SSMT4-Documents/
 
+## 本地 Native 插件开发
+
+运行 `./build_native.ps1 -Configuration Release` 会构建 Native 工具和可选 Poser，
+并把带清单的本地插件包放到 `src-tauri/resources/PluginPackages`。
+可用 `-BuildPoserProbe $false` 跳过 Poser 构建。
+插件市场刷新时自动发现这些包，标注“本地构建”；无需先发布到 GitHub Release。
+点击“安装本地构建”检查来源和权限后安装，再按需启用。发现和安装不会自动启用插件。
+本地构建包不视为已验证的 Native Release 来源；裸 DLL 和宿主测试 DLL 不直接成为市场条目。
+前后端命令更新后，正在运行的 SSMT 开发进程需要重启才能使用新发现流程。
+
 # 附加功能移除说明
 
 SSMT4开源版仅包含了基础的启动器、管理器、模型提取功能，基础功能方便社区共建
