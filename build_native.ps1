@@ -5,6 +5,8 @@ param(
 
     [switch]$BuildTestPlugin,
 
+    [bool]$BuildPoserProbe = $true,
+
     [switch]$DeployToTestRuntime,
 
     [string]$TestRuntimeDir,
@@ -63,7 +65,9 @@ Invoke-Checked "cargo" $cargoArgs
 
 Invoke-Checked "cmake" @(
     "-S", $NativeDir,
-    "-B", $BuildDir
+    "-B", $BuildDir,
+    "-DSSMT_BUILD_POSER_PROBE=$(if ($BuildPoserProbe) { 'ON' } else { 'OFF' })",
+    "-DSSMT_POSER_ARTIFACT_DIR=$DistDir"
 )
 
 Invoke-Checked "cmake" @(
@@ -119,6 +123,12 @@ foreach ($Name in $Artifacts) {
         -Destination (Join-Path $ResourceDir $Name) `
         -Force
 }
+
+# 可选插件只部署为可发现的安装包，由市场管理安装和启用，不直接注入游戏。
+& (Join-Path $NativeDir 'tools\stage-local-plugins.ps1') `
+    -NativeArtifactDirectory $DistDir `
+    -OutputDirectory (Join-Path $ResourceDir 'PluginPackages') `
+    -ExcludePluginId $(if ($BuildPoserProbe) { @() } else { @('ssmt.poser.genshin-probe') })
 
 if ($BuildTestPlugin) {
     $testPluginArgs = @(
