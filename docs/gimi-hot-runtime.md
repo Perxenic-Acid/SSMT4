@@ -8,7 +8,7 @@
 
 ## 准备组件与启动
 
-1. 在插件页安装 DLSS5 插件，并为原神启用。Shade Bridge 是可选项；DLSS5 单独启用也会准备自己的被动 ReShade Host。
+1. 在插件页安装 DLSS5 **0.2.1 或更新版本**，并为原神启用。新插件包包含 SSMT 适配的 Bridge；旧包缺失该组件时横幅提醒并继续普通 Mod 启动。Shade Bridge 是可选项；DLSS5 单独启用也会准备自己的被动 ReShade Host。
 2. 关闭游戏。在**插件市场 → 选择原神 → DLSS5 → 功能设置**选择显卡 Profile（RTX 50 或 RTX 30/40；RTX 40 为实验支持），点击**自动下载并配置**。首次约下载 302 MiB，包含配套的 `nvngx_dlssnr.dll`，无需玩家另找组件；后续复用已校验的缓存。游戏设置中保留相同入口。
 3. 离线情况下点击“离线导入”，选择包含 `components` 的完整 GIMI 集成包根目录。组件来自 [CXP GIMI 集成项目的固定版本](https://github.com/CXP-2024/GIMI_reshade_dlss_integration/tree/cc4697187cb57bacc7c932b7f53f16be24af152a)，必须补齐所选 Profile 的 NR Runtime。SSMT 逐文件校验固定 SHA-256，不接受混用版本或另一 Profile 的 Runtime。具体路径与完整哈希以 `src-tauri/src/plugin/gimi_hot_runtime.rs` 和 `gimi_hot_assets.json` 为准。
 4. 若显示旧的 Swapper 托管安装，先用原有“恢复”操作恢复该安装，再使用热注入。遇到损坏清单先处理该错误，不手动猜测删除游戏文件；热注入不会临时恢复 Swapper 代理文件。
@@ -26,6 +26,11 @@
 | NR | `components/DLSS5/Addons/pre-nr`（RTX 50）或 `pre-nr-rtx30`（RTX 30/40）下的 `nr-before-sr.zh-CN.addon64`、`nrchain_nvngx.dll`、`nvngx_dlssnr.dll`、`nr_before_sr.ini` |
 
 不会导入集成包中的 GIMI Runtime、解锁器、旧日志或缓存，也不改用户原有额外 DLL 配置。反复导入会创建新副本；本阶段未实现旧副本自动回收。插件市场中的 Swapper 外部工具依赖状态描述其管理器功能，原神热注入不要求 Swapper、adapter 或其 payload 目录就绪。
+
+启动计划使用插件包中的 SSMT Bridge 1.2.3.1，将其按构建哈希暂存到导入目录的
+`state/bridge/<SHA-256>/Dx11FsrBridge.dll`，并复制当前 Bridge INI。固定上游组件保持原样，
+升级插件无需重新下载 NR。插件包继续经过现有包结构与来源校验；组件的旁置哈希只用于
+检查安装后损坏，不能代替发布来源验证。禁用插件时不读取、暂存或注入此组件。
 
 ## 自动下载来源与失败恢复
 
@@ -67,6 +72,35 @@ Shell 只是启动方式，不能据 `useShell=true` 推断使用了官方启动
 原神的 Swapper 安装与启动暂存入口均拒绝冷加载，旧安装仅允许恢复。新的热注入资源缺失、哈希错误、Profile 不匹配或准备失败时，显示 DLSS5 本次未加载的横幅并去掉本次热注入贡献，继续普通 Mod 启动；Shade 和 PluginHost 资源可用时继续加载它们，不把回退报告为 DLSS5 成功。保存的插件启用状态不变。已就绪热注入计划的额外 DLL 所有权冲突、关闭“启动目标程序”或 Shell 指向另一启动程序等情况仍须先处理，提示应明确当前配置，而非笼统要求关闭“官方启动器模式”。
 
 ## 验证与实机验收
+
+### 2026-10-15 混合设备崩溃修复
+
+22:32:58 和 22:42:04 的两份新 dump 均确认加载了修复后的 Runtime 1.2.2.12，
+已越过前一次 Context 私有虚表崩溃。这次异常位于 `d3d11.dll + 0xC158A`：
+`HackerDevice::CreateBuffer` 读取空的 `mOrigDevice1`，上层调用者是 Bridge，
+后续栈中可见 NVIDIA/NvCamera 组件。
+
+Bridge 保存第一个设备的方法，再用于其他设备；当第一个是 Runtime 包装设备、
+另一个是系统或显卡辅助设备时，`this` 的布局不匹配。修复按对象转发所有受影响的
+Device、Context、Factory 和 SwapChain 方法，并在最终 Release 后移除该代登记。
+不通过 Runtime 空指针返回或禁用 NVIDIA 组件规避问题。
+
+新增回归位于 `native/SSMT-Gimi-Bridge`。未修复源码的两个不同 COM 实现测试出现
+1004 次错误转发；真实 WARP 辅助设备与 Runtime 包装设备交替创建 Buffer 时，
+在相同 Runtime 偏移复现 `0xC0000005`。修复后两项通过，覆盖复制虚表、释放后地址
+复用和不同线程的 Context 调用。Debug、Release 均编译通过；完整组件副本的
+哈希、独立暂存及原始文件保留检查通过。这仍不能证明游戏内 FSR2 dispatch 或 NR
+Feature 18 已成功，需继续检查实际游戏日志和画面。
+
+Bridge 基于上游 1.2.3 的固定源码 `cbdf5c11bfea8d4cb423866dabb96a755fb8ab0b`，
+完整适配补丁和构建入口在 Native 仓库。集成包文档记录的另一个源码提交已采用
+不同的 FFX12 后端，不能直接据该说明重编译并替换现有 FSR2 转译组件。
+构建插件包不会自动安装或启用，开发环境通过市场本地包入口更新至 0.2.1。
+Bridge 本次日志位于上述 `state/bridge/<SHA-256>`，启动行应包含
+`ssmt_version=1.2.3.1 com_forwarding=per_instance`。
+
+23:35 的实机反馈已确认可以进入游戏，但切换 FSR2 后仍崩溃。新 dump 的异常模块
+为 OptiScaler，前述混合设备修复作为独立阶段保留；FSR2 转译与 NR 尚未验收通过。
 
 ### 2026-10-15 启动崩溃修复
 

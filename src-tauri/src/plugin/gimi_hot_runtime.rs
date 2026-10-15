@@ -14,6 +14,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "gimi_hot_bridge.rs"]
+mod bridge;
 #[path = "gimi_hot_download.rs"]
 pub mod download;
 
@@ -212,6 +214,7 @@ fn prepare_at(
     installation: &HotRuntimeInstallation,
 ) -> Result<HotRuntimePlan, String> {
     let (root, addon) = validate(installation)?;
+    let bridge = bridge::stage(registry, &root)?;
     let reshade = root.join("state/reshade-runtime");
     fs::create_dir_all(&reshade).map_err(|error| error.to_string())?;
     // FX 贡献跟随 Shade Bridge 的按游戏启用状态，DLSS5 独立启用不加载其效果。
@@ -329,14 +332,11 @@ fn prepare_at(
     // NR 由同一条前置 Add-on 链负责，避免 OptiScaler 再运行一次后置 NR。
     managed_reshade::set_entry(&mut ini, "DlssNr", "Enabled", "false");
     fs::write(opti.join("OptiScaler.ini"), ini).map_err(|error| error.to_string())?;
-    let dlls = [
-        "components/ReShade/ReShade64.dll",
-        "components/Bridge/Dx11FsrBridge.dll",
-        "components/OptiScaler/OptiScaler.dll",
-    ]
-    .iter()
-    .map(|path| root.join(path))
-    .collect();
+    let dlls = vec![
+        root.join("components/ReShade/ReShade64.dll"),
+        bridge,
+        root.join("components/OptiScaler/OptiScaler.dll"),
+    ];
     let environment = [
         (
             "GIMI_HOSTED_RESHADE_DLL",
@@ -518,6 +518,88 @@ pub fn prepare_gimi_hot_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn registry_with_bridge(root: &Path, dll: &[u8]) -> PluginRegistry {
+        let mut registry = PluginRegistry::new(root.join("plugins")).unwrap();
+        let package = registry.plugins_root().join(DLSS5_PLUGIN_ID).join("0.2.1");
+        fs::create_dir_all(package.join("bridge")).unwrap();
+        fs::write(
+            package.join("ssmt-plugin.json"),
+            serde_json::json!({
+                "schemaVersion": 1, "id": DLSS5_PLUGIN_ID, "name": "Bridge 回归",
+                "version": "0.2.1", "author": "SSMT",
+                "compatibility": {"ssmt": ">=4.0.0", "platforms": ["windows-x64"]},
+                "contributions": {}, "permissions": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(package.join("bridge/Dx11FsrBridge.dll"), dll).unwrap();
+        fs::write(
+            package.join("bridge/Dx11FsrBridge.dll.sha256"),
+            format!("{:x}", Sha256::digest(dll)),
+        )
+        .unwrap();
+        registry.refresh().unwrap();
+        registry.set_enabled(DLSS5_PLUGIN_ID, true).unwrap();
+        registry
+            .set_game_enabled("GIMI", DLSS5_PLUGIN_ID, true)
+            .unwrap();
+        registry
+    }
+
+    pub(super) fn real_bridge() -> Vec<u8> {
+        fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../native/dist/Release/SSMT-Gimi-Bridge.dll"),
+        )
+        .expect("请先构建 Native Release 的 SSMT-Gimi-Bridge")
+    }
+
+    #[test]
+    fn adapted_bridge_is_optional_verified_and_keeps_upstream_files() {
+        let temp = std::env::temp_dir().join(format!(
+            "ssmt-bridge-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir_all(temp.join("hot/components/Bridge")).unwrap();
+        let root = canonical_path(&temp.join("hot")).unwrap();
+        fs::write(
+            root.join("components/Bridge/Dx11FsrBridge.ini"),
+            "[Dx11FsrBridge]\nEnabled=1\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("components/Bridge/Dx11FsrBridge.dll"),
+            b"upstream",
+        )
+        .unwrap();
+        let mut registry = PluginRegistry::new(temp.join("plugins")).unwrap();
+        assert!(bridge::stage(&registry, &root).is_err());
+        assert!(!root.join("state").exists());
+        registry = registry_with_bridge(&temp, b"adapted fixture");
+        let staged = bridge::stage(&registry, &root).unwrap();
+        assert_eq!(fs::read(&staged).unwrap(), b"adapted fixture");
+        assert_eq!(
+            fs::read(root.join("components/Bridge/Dx11FsrBridge.dll")).unwrap(),
+            b"upstream"
+        );
+        assert!(staged.starts_with(root.join("state/bridge")));
+        fs::write(&staged, b"damaged cached copy").unwrap();
+        assert_eq!(bridge::stage(&registry, &root).unwrap(), staged);
+        assert_eq!(fs::read(&staged).unwrap(), b"adapted fixture");
+        let package = registry.find(DLSS5_PLUGIN_ID).unwrap().package_root.clone();
+        fs::write(
+            package.join("bridge/Dx11FsrBridge.dll"),
+            b"damaged installed component",
+        )
+        .unwrap();
+        assert!(bridge::stage(&registry, &root).is_err());
+        registry.set_enabled(DLSS5_PLUGIN_ID, false).unwrap();
+        assert!(bridge::stage(&registry, &root).is_err());
+        fs::remove_dir_all(temp).unwrap();
+    }
     #[test]
     fn profiles_keep_chain_and_nr_runtime_paired() {
         let (a, x) = profile_files("rtx50").unwrap();
@@ -568,7 +650,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap()
         ));
         let installation = import_at(&source, temp.join("owned 组件")).unwrap();
-        let mut registry = PluginRegistry::new(temp.join("plugins")).unwrap();
+        let mut registry = registry_with_bridge(&temp, &real_bridge());
         let plan = prepare_at(&registry, &installation).unwrap();
         assert_eq!(plan.dlls.len(), 3);
         assert!(plan.dlls[0].ends_with("ReShade64.dll"));

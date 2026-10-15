@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Debug",
@@ -6,6 +6,8 @@ param(
     [switch]$BuildTestPlugin,
 
     [bool]$BuildPoserProbe = $true,
+
+    [bool]$BuildGimiBridge = $true,
 
     [switch]$DeployToTestRuntime,
 
@@ -67,6 +69,7 @@ Invoke-Checked "cmake" @(
     "-S", $NativeDir,
     "-B", $BuildDir,
     "-DSSMT_BUILD_POSER_PROBE=$(if ($BuildPoserProbe) { 'ON' } else { 'OFF' })",
+    "-DSSMT_BUILD_GIMI_BRIDGE=$(if ($BuildGimiBridge) { 'ON' } else { 'OFF' })",
     "-DSSMT_POSER_ARTIFACT_DIR=$DistDir"
 )
 
@@ -128,7 +131,10 @@ foreach ($Name in $Artifacts) {
 & (Join-Path $NativeDir 'tools\stage-local-plugins.ps1') `
     -NativeArtifactDirectory $DistDir `
     -OutputDirectory (Join-Path $ResourceDir 'PluginPackages') `
-    -ExcludePluginId $(if ($BuildPoserProbe) { @() } else { @('ssmt.poser.genshin-probe') })
+    -ExcludePluginId @(
+        if (-not $BuildPoserProbe) { 'ssmt.poser.genshin-probe' }
+        if (-not $BuildGimiBridge) { 'ssmt.dlss5.integration' }
+    )
 
 if ($BuildTestPlugin) {
     $testPluginArgs = @(

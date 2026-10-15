@@ -306,7 +306,10 @@ mod tests {
             )
             .await
             .unwrap();
-            let registry = PluginRegistry::new(run.join("plugins")).unwrap();
+            let registry = super::super::tests::registry_with_bridge(
+                &run.join(profile),
+                &super::super::tests::real_bridge(),
+            );
             let plan = prepare_at(&registry, &installation).unwrap();
             assert_eq!(plan.dlls.len(), 3);
             assert!(!installation.root.join("GIMI").exists());

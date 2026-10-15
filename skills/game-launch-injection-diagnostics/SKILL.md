@@ -17,6 +17,8 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 - 原神 DLSS5 只允许热注入/Hook；把 DLL 或链接临时放回游戏目录再恢复仍属于冷替换。启动成功、仅有 ReShade 或 Feature 1 创建均不等于 NR 生效，应核对同次日志中的 Feature 18 成功帧及 Mod 画面。
 - 游戏已退出时先查当次 Unity 日志与 `%TEMP%/mihoyocrash_*` 的 dump；`error.log` 可能是无 BOM 的 UTF-16 LE，显式指定编码。根据 dump 的模块基址计算 RVA，并核对实际 DLL、PDB 标识与指令；UPX 解包只处理隔离副本。`calls=0` 时旧 Migoto 日志不会更新，不能据此断言没有注入。
 - Context 的 COM 虚表可能被 Bridge 按标准接口长度复制，Runtime 私有方法不得依赖追加的虚表尾部。内部帧分析派发使用对象成员，不能靠关闭 hunting 规避。回归 `runtime/tests/context-interop`，同时检查 Runtime 对象身份、进程退出码和完成标记；只用 GetProcAddress 或 DLL 载入夹具可能绕过实际 Runtime，完整组件未确认身份时不得计为通过。独立接口测试仍不能替代游戏内 NR 验收。
+- Runtime 的成员指针为空时先核对调用者传入的对象身份。Bridge 等组件不能把首个 COM 对象的方法全局复用于系统设备、Runtime 包装设备和显卡辅助设备；所有受影响的转发都应按对象保存。最终 Release 后清理该代登记，处理地址复用及第三方再次复制虚表；不能只给 Runtime 加空指针返回。回归 `native/SSMT-Gimi-Bridge` 的不同 COM 实现和真实 Runtime/系统 WARP 混合设备，确认旧实现可复现同一故障、修复后通过。旁置组件哈希只检查损坏，不能替代完整插件包的来源校验。
+- 第三方二进制的版本、导出及实际实现应与源码对应；集成包文档的 commit 也可能指向另一套后端。先核对源码历史再选择固定基线，补丁和归档哈希随构建入口维护，不能顺手切换渲染架构。插件辅助 DLL 不应伪装为 Plugin ABI runtimePlugins；随已验证插件包分发，启用后再暂存到专用副本，保留原始下载资源和无插件启动路径。
 - 热注入所需的环境必须在提权后的 Run.exe 内显式设置，再由挂起创建的目标继承；不能依赖 SSMT 环境跨 ShellExecute 提权继承。先加载 SSMT Runtime，再按计划加载 ReShade Host、Bridge、OptiScaler、额外 DLL 和可选 PluginHost，最后恢复目标线程。只为已安装且按游戏启用的插件准备资源，禁止再启动第二个 ReShade 注入器。
 - 复制组件前核对固定版本及显卡 Profile 的完整哈希，使用 SSMT 管理的副本；绝不为了复用组件包而替换其 GIMI DLL。组合配置中第三方 FX 的相对路径应基于实际资源所有者转为绝对路径，Windows canonicalize 的 verbatim 前缀不能直接与第三方正斜杠路径拼接。保留用户禁用的非必要 Add-on，插件关闭后清除它的本次贡献。
 - 插件设置应能从插件市场找到。组件由设置中的显式操作自动下载，离线导入作为补充；先核验实际可下载的完整 Profile，再固化 URL、版本、大小和哈希，不能把不含 NR 的仓库 ZIP 当成完整安装。复用资源缓存，在新自有目录准备后再切换设置，失败保留旧组件；普通启动不等待下载，可选组件失败只横幅说明本次未加载，不改变保存的插件启用状态。7z 固实压缩必须读完跳过的项，只将需要的项写入固定目标。切换游戏时丢弃旧资源状态/进度，回归入口为 `scripts/tests/test-plugin-graphics-settings.mjs`。
