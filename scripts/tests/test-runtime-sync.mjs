@@ -39,7 +39,7 @@ async function harness(t, options = {}) {
   const gameExe = path.join(root, 'Game.exe');
   await fs.writeFile(gameExe, 'game fixture');
   await fs.writeFile(path.join(migotoDir, 'd3dx.ini'), '[Loader]\nmodule = d3d11.dll\n');
-  const config = { gamePreset: 'GIMI', targetExePath: gameExe, installDir: migotoDir, useUpx: !!options.useUpx };
+  const config = { gamePreset: options.gamePreset || 'GIMI', targetExePath: gameExe, installDir: migotoDir, useUpx: !!options.useUpx, configureGame: options.configureGame };
   const calls = [];
   const messages = [];
   const dialogs = [];
@@ -78,6 +78,7 @@ async function harness(t, options = {}) {
       }
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
       if (command === 'bundled_player_tweaks_enabled_for_game') return false;
+      if (command === 'configure_gimi_launch_settings') return null;
       if (['prepare_hoyoshade_launch', 'prepare_plugin_host_config', 'launch_programs'].includes(command)) return null;
       if (command === 'execute_external_program') return options.upxResult?.(args) ?? { code: 1, stdout: '', stderr: 'UPX failed' };
       assert.fail(`Unexpected IPC: ${command}`);
@@ -209,6 +210,15 @@ test('pure launch does not read or deploy runtime or plugin resources', async t 
   assert.equal(h.dialogs.length, 0);
   assert.equal(h.messages.some(({ kind }) => kind === 'warning'), false);
   assert.deepEqual(h.calls.map(call => call.command), ['launch_programs']);
+});
+
+test('GIMI configuration follows the saved switch before injection', async t => {
+  const h = await harness(t, { configureGame: false });
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+  const configure = h.calls.findIndex(call => call.command === 'configure_gimi_launch_settings');
+  assert.ok(configure >= 0);
+  assert.equal(h.calls[configure].args.options.configureGame, false);
+  assert.ok(configure < h.calls.findIndex(call => call.command === 'launch_programs'));
 });
 
 test('already packed runtime passes UPX validation without repacking', async t => {

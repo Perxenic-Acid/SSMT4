@@ -179,6 +179,7 @@ pub fn run() {
             commands::clipboard::clipboard_write_text,
             commands::game_discovery::find_game_executable,
             commands::game_launcher::configure_zzmi_launch_settings,
+            commands::gimi_settings::configure_gimi_launch_settings,
             commands::game_launcher::configure_wwmi_launch_settings,
             commands::game_launcher::execute_external_program,
             commands::game_launcher::launch_programs,

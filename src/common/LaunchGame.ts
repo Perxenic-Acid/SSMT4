@@ -459,6 +459,12 @@ export class LaunchGame {
             }
         }
 
+        if (launchTargetProgram && (migotoCfg.gamePreset || "").trim() === "GIMI") {
+            await invoke("configure_gimi_launch_settings", {
+                options: { targetExePath: targetExe, configureGame: migotoCfg.configureGame !== false },
+            });
+        }
+
         if (
             launchTargetProgram &&
             (migotoCfg.gamePreset || "").trim() === "WWMI"
