@@ -218,7 +218,9 @@ export class MigotoManager {
     }
 
     const runShell = !!cfg.useShell
-    if (runShell) {
+    const officialLauncherRequired = (cfg.gamePreset || '').trim().toUpperCase() === 'EFMI'
+    // 手动模式不能留下 launch；终末地由官方启动器创建进程，以保留其启动上下文。
+    if (runShell || cfg.launchTargetProgram === false || officialLauncherRequired) {
       lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch')
       lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch_args')
     } else {
@@ -226,8 +228,6 @@ export class MigotoManager {
         ? cfg.targetExePath.trim()
         : ''
 
-      // Extra DLL injection in Run.exe only happens on the launch-and-inject path.
-      // If `launch` is empty, Run.exe falls back to wait mode and skips inject_dlls.
       if (launchTarget) {
         lines = D3dxIniManager.setIniValue(lines, 'Loader', 'launch', launchTarget)
       } else {

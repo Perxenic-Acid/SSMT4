@@ -12,6 +12,12 @@
 - SSMT4文档源代码：https://github.com/Perxenic-Acid/SSMT4-Documents
 - SSMT4文档阅读地址：https://perxenic-acid.github.io/SSMT4-Documents/
 
+## 终末地（EFMI）启动
+
+先在官方启动器中启用 DirectX 11，再点击 SSMT 启动，并在 120 秒内从官方启动器开始游戏。
+EFMI 会等待实际游戏进程后直接注入；Shell 模式可打开配置的官方启动器。
+游戏目标路径仍需填写 `Endfield.exe`。详细步骤与诊断入口见 [终末地注入说明](docs/efmi-injection.md)。
+
 ## 本地 Native 插件开发
 
 运行 `./build_native.ps1 -Configuration Release` 会构建 Native 工具和可选 Poser，

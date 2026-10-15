@@ -1538,6 +1538,7 @@
       "shellLauncherPathRequired": "Shell launch is enabled, but the launcher path is empty. Please configure the launcher path first.",
       "launcherProgramFileNotFound": "The configured launcher executable does not exist. Please verify the path and try again: {path}",
       "launchFlowExecuted": "Launch flow executed successfully",
+      "efmiOfficialLauncherWait": "Endfield: SSMT waits up to 120 seconds to inject after the official launcher starts the game. Enable DirectX 11 in the official launcher, then start the game there. Normal mode only waits; Shell mode can open the configured official launcher first. SSMT launch arguments do not apply to the game process created by that launcher.",
       "launchFailed": "Launch failed: {error}",
       "launchFailedDetailed": "Launch failed.\n\nDetailed error:\n{error}",
       "d3d11BusyHint": "d3d11.dll may still be in use by the game process. Some games keep running silently in the background even after the window is closed. End the related game process in Task Manager, or restart your PC and try again.",

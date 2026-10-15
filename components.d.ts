@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppUpdateDialog: typeof import('./src/components/AppUpdateDialog.vue')['default']
     CacheFolderPicker: typeof import('./src/components/CacheFolderPicker.vue')['default']
+    ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAutocomplete: typeof import('element-plus/es')['ElAutocomplete']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCheckbox: typeof import('element-plus/es')['ElCheckbox']

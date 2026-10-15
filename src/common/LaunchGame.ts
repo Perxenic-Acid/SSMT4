@@ -410,7 +410,8 @@ export class LaunchGame {
             }
         }
 
-        if (launchTargetProgram && !targetExe) {
+        const requiresTargetPath = launchTargetProgram || gamePreset === "EFMI";
+        if (requiresTargetPath && !targetExe) {
             ElMessage.warning(
                 t("launchGame.messages.targetProcessPathNotConfigured"),
             );
@@ -418,7 +419,7 @@ export class LaunchGame {
             return null;
         }
 
-        if (launchTargetProgram && !(await exists(targetExe))) {
+        if (requiresTargetPath && !(await exists(targetExe))) {
             ElMessage.error(t("launchGame.messages.targetProcessFileNotFound"));
             return null;
         }
@@ -556,6 +557,8 @@ export class LaunchGame {
             const targetProcessName = this.getProcessNameFromPath(targetExe);
             const useShell = launchTargetProgram && (config.useShell || false);
             const useRunInjector = !pureMode || !launchTargetProgram;
+            const useEfmiDirectWait = useRunInjector &&
+                (config.gamePreset || "").trim().toUpperCase() === "EFMI";
 
             if (launchTargetProgram && useShell && !launcherExePath) {
                 ElMessage.warning(
@@ -666,13 +669,18 @@ export class LaunchGame {
             }
 
             if (useRunInjector) {
+                const injectorArgs: string[] = [];
+                if (effectivePluginHostConfig) {
+                    injectorArgs.push(`--plugin-host-config "${effectivePluginHostConfig.replace(/"/g, '\\"')}"`);
+                }
+                if (useEfmiDirectWait) {
+                    injectorArgs.push("--inject-mode direct --wait-for-target --process-timeout 120");
+                }
                 // 1. Default flow launches Run.exe first.
                 programs.push({
                     path: await join(migotoDir, "Run.exe"),
                     workDir: migotoDir,
-                    args: effectivePluginHostConfig
-                        ? `--plugin-host-config "${effectivePluginHostConfig.replace(/"/g, '\\"')}"`
-                        : undefined,
+                    args: injectorArgs.join(" ") || undefined,
                     // Run.exe 带有 requireAdministrator manifest。SSMT 未提权时，
                     // Start-Process 必须显式使用 RunAs，否则 Windows 会返回
                     // ERROR_ELEVATION_REQUIRED，HoYoShade 也会一直等待不存在的进程。
@@ -680,6 +688,9 @@ export class LaunchGame {
                     waitForProcessName: useShell ? "Run.exe" : undefined,
                     waitTimeoutSecs: useShell ? 30 : undefined,
                 });
+                if (useEfmiDirectWait) {
+                    ElMessage.info({ message: t("launchGame.messages.efmiOfficialLauncherWait"), duration: 15000 });
+                }
             }
 
             // 2. Pure mode launches the target directly; shell mode keeps existing behavior.
@@ -707,14 +718,14 @@ export class LaunchGame {
             const shouldWaitForTargetProcess =
                 launchTargetProgram &&
                 !!targetProcessName &&
-                ((!pureMode && !useShell) || postLaunchPrograms.length > 0);
+                ((!pureMode && !useShell && !useEfmiDirectWait) || postLaunchPrograms.length > 0);
 
             if (shouldWaitForTargetProcess) {
                 programs.push({
                     path: "",
                     waitOnly: true,
                     waitForProcessName: targetProcessName,
-                    waitTimeoutSecs: 30,
+                    waitTimeoutSecs: useEfmiDirectWait ? 120 : 30,
                 });
             }
 

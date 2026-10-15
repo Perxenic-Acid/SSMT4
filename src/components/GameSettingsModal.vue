@@ -117,6 +117,7 @@ const tabs = computed(() => [
 ]);
 
 const isWWMIPreset = computed(() => (config.gamePreset || '').trim().toUpperCase() === 'WWMI');
+const isEFMIPreset = computed(() => (config.gamePreset || '').trim().toUpperCase() === 'EFMI');
 const visibleDllReleaseList = computed(() => dllReleaseList.value.slice(0, dllVisibleCount.value));
 const hasMoreDllReleases = computed(() => dllReleaseList.value.length > dllVisibleCount.value);
 const currentPackageVersion = computed(() => (config.packageVersion || '').trim());
@@ -132,8 +133,10 @@ const launchMode = computed({
   set: (val: 'normal' | 'shell') => {
     if (val === 'shell') {
       config.useShell = true;
-      config.extraDll = '';
-      config.extraDlls = [];
+      if (!isEFMIPreset.value) {
+        config.extraDll = '';
+        config.extraDlls = [];
+      }
     } else {
       config.useShell = false;
     }
@@ -1161,6 +1164,8 @@ defineExpose({
                 </div>
                 <input v-model="config.launchArgs" type="text" class="custom-input"
                   :placeholder="t('gameSettingsModal.placeholders.launchArgumentsExample')" />
+                <el-alert v-if="isEFMIPreset" :title="t('launchGame.messages.efmiOfficialLauncherWait')"
+                  type="info" :closable="false" show-icon style="margin-top:12px" />
 
                 <div class="settings-flex-row">
                   <div>
@@ -1188,7 +1193,7 @@ defineExpose({
                   </div>
                 </div>
 
-                <div v-if="!config.useShell">
+                <div v-if="!config.useShell || isEFMIPreset">
                   <div class="settings-field-label" style="margin-bottom:6px">{{ t('gameSettingsModal.fields.extraInjectedDll') }}</div>
                   <div v-for="(_dll, index) in config.extraDlls" :key="index" class="settings-path-row" style="margin-bottom:6px">
                     <input v-model="config.extraDlls![index]" type="text" class="settings-path-input" :placeholder="t('gameSettingsModal.placeholders.selectOrLeaveEmpty')" @input="syncPrimaryExtraDll" />
