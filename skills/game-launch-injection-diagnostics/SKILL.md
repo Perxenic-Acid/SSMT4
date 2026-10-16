@@ -21,6 +21,7 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 - 第三方二进制的版本、导出及实际实现应与源码对应；集成包文档的 commit 也可能指向另一套后端。先核对源码历史再选择固定基线，补丁和归档哈希随构建入口维护，不能顺手切换渲染架构。插件辅助 DLL 不应伪装为 Plugin ABI runtimePlugins；随已验证插件包分发，启用后再暂存到专用副本，保留原始下载资源和无插件启动路径。
 - 原神切换 FSR2 后若在 OptiScaler 空参数表崩溃，核对实际调用函数的 DX11/DX12 分支。`Dx11Upscaler=dlss_12` 只是输出后端，模板 `UseFsr2Dx11Inputs=auto` 默认仍是 DX12；准备时必须固定 FSR2 DX11 输入、关闭 Vulkan 输入，并补齐单 Host 与设备虚表兼容项。以真实组件的旧配置复现同一 RVA，再验证修复配置 Create/Dispatch/Destroy；系统设备夹具不代表 Runtime 共存或 NR 验收通过。无 Present 的夹具不能耗尽等待 Present 回收的环形缓冲。
 - 热注入所需的环境必须在提权后的 Run.exe 内显式设置，再由挂起创建的目标继承；不能依赖 SSMT 环境跨 ShellExecute 提权继承。先加载 SSMT Runtime，再按计划加载 ReShade Host、Bridge、OptiScaler、额外 DLL 和可选 PluginHost，最后恢复目标线程。只为已安装且按游戏启用的插件准备资源，禁止再启动第二个 ReShade 注入器。
+- D3D11 挂起预加载前先在目标进程加载系统 D3D11，再加载 Runtime。Runtime 的 DllMain 仅能挂钩已存在模块；Runtime 先到可能被当作主代理，晚加载的系统入口会漏掉。验证使用不链接 d3d11.lib 的独立目标，检查系统模块顺序及实际 Context 身份；只在 main 中手动调整加载顺序不足以代表远程预加载。CBT / 预加载的最终检测均须比较实际文件身份。
 - 复制组件前核对固定版本及显卡 Profile 的完整哈希，使用 SSMT 管理的副本；绝不为了复用组件包而替换其 GIMI DLL。组合配置中第三方 FX 的相对路径应基于实际资源所有者转为绝对路径，Windows canonicalize 的 verbatim 前缀不能直接与第三方正斜杠路径拼接。保留用户禁用的非必要 Add-on，插件关闭后清除它的本次贡献。
 - 插件设置应能从插件市场找到。组件由设置中的显式操作自动下载，离线导入作为补充；先核验实际可下载的完整 Profile，再固化 URL、版本、大小和哈希，不能把不含 NR 的仓库 ZIP 当成完整安装。复用资源缓存，在新自有目录准备后再切换设置，失败保留旧组件；普通启动不等待下载，可选组件失败只横幅说明本次未加载，不改变保存的插件启用状态。7z 固实压缩必须读完跳过的项，只将需要的项写入固定目标。切换游戏时丢弃旧资源状态/进度，回归入口为 `scripts/tests/test-plugin-graphics-settings.mjs`。
 - 目标必须匹配完整 EXE 文件身份。系统 `d3d11.dll` 与自定义 Runtime 同名，模块验证也必须匹配实际文件；枚举被拒绝不能报告 `runtime_detected`。
