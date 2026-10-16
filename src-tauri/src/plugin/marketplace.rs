@@ -110,6 +110,8 @@ impl MarketplaceCatalog {
         }
         let mut ids = HashSet::new();
         for entry in &self.entries {
+            super::validate_external_dependencies(&entry.external_dependencies)
+                .map_err(|error| MarketplaceError::InvalidEntry(error.to_string()))?;
             if !ids.insert(format!("{}@{}", entry.id, entry.version)) {
                 return Err(MarketplaceError::DuplicateEntry(format!(
                     "{}@{}",
@@ -236,6 +238,18 @@ mod tests {
         }
         .validate()
         .unwrap();
+    }
+
+    #[test]
+    fn catalog_checks_dependency_download_sources_too() {
+        let mut value = entry();
+        value.external_dependencies = serde_json::from_value(serde_json::json!([
+            {"id":"tool","type":"directory","downloadUrl":"javascript:alert(1)"}
+        ])).unwrap();
+        let mut catalog = MarketplaceCatalog { schema_version: 1, entries: vec![value] };
+        assert!(catalog.validate().is_err());
+        catalog.entries[0].external_dependencies[0].download_url = Some("https://example.com/tool/releases".into());
+        catalog.validate().unwrap();
     }
 
     #[test]

@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { invoke } from '@tauri-apps/api/core'
 import { defineAsyncComponent, type AsyncComponentLoader } from 'vue'
 import { ElMessage } from 'element-plus'
 import { exists } from '@tauri-apps/plugin-fs'
@@ -90,18 +89,8 @@ const routes = [
   {
     path: '/plugins/hoyoshade',
     name: 'HoYoShadeSettings',
-    component: Settings,
     meta: { title: 'HoYoShade Bridge', requiresGame: false },
-    beforeEnter: async () => {
-      try {
-        const plugins = await invoke<Array<{ manifest: { id: string } }>>('plugin_registry_snapshot')
-        return plugins.some(plugin => plugin.manifest.id === 'ssmt.hoyoshade.bridge')
-          ? { name: 'Settings', hash: '#settings-plugins' }
-          : { name: 'PluginMarketplace' }
-      } catch {
-        return { name: 'PluginMarketplace' }
-      }
-    },
+    redirect: { name: 'PluginMarketplace', query: { plugin: 'ssmt.hoyoshade.bridge', tab: 'dependencies' } },
   },
 ]
 

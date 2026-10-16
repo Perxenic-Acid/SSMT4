@@ -187,6 +187,10 @@ pub struct ExternalDependency {
     pub required_files: Vec<String>,
     #[serde(default)]
     pub required_for: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,6 +470,22 @@ fn validate_external_dependencies(
 ) -> Result<(), PluginManifestError> {
     let mut ids = HashSet::new();
     for dependency in dependencies {
+        if let Some(raw) = &dependency.download_url {
+            let valid = reqwest::Url::parse(raw).is_ok_and(|url| {
+                url.scheme() == "https" && url.has_host()
+                    && url.username().is_empty() && url.password().is_none()
+            });
+            if !valid || raw.len() > 4096 || raw.trim() != raw || raw.chars().any(char::is_control) {
+                return Err(PluginManifestError::InvalidExternalDependency(
+                    format!("download URL must use HTTPS without credentials: {}", dependency.id),
+                ));
+            }
+        }
+        if dependency.download_hint.as_ref().is_some_and(|hint| hint.trim().is_empty() || hint.len() > 4096) {
+            return Err(PluginManifestError::InvalidExternalDependency(
+                format!("invalid download hint: {}", dependency.id),
+            ));
+        }
         if let Some(features) = &dependency.required_for {
             for feature in features { validate_plugin_id(feature)?; }
         }
@@ -813,5 +833,20 @@ mod tests {
         assert!(json["externalDependencies"][0]
             .get("requiredFiles")
             .is_some());
+    }
+
+    #[test]
+    fn dependency_download_metadata_is_optional_and_requires_safe_https() {
+        let original = valid_manifest();
+        assert!(original.external_dependencies[0].download_url.is_none());
+        let mut manifest = original;
+        manifest.external_dependencies[0].download_url = Some("https://example.com/releases?version=1".into());
+        manifest.external_dependencies[0].download_hint = Some("下载并解压后选择目录。".into());
+        let json = serde_json::to_string(&manifest).unwrap();
+        assert_eq!(PluginManifest::from_json_str(&json).unwrap(), manifest);
+        for url in ["http://example.com", "javascript:alert(1)", "file:///C:/tool.exe", "https://user:pass@example.com", "https://user@example.com", "https://", " https://example.com", "https://example.com/\npath"] {
+            manifest.external_dependencies[0].download_url = Some(url.into());
+            assert!(manifest.validate().is_err(), "accepted unsafe URL: {url}");
+        }
     }
 }

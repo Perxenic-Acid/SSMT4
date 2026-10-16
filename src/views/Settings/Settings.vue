@@ -2,7 +2,7 @@
 import { AppStateManager, type GameInfo } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
 import { getGamePresetDisplayName, getGamePresetOptions } from '../../store/GamePreset'
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   APP_UI_SCALE_MAX,
   APP_UI_SCALE_MIN,
@@ -38,7 +38,6 @@ import {
   View,
 } from '@element-plus/icons-vue';
 import type { OptionalPageId } from '../../store/AppSettings';
-import HoYoShadeSettings from '../../plugin/components/HoYoShadeSettings.vue';
 import {
   checkAndInstallAppUpdate,
   isCheckingAppUpdate,
@@ -48,7 +47,6 @@ import {
 const appSettings = AppStateManager.appSettings;
 const textureMarkStyleOptions = ['Hash', 'Slot', 'SharedSlot'] as const;
 const { t } = useI18n();
-const hoyoshadeSettingsVisible = ref(false);
 
 const settingsNavGroups = computed(() => [
   {
@@ -57,14 +55,6 @@ const settingsNavGroups = computed(() => [
       { id: 'settings-general', label: t('settings.sections.general') },
       { id: 'settings-appearance', label: t('settings.sections.appearance') },
       { id: 'settings-page-visibility', label: t('settings.sections.pageVisibility') },
-    ],
-  },
-  {
-    title: t('settings.navigation.integrations'),
-    items: [
-      ...(hoyoshadeSettingsVisible.value
-        ? [{ id: 'settings-plugins', label: t('settings.sections.plugins') }]
-        : []),
     ],
   },
   {
@@ -81,18 +71,6 @@ const settingsNavGroups = computed(() => [
 
 const scrollToSettingsSection = (id: string) => {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-};
-
-const refreshPluginSettings = async () => {
-  try {
-    const plugins = await invoke<Array<{ manifest: { id: string } }>>('plugin_registry_snapshot');
-    hoyoshadeSettingsVisible.value = plugins.some(
-      plugin => plugin.manifest.id === 'ssmt.hoyoshade.bridge',
-    );
-  } catch (error) {
-    console.error('Failed to load plugin UI routes:', error);
-    hoyoshadeSettingsVisible.value = false;
-  }
 };
 
 const languageOptions = SSMT_LOCALE_OPTIONS;
@@ -183,7 +161,6 @@ onMounted(async () => {
   } catch (e) {
     console.error('Failed to get version:', e);
   }
-  await refreshPluginSettings();
   await nextTick();
   const hash = window.location.hash.slice(1);
   if (hash) scrollToSettingsSection(decodeURIComponent(hash));
@@ -610,16 +587,6 @@ const confirmCreateGame = async () => {
                   </label>
                 </div>
               </div>
-            </div>
-          </section>
-
-          <section v-if="hoyoshadeSettingsVisible" id="settings-plugins" class="settings-section">
-            <div class="section-heading">
-              <h2>{{ t('settings.sections.plugins') }}</h2>
-              <p>{{ t('settings.sections.pluginsDesc') }}</p>
-            </div>
-            <div class="settings-group plugin-settings-group">
-              <HoYoShadeSettings embedded />
             </div>
           </section>
 

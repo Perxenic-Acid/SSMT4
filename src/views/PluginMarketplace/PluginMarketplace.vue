@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { openPath, openUrl } from '@tauri-apps/plugin-opener'
 import { ElMessage } from 'element-plus'
 import { FolderOpened, Refresh, Search, Setting, Document, Delete, Box, InfoFilled } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 import { AppStateManager } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
-import { getGamePresetPriority } from '../../store/GamePreset'
 
 const PlayerTweaksCameraSettings = defineAsyncComponent(
   () => import('../../plugin/components/PlayerTweaksCameraSettings.vue'),
@@ -29,6 +29,14 @@ interface DependencyState {
   reason?: string | null
 }
 
+interface ExternalDependency {
+  id: string
+  requiredFiles: string[]
+  requiredFor?: string[] | null
+  downloadUrl?: string | null
+  downloadHint?: string | null
+}
+
 interface PluginManifest {
   id: string
   name: string
@@ -37,7 +45,7 @@ interface PluginManifest {
   description?: string
   compatibility?: { games?: string[] }
   permissions: string[]
-  externalDependencies: Array<{ id: string; type: string; requiredFiles: string[] }>
+  externalDependencies: ExternalDependency[]
   contributions?: { hostExtensions?: Array<{ id: string; settingsComponent?: string | null }> }
 }
 
@@ -60,7 +68,7 @@ interface CatalogEntry {
   version: string
   supportedGames: string[]
   permissions: string[]
-  externalDependencies: Array<{ id: string; requiredFiles: string[] }>
+  externalDependencies: ExternalDependency[]
   bundled?: boolean
   official?: boolean
   localArchive?: string
@@ -86,17 +94,12 @@ interface OfficialCatalogEntry {
   version: string
   supportedGames: string[]
   permissions: string[]
-  externalDependencies: Array<{ id: string; requiredFiles: string[] }>
+  externalDependencies: ExternalDependency[]
 }
 
 const { t } = useI18n()
-const router = useRouter()
-const gamesList = AppStateManager.gamesList
-// 游戏选择器按预设优先级排序,重要游戏置顶。
-const orderedGamesList = computed(() =>
-  [...gamesList].sort((a, b) => getGamePresetPriority(a.name) - getGamePresetPriority(b.name)),
-)
-const selectedGameName = ref(AppStateManager.appSettings.CurrentGameName === 'Default'
+const route = useRoute()
+const selectedGameName = computed(() => AppStateManager.appSettings.CurrentGameName === 'Default'
   ? '' : AppStateManager.appSettings.CurrentGameName)
 
 const catalog = ref<CatalogEntry[]>([])
@@ -110,9 +113,9 @@ const reviewLocalId = ref('')
 const reviewInspection = ref<PackageInspection | null>(null)
 
 const activeTab = ref<'discover' | 'installed' | 'updates'>('discover')
-const detailTab = ref<'features' | 'dependencies' | 'permissions' | 'details'>('features')
+const detailTab = ref<'features' | 'dependencies' | 'permissions' | 'details'>(route.query.tab === 'dependencies' ? 'dependencies' : 'features')
 const searchQuery = ref('')
-const selectedId = ref('')
+const selectedId = ref(typeof route.query.plugin === 'string' ? route.query.plugin : '')
 const installed = ref<InstalledPlugin[]>([])
 const installedGameName = ref('')
 const loading = ref(false)
@@ -140,6 +143,39 @@ const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.
 const hasSettings = (plugin: InstalledPlugin | undefined, component: string) =>
   plugin?.manifest.contributions?.hostExtensions?.some(extension => extension.settingsComponent === component) ?? false
 const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
+// 已安装版本可能与目录中的待更新版本不同，操作必须使用实际安装的依赖声明。
+const selectedDependencies = computed(() => selectedPlugin.value?.manifest.externalDependencies ?? selectedEntry.value?.externalDependencies ?? [])
+const dependencyActionsEnabled = computed(() => !!selectedPlugin.value?.enabled && !loading.value
+  && selectedPlugin.value.lifecycleStatus !== 'incompatible'
+  && (selectedPlugin.value.appScoped || (!!selectedGameName.value && installedGameName.value === selectedGameName.value)))
+const optionalDependency = (dependency: ExternalDependency) => Array.isArray(dependency.requiredFor) && !dependency.requiredFor.includes('launch')
+const dependencyDownloadUrl = (dependency: ExternalDependency) => {
+  const raw = dependency.downloadUrl
+  if (!raw || raw.trim() !== raw || /[\u0000-\u001f\u007f]/.test(raw)) return null
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'https:' && url.hostname && !url.username && !url.password ? url : null
+  } catch { return null }
+}
+const dependencyDownloadSource = (dependency: ExternalDependency) => dependencyDownloadUrl(dependency)?.hostname ?? ''
+const openDependencyDownload = async (dependencyId: string) => {
+  if (!dependencyActionsEnabled.value) return
+  const dependency = selectedDependencies.value.find(item => item.id === dependencyId)
+  const url = dependency && dependencyDownloadUrl(dependency)
+  if (!url) return
+  try { await openUrl(url.href) }
+  catch (error) { ElMessage.error(t('pluginMarketplace.dependencyAcquisition.openFailed', { error: String(error) })) }
+}
+const openDependencySettings = () => {
+  if (dependencyActionsEnabled.value) openPluginSettings()
+}
+const openDependencyDirectory = async (dependencyId: string) => {
+  if (!dependencyActionsEnabled.value) return
+  const dependency = selectedPlugin.value?.externalDependencies[dependencyId]
+  if (dependency?.status !== 'ready' || !dependency.path) return
+  try { await openPath(dependency.path) }
+  catch (error) { ElMessage.error(t('pluginMarketplace.dependencyAcquisition.openFolderFailed', { error: String(error) })) }
+}
 const graphicsTargetExe = ref('')
 const graphicsConfigLoading = ref(false)
 const graphicsConfigError = ref('')
@@ -456,7 +492,7 @@ const openPluginSettings = () => {
     return
   }
   if (selectedSettings.value.includes('ssmt.reshade.settings')) {
-    void router.push({ name: 'Settings', hash: '#settings-plugins' })
+    detailTab.value = 'dependencies'
   }
 }
 
@@ -490,10 +526,6 @@ watch(visibleEntries, (entries) => {
 watch(selectedId, () => { detailTab.value = 'features' })
 
 onMounted(async () => {
-  if (!gamesList.length) await AppStateManager.loadGames()
-  if (!gamesList.some(game => game.name === selectedGameName.value)) {
-    selectedGameName.value = orderedGamesList.value[0]?.name ?? ''
-  }
   initialized = true
   await refreshAll()
 })
@@ -501,33 +533,6 @@ onMounted(async () => {
 
 <template>
   <main class="plugin-marketplace">
-    <header class="marketplace-header">
-      <div class="page-identity">
-        <h1>{{ t('pluginMarketplace.title') }}</h1>
-        <p>{{ t('pluginMarketplace.subtitle') }}</p>
-      </div>
-      <div class="toolbar-actions">
-        <el-button :icon="Refresh" :loading="refreshing" @click="refreshAll">
-          {{ t('pluginMarketplace.actions.refresh') }}
-        </el-button>
-        <el-button :icon="FolderOpened" :disabled="loading" @click="installFromFile">
-          {{ t('pluginMarketplace.actions.installFromFile') }}
-        </el-button>
-      </div>
-    </header>
-
-    <div class="marketplace-context">
-      <label for="plugin-game-select">{{ t('pluginMarketplace.gameSelection') }}</label>
-      <el-select id="plugin-game-select" v-model="selectedGameName" filterable
-        :placeholder="t('pluginMarketplace.chooseGame')" class="game-select">
-        <el-option v-for="game in orderedGamesList" :key="game.name" :label="game.name" :value="game.name" />
-      </el-select>
-      <span class="scope-note">{{ selectedPlugin?.appScoped
-        ? t('pluginMarketplace.appScopeHint')
-        : selectedGameName ? t('pluginMarketplace.gameScopeHint', { game: selectedGameName })
-        : t('pluginMarketplace.noGameHint') }}</span>
-    </div>
-
     <details v-if="catalogError || localCatalogError" class="catalog-notice">
       <summary><InfoFilled aria-hidden="true" /><span>{{ t('pluginMarketplace.catalogUnavailable') }}</span><span class="notice-details">{{ t('pluginMarketplace.showDetails') }}</span></summary>
       <p v-if="catalogError">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</p>
@@ -541,6 +546,12 @@ onMounted(async () => {
             :aria-label="t('pluginMarketplace.searchPlaceholder')" @keydown.esc="searchQuery = ''">
             <template #prefix><Search class="search-icon" /></template>
           </el-input>
+          <el-button class="search-action" :icon="Refresh" :loading="refreshing"
+            :title="t('pluginMarketplace.actions.refresh')" :aria-label="t('pluginMarketplace.actions.refresh')"
+            @click="refreshAll" />
+          <el-button class="search-action" :icon="FolderOpened" :disabled="loading"
+            :title="t('pluginMarketplace.actions.installFromFile')" :aria-label="t('pluginMarketplace.actions.installFromFile')"
+            @click="installFromFile" />
         </div>
         <div class="sidebar-tabs" role="group" :aria-label="t('pluginMarketplace.browsePlugins')">
           <button v-for="tab in (['discover', 'installed', 'updates'] as const)" :key="tab" type="button"
@@ -681,12 +692,25 @@ onMounted(async () => {
             <section v-else-if="detailTab === 'dependencies'" class="detail-section">
               <h3>{{ t('pluginMarketplace.sections.externalDependencies') }}</h3>
               <p class="section-hint">{{ t('pluginMarketplace.dependencyHint') }}</p>
-              <div v-if="selectedEntry.externalDependencies.length === 0" class="muted-copy">
+              <div v-if="selectedSettings.includes('ssmt.dlss5.settings')" class="dependency-row dependency-managed">
+                <strong>{{ t('pluginMarketplace.dependencyAcquisition.hotComponents') }}</strong>
+                <p class="section-hint">{{ t('pluginMarketplace.dependencyAcquisition.hotHint') }}</p>
+                <el-button type="primary" size="small" :disabled="!dependencyActionsEnabled" @click="openDependencySettings">
+                  {{ t('pluginMarketplace.dependencyAcquisition.configureDownload') }}
+                </el-button>
+              </div>
+              <p v-if="!dependencyActionsEnabled && (selectedDependencies.length || selectedSettings.includes('ssmt.dlss5.settings'))" class="section-hint">
+                {{ t('pluginMarketplace.dependencyAcquisition.enableFirst') }}
+              </p>
+              <div v-if="selectedDependencies.length === 0 && !selectedSettings.includes('ssmt.dlss5.settings')" class="muted-copy">
                 {{ t('pluginMarketplace.none') }}
               </div>
-              <div v-for="dependency in selectedEntry.externalDependencies" :key="dependency.id" class="dependency-row">
+              <div v-for="dependency in selectedDependencies" :key="dependency.id" class="dependency-row">
                 <div class="dependency-heading">
                   <strong>{{ dependency.id }}</strong>
+                  <span v-if="optionalDependency(dependency)" class="dependency-optional">
+                    {{ t('pluginMarketplace.dependencyAcquisition.optional') }}
+                  </span>
                   <span v-if="selectedPlugin?.externalDependencies[dependency.id]" class="dependency-status"
                     :class="dependencyStatusClass(selectedPlugin.externalDependencies[dependency.id].status)">
                     {{ dependencyStatusLabel(selectedPlugin.externalDependencies[dependency.id].status) }}
@@ -699,10 +723,25 @@ onMounted(async () => {
                 <p v-if="selectedPlugin?.externalDependencies[dependency.id]?.reason" class="dependency-reason">
                   {{ selectedPlugin.externalDependencies[dependency.id].reason }}
                 </p>
-                <el-button v-if="selectedPlugin" size="small" :disabled="loading"
-                  @click="configureDependency(selectedEntry.id, dependency.id)">
-                  {{ t('pluginMarketplace.actions.chooseDependencyPath') }}
-                </el-button>
+                <p class="section-hint">{{ dependency.downloadHint || (!dependencyDownloadSource(dependency) ? t('pluginMarketplace.dependencyAcquisition.unavailable') : '') }}</p>
+                <div class="dependency-actions">
+                  <el-button v-if="dependencyDownloadSource(dependency)" size="small" :disabled="!dependencyActionsEnabled"
+                    @click="openDependencyDownload(dependency.id)">
+                    {{ t('pluginMarketplace.dependencyAcquisition.downloadPage') }}
+                  </el-button>
+                  <el-button v-if="selectedPlugin" size="small" :disabled="loading"
+                    @click="configureDependency(selectedEntry.id, dependency.id)">
+                    {{ t('pluginMarketplace.actions.chooseDependencyPath') }}
+                  </el-button>
+                  <el-button v-if="selectedPlugin?.externalDependencies[dependency.id]?.path" size="small"
+                    :disabled="!dependencyActionsEnabled || selectedPlugin.externalDependencies[dependency.id].status !== 'ready'"
+                    @click="openDependencyDirectory(dependency.id)">
+                    {{ t('pluginMarketplace.dependencyAcquisition.openFolder') }}
+                  </el-button>
+                  <span v-if="dependencyDownloadSource(dependency)" class="dependency-source">
+                    {{ t('pluginMarketplace.dependencyAcquisition.source', { host: dependencyDownloadSource(dependency) }) }}
+                  </span>
+                </div>
               </div>
             </section>
             <section v-else-if="detailTab === 'permissions'" class="detail-section">
@@ -779,15 +818,10 @@ onMounted(async () => {
   padding: var(--t-page-padding);
   color: var(--t-page-text);
 }
-.marketplace-header, .marketplace-context, .toolbar-actions, .detail-top, .detail-actions, .dependency-heading {
+.detail-top, .detail-actions, .dependency-heading {
   display: flex;
   align-items: center;
 }
-.marketplace-header { justify-content: space-between; gap: 20px; }
-.page-identity h1 { margin: 0; font-size: 23px; font-weight: 650; letter-spacing: -.5px; }
-.page-identity p { margin: 6px 0 0; color: var(--market-muted); font-size: 12px; line-height: 1.6; }
-.marketplace-context { gap: 12px; flex-wrap: wrap; padding: 12px 16px; border: var(--t-page-panel-border); border-radius: var(--t-page-section-radius); background: var(--t-page-panel-bg); }
-.marketplace-context label { flex: none; font-size: 12px; font-weight: 600; }
 .catalog-notice { border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); font-size: 12px; line-height: 1.6; }
 .catalog-notice summary { display: flex; align-items: center; gap: 9px; padding: 10px 14px; cursor: pointer; list-style: none; color: var(--t-warning-text); }
 .catalog-notice summary::-webkit-details-marker { display: none; }
@@ -796,15 +830,11 @@ onMounted(async () => {
 .catalog-notice p { padding: 0 14px 12px 39px; margin: 0; overflow-wrap: anywhere; color: var(--market-muted); }
 .review-detail { font: 11px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
 .review-disclaimer { padding: 12px; border: var(--t-page-panel-border); border-radius: 6px; line-height: 1.6; }
-.scope-note, .section-hint, .muted-copy {
+.section-hint, .muted-copy {
   color: var(--market-muted);
   font-size: 12px;
   line-height: 1.7;
 }
-.toolbar-actions { flex: none; gap: 8px; }
-.toolbar-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.game-select { width: 208px; max-width: 100%; }
-.scope-note { flex: 1 1 200px; }
 .marketplace-layout { display: grid; grid-template-columns: minmax(270px, 310px) minmax(0, 1fr); gap: 16px; flex: 1; align-items: start; min-height: 500px; }
 .marketplace-sidebar, .plugin-detail {
   min-width: 0;
@@ -816,7 +846,9 @@ onMounted(async () => {
   -webkit-backdrop-filter: var(--t-page-panel-blur);
 }
 .marketplace-sidebar { display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 12px; max-height: calc(100vh - 72px); }
-.sidebar-search { padding: 14px 14px 10px; }
+.sidebar-search { display: flex; align-items: center; gap: 6px; padding: 14px 14px 10px; }
+.sidebar-search .el-input { flex: 1; min-width: 0; }
+.sidebar-search .search-action { flex: none; width: 32px; height: 32px; margin: 0; padding: 0; }
 .search-icon { width: 15px; height: 15px; }
 .sidebar-tabs { display: flex; gap: 3px; padding: 4px; margin: 0 14px; border: 1px solid var(--market-line); border-radius: 8px; background: var(--t-surface-subtle); }
 .sidebar-tabs button, .detail-tabs button {
@@ -877,6 +909,11 @@ onMounted(async () => {
 .dependency-status.is-ready { color: var(--t-success-text); }
 .dependency-status.is-missing { color: var(--t-warning-text); }
 .dependency-status.is-invalid { color: var(--t-danger-text); }
+.dependency-heading .dependency-optional { margin-right: auto; color: var(--t-page-text-muted); font-size: 11px; }
+.dependency-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dependency-actions .el-button + .el-button { margin-left: 0; }
+.dependency-source { color: var(--t-page-text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.dependency-managed { border-color: color-mix(in srgb, var(--theme-success) 45%, var(--market-line)); }
 .detail-meta h3:not(:first-child) { margin-top: 22px; }
 .detail-meta dl { display: grid; grid-template-columns: minmax(65px, max-content) minmax(0, 1fr); gap: 0 20px; margin: 0; font-size: 12px; line-height: 1.7; }
 .detail-meta dt, .detail-meta dd { padding: 10px 0; border-bottom: 1px solid var(--market-line); }
@@ -901,10 +938,8 @@ onMounted(async () => {
   .detail-identity h2 { font-size: 19px; }
 }
 @media (max-width: 760px) {
-  .marketplace-header { align-items: flex-start; flex-wrap: wrap; }
   .marketplace-layout { grid-template-columns: minmax(0, 1fr); }
   .marketplace-sidebar { position: static; max-height: 340px; }
-  .scope-note { flex-basis: 100%; }
   .plugin-detail { min-height: 360px; }
   .detail-tabs { gap: 20px; }
 }

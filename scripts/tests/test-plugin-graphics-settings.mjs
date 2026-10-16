@@ -23,7 +23,7 @@ function component(t, relative, bindings, mocks, props = {}) {
   const exports = {};
   const unmount = [];
   scope.run(() => vm.runInNewContext(compiled, {
-    exports, console, defineProps: () => props,
+    exports, console, URL, defineProps: () => props,
     setTimeout: () => 1, clearTimeout() {},
     require(name) {
       if (name === 'vue') return { ...vue, onMounted() {}, onUnmounted: fn => unmount.push(fn) };
@@ -78,18 +78,23 @@ const dlssPlugin = enabled => ({
 });
 
 function marketplace(t, options = {}) {
-  return component(t, '../../src/views/PluginMarketplace/PluginMarketplace.vue', [
+  const appSettings = vue.reactive({ CurrentGameName: 'GIMI' });
+  const settings = component(t, '../../src/views/PluginMarketplace/PluginMarketplace.vue', [
     'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
     'catalog', 'catalogError', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
+    'selectedDependencies', 'dependencyActionsEnabled', 'openDependencyDownload', 'openDependencySettings', 'optionalDependency',
+    'openDependencyDirectory',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
+    '@tauri-apps/plugin-opener': { openUrl: options.openUrl ?? (() => { throw new Error('Unexpected external download'); }), openPath: options.openPath },
     '@tauri-apps/plugin-dialog': {}, 'element-plus': { ElMessage: { success() {}, error: message => { throw new Error(message); } } },
     '@element-plus/icons-vue': {}, 'vue-i18n': i18n,
-    'vue-router': { useRouter: () => ({ push() { throw new Error('DLSS5 settings must stay in marketplace'); } }) },
+    'vue-router': { useRoute: () => ({ query: options.query ?? {} }) },
     '../../plugin/logs': options.logs ?? {}, '../../store/GamePreset': { getGamePresetPriority: () => 0 },
-    '../../store/AppStateManager': { AppStateManager: { gamesList: [], appSettings: { CurrentGameName: 'GIMI' } } },
+    '../../store/AppStateManager': { AppStateManager: { appSettings } },
     '../../store/ResourceManager': { ResourceManager: { loadGameConfig: options.loadGameConfig ?? (() => { throw new Error('Unexpected config read'); }) } },
   });
+  return { ...settings, appSettings };
 }
 
 test('marketplace exposes DLSS5 settings only for the selected enabled game and discards stale target reads', async t => {
@@ -104,7 +109,7 @@ test('marketplace exposes DLSS5 settings only for the selected enabled game and 
   assert.deepEqual(reads, ['GIMI']);
   s.detailTab.value = 'dependencies'; s.openPluginSettings();
   assert.equal(s.detailTab.value, 'features');
-  s.selectedGameName.value = 'Other Genshin';
+  s.appSettings.CurrentGameName = 'Other Genshin';
   await vue.nextTick();
   assert.equal(s.graphicsTargetExe.value, '');
   assert.deepEqual(reads, ['GIMI'], 'old enabled snapshot cannot authorize reads for a new game');
@@ -132,9 +137,78 @@ test('不兼容插件不能启用，旧启用状态仍可关闭，更新提示�
   await s.togglePlugin({ ...poser, enabled: true });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].args.enabled, false);
-  s.selectedGameName.value = 'SRMI';
+  s.appSettings.CurrentGameName = 'SRMI';
   await s.togglePlugin({ ...poser, enabled: true });
   assert.equal(calls.length, 1, '切换游戏后的旧快照不能修改新游戏的插件选择');
+});
+
+test('依赖获取只响应已启用插件的显式操作，使用已安装声明并拒绝危险链接和过期游戏快照', async t => {
+  const opened = [];
+  const s = marketplace(t, { openUrl: async url => { opened.push(url); } });
+  const dependency = { id: 'tool', requiredFiles: ['Tool.exe'], downloadUrl: 'https://example.com/installed/releases' };
+  const plugin = { ...dlssPlugin(false), manifest: { ...dlssPlugin(false).manifest, id: 'example.tools', contributions: {}, externalDependencies: [dependency] } };
+  s.catalog.value = [{ ...plugin.manifest, description: '', supportedGames: [], externalDependencies: [{ ...dependency, downloadUrl: 'https://example.com/new/releases' }] }];
+  s.installed.value = [plugin]; s.installedGameName.value = 'GIMI';
+  await vue.nextTick();
+  assert.equal(opened.length, 0, '显示状态不会触发下载');
+  await s.openDependencyDownload('tool');
+  assert.equal(opened.length, 0, '停用时不提供资源获取');
+  s.installed.value = [{ ...plugin, enabled: true }];
+  await vue.nextTick();
+  await s.openDependencyDownload('tool');
+  assert.deepEqual(opened, ['https://example.com/installed/releases']);
+  assert.equal(s.optionalDependency({ requiredFor: ['external-manager'] }), true);
+  assert.equal(s.optionalDependency({ requiredFor: ['launch'] }), false);
+  assert.equal(s.optionalDependency({}), false);
+  for (const url of ['javascript:alert(1)', 'file:///C:/Tool.exe', 'http://example.com', 'https://user:pass@example.com', 'https://example.com/\nfile']) {
+    s.installed.value = [{ ...plugin, enabled: true, manifest: { ...plugin.manifest, externalDependencies: [{ ...dependency, downloadUrl: url }] } }];
+    await s.openDependencyDownload('tool');
+  }
+  assert.equal(opened.length, 1);
+  s.installed.value = [{ ...plugin, enabled: true, lifecycleStatus: 'incompatible' }];
+  await s.openDependencyDownload('tool');
+  assert.equal(opened.length, 1, '不兼容的旧启用状态不能获取组件');
+  s.appSettings.CurrentGameName = 'Other game';
+  await s.openDependencyDownload('tool');
+  assert.equal(opened.length, 1, '旧启用快照不能为新游戏授权下载');
+  s.installed.value = [];
+  await s.openDependencyDownload('tool');
+  assert.equal(opened.length, 1, '仅有目录条目不能授权下载');
+});
+
+test('依赖卡片复用 DLSS5 配置入口，停用及切换游戏时不打开配置', async t => {
+  const s = marketplace(t, { loadGameConfig: async () => ({}) });
+  s.installed.value = [dlssPlugin(false)]; s.installedGameName.value = 'GIMI';
+  await vue.nextTick();
+  s.detailTab.value = 'dependencies'; s.openDependencySettings();
+  assert.equal(s.detailTab.value, 'dependencies');
+  s.installed.value = [dlssPlugin(true)];
+  await vue.nextTick();
+  s.openDependencySettings();
+  assert.equal(s.detailTab.value, 'features');
+  s.detailTab.value = 'dependencies'; s.appSettings.CurrentGameName = 'Other game';
+  s.openDependencySettings();
+  assert.equal(s.detailTab.value, 'dependencies');
+});
+
+test('市场跟随全局游戏，HoYoShade 的旧入口定位依赖卡片且只打开已验证目录', async t => {
+  const opened = [];
+  const s = marketplace(t, { query: { plugin: 'ssmt.hoyoshade.bridge', tab: 'dependencies' }, openPath: async path => opened.push(path) });
+  const plugin = { ...dlssPlugin(true), manifest: { ...dlssPlugin(true).manifest, id: 'ssmt.hoyoshade.bridge', contributions: { hostExtensions: [{ settingsComponent: 'ssmt.reshade.settings' }] } }, externalDependencies: { hoyoshade: { path: 'C:/Tools/HoYoShade', status: 'ready' } } };
+  s.installed.value = [plugin]; s.installedGameName.value = 'GIMI';
+  await vue.nextTick();
+  assert.equal(s.selectedId.value, 'ssmt.hoyoshade.bridge');
+  assert.equal(s.detailTab.value, 'dependencies');
+  s.detailTab.value = 'features'; s.openPluginSettings();
+  assert.equal(s.detailTab.value, 'dependencies');
+  await s.openDependencyDirectory('hoyoshade');
+  assert.deepEqual(opened, ['C:/Tools/HoYoShade']);
+  s.installed.value = [{ ...plugin, externalDependencies: { hoyoshade: { path: 'C:/Tools/Unexpected.exe', status: 'invalid' } } }];
+  await s.openDependencyDirectory('hoyoshade');
+  assert.equal(opened.length, 1);
+  s.appSettings.CurrentGameName = 'Default';
+  assert.equal(s.selectedGameName.value, '', '不自动回落到首个游戏');
+  assert.equal(s.dependencyActionsEnabled.value, false);
 });
 
 test('marketplace refresh stays busy for every source and preserves the catalog on failure', async t => {

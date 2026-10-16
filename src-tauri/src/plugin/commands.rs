@@ -654,6 +654,7 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
             manifest: {
                 let mut manifest = plugin.manifest.clone();
                 manifest.contributions.host_extensions = super::host_graphics::settings_extensions(plugin);
+                manifest.external_dependencies = plugin.manifest.display_dependencies();
                 manifest
             },
             enabled: plugin.enabled,

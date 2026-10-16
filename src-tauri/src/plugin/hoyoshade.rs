@@ -316,6 +316,8 @@ mod tests {
                     ..Default::default()
                 },
                 external_dependencies: vec![ExternalDependency {
+                    download_url: None,
+                    download_hint: None,
                     required_for: None,
                     id: HOYOSHADE_DEPENDENCY_ID.to_string(),
                     kind: ExternalDependencyType::Directory,
