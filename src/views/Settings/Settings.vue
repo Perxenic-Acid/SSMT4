@@ -58,7 +58,7 @@ const settingsNavGroups = computed(() => [
     ],
   },
   {
-    title: t('settings.navigation.games'),
+    title: t('settings.sections.games'),
     items: [
       { id: 'settings-games', label: t('settings.sections.games') },
     ],
@@ -793,7 +793,9 @@ const confirmCreateGame = async () => {
 <style scoped>
 .settings-page {
   width: 100%;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   box-sizing: border-box;
   padding: 28px 32px 40px;
   color: rgba(var(--theme-text-primary-rgb), 0.96);
@@ -801,6 +803,8 @@ const confirmCreateGame = async () => {
 
 .settings-shell {
   width: min(1180px, 100%);
+  height: 100%;
+  min-height: 0;
   /* Left-aligned so the page stays visually anchored to the navigation pane
      instead of drifting away from it on wide windows */
   margin: 0;
@@ -831,8 +835,12 @@ const confirmCreateGame = async () => {
 }
 
 .settings-layout {
+  /* 使用应用内容区的实际高度，避免标题栏与界面缩放让视口高度估算失准。 */
   display: grid;
+  height: 100%;
+  min-height: 0;
   grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 28px;
   align-items: start;
 }
@@ -841,6 +849,11 @@ const confirmCreateGame = async () => {
   grid-column: 2;
   grid-row: 1;
   min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   gap: 26px;
@@ -848,6 +861,7 @@ const confirmCreateGame = async () => {
 
 .settings-section {
   min-width: 0;
+  flex: none;
   scroll-margin-top: 20px;
 }
 
@@ -1151,9 +1165,10 @@ const confirmCreateGame = async () => {
 .settings-sidebar {
   grid-column: 1;
   grid-row: 1;
-  position: sticky;
-  top: 0;
   min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1161,6 +1176,9 @@ const confirmCreateGame = async () => {
 
 .settings-nav {
   padding: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .settings-nav {
@@ -1554,22 +1572,8 @@ const confirmCreateGame = async () => {
   }
 
   .settings-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .settings-main,
-  .settings-sidebar {
-    grid-column: 1;
-    grid-row: auto;
-  }
-
-  .settings-main {
-    order: 1;
-  }
-
-  .settings-sidebar {
-    order: 2;
-    position: static;
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 18px;
   }
 
   .about-panel {
@@ -1590,6 +1594,12 @@ const confirmCreateGame = async () => {
   .about-settings-group .update-button {
     justify-self: start;
   }
+}
+
+@media (max-width: 700px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: fit-content(35%) minmax(0, 1fr); }
+  .settings-sidebar { grid-column: 1; grid-row: 1; }
+  .settings-main { grid-column: 1; grid-row: 2; }
 }
 
 @media (max-width: 760px) {

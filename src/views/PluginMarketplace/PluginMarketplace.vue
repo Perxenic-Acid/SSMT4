@@ -813,7 +813,9 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   box-sizing: border-box;
   padding: var(--t-page-padding);
   color: var(--t-page-text);
@@ -822,7 +824,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
 }
-.catalog-notice { border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); font-size: 12px; line-height: 1.6; }
+.catalog-notice { flex: none; max-height: 30%; overflow-y: auto; border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); font-size: 12px; line-height: 1.6; }
 .catalog-notice summary { display: flex; align-items: center; gap: 9px; padding: 10px 14px; cursor: pointer; list-style: none; color: var(--t-warning-text); }
 .catalog-notice summary::-webkit-details-marker { display: none; }
 .catalog-notice summary > svg { flex: none; width: 16px; height: 16px; }
@@ -835,7 +837,7 @@ onMounted(async () => {
   font-size: 12px;
   line-height: 1.7;
 }
-.marketplace-layout { display: grid; grid-template-columns: minmax(270px, 310px) minmax(0, 1fr); gap: 16px; flex: 1; align-items: start; min-height: 500px; }
+.marketplace-layout { display: grid; grid-template-columns: minmax(270px, 310px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; flex: 1; align-items: start; min-height: 0; }
 .marketplace-sidebar, .plugin-detail {
   min-width: 0;
   border: var(--t-page-panel-border);
@@ -845,11 +847,13 @@ onMounted(async () => {
   backdrop-filter: var(--t-page-panel-blur);
   -webkit-backdrop-filter: var(--t-page-panel-blur);
 }
-.marketplace-sidebar { display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 12px; max-height: calc(100vh - 72px); }
+/* 内容少时保持自然高度，超出本列可用高度后只收缩并滚动列表。 */
+.marketplace-sidebar { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
 .sidebar-search { display: flex; align-items: center; gap: 6px; padding: 14px 14px 10px; }
 .sidebar-search .el-input { flex: 1; min-width: 0; }
 .sidebar-search .search-action { flex: none; width: 32px; height: 32px; margin: 0; padding: 0; }
 .search-icon { width: 15px; height: 15px; }
+.sidebar-search, .sidebar-tabs, .list-caption { flex-shrink: 0; }
 .sidebar-tabs { display: flex; gap: 3px; padding: 4px; margin: 0 14px; border: 1px solid var(--market-line); border-radius: 8px; background: var(--t-surface-subtle); }
 .sidebar-tabs button, .detail-tabs button {
   border: 0; background: transparent;
@@ -862,7 +866,7 @@ onMounted(async () => {
 .sidebar-tabs .has-updates { color: var(--t-warning-text); }
 .sidebar-tabs button:hover, .detail-tabs button:hover { color: var(--t-page-text); }
 .list-caption { padding: 14px 17px 6px; color: var(--t-page-text-muted); font-size: 11px; }
-.marketplace-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0 7px 7px; }
+.marketplace-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 7px 7px; }
 .plugin-row { display: flex; width: 100%; gap: 11px; padding: 13px 10px; margin: 3px 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background .15s, border-color .15s; }
 .plugin-row:hover { background: var(--t-surface-hover); }
 .plugin-row.selected { border-color: rgba(var(--theme-surface-tint-rgb), .22); background: var(--t-surface-raised); }
@@ -877,7 +881,7 @@ onMounted(async () => {
 .row-state { margin-left: auto; font-size: 10px; color: var(--market-muted); }
 .row-state.enabled { color: var(--t-page-text); }
 .row-state.issue, .detail-issue { color: var(--t-warning-text); }
-.plugin-detail { padding: 24px; min-height: 500px; }
+.plugin-detail { padding: 24px; height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .detail-top { gap: 14px; flex-wrap: wrap; }
 .detail-identity { min-width: 0; flex: 1 1 200px; }
 .detail-identity h2 { margin: 0 0 9px; font-size: 21px; line-height: 1.3; font-weight: 650; overflow-wrap: anywhere; letter-spacing: -.3px; }
@@ -938,9 +942,7 @@ onMounted(async () => {
   .detail-identity h2 { font-size: 19px; }
 }
 @media (max-width: 760px) {
-  .marketplace-layout { grid-template-columns: minmax(0, 1fr); }
-  .marketplace-sidebar { position: static; max-height: 340px; }
-  .plugin-detail { min-height: 360px; }
+  .marketplace-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: fit-content(35%) minmax(0, 1fr); }
   .detail-tabs { gap: 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
