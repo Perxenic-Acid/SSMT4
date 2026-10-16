@@ -84,3 +84,16 @@
 - `cargo test --manifest-path src-tauri/Cargo.toml --lib plugin::dlss5_hot_runtime::tests -- --nocapture`：4 项通过；1 项真实归档提取检查按原有设置忽略，未作为本轮通过项。
 - `node --test scripts/tests/test-plugin-graphics-settings.mjs scripts/tests/test-efmi-launch.mjs`：32 项通过，使用模拟调用，不启动游戏或加载 DLL。
 - 本轮未运行图形夹具、鸣潮实机、长时间稳定性或安装/卸载实测，也未修改其他 AI 的源码和二进制。
+
+## 后续实施清单
+
+- [x] 可选 DLL 冲突进入局部提示与普通启动回退，覆盖 DLSS5 和 Shade。
+- [x] 鸣潮热路线仅本次约束 DX11，保留其他参数与保存配置；停用后恢复原启动参数。
+- [x] 自有配置和 Add-on 通过带内容比较的多文件事务提交；失败或中断时恢复，后续用户修改保留。
+- [x] Add-on 贡献记录实际所有权，组合准备不提前复制/删除文件；关闭贡献只清理仍属于 SSMT 的副本。
+- [x] 准备 [鸣潮实机验收步骤](wwmi-dlss5-validation.md)，按用户安排交由其他机器测试。
+- [ ] 鸣潮真实原生 DLSS 配置样本、成功 NR 帧、重复启动与长时间验收。
+- [ ] 热组件版本回退和完整清理入口。
+- [ ] 通用贡献契约及 DLSS5、Shade、Player Tweaks 的逐个迁移。
+
+以上不将待实机部分标记为完成；插件架构工作可在离线验证后继续推进。

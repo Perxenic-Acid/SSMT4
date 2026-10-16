@@ -43,6 +43,8 @@ interface HotRuntimePlan {
     dlls: string[];
     environment: Record<string, string | null>;
     runtimeDirectory: string;
+    requiredLaunchArgs?: string[];
+    excludedLaunchArgs?: string[];
 }
 
 type GraphicsLaunchDecision =
@@ -216,6 +218,18 @@ export class LaunchGame {
             trimmed.lastIndexOf("\\"),
         );
         return lastSlash >= 0 ? trimmed.substring(lastSlash + 1) : trimmed;
+    }
+
+    private static applyRequiredLaunchArgs(raw: string, plan: HotRuntimePlan): string {
+        const required = plan.requiredLaunchArgs || [];
+        const excluded = plan.excludedLaunchArgs || [];
+        if (!required.length && !excluded.length) return raw;
+        if (![...required, ...excluded].every(flag => /^-[a-z0-9_-]+$/i.test(flag))) {
+            throw new Error("插件启动参数声明无效");
+        }
+        const rejected = new Set([...required, ...excluded].map(flag => flag.toLowerCase()));
+        const tokens = raw.match(/"[^"\r\n]*"|[^\s"]+(?:"[^"\r\n]*"[^\s"]*)*/g) || [];
+        return [...tokens.filter(token => !rejected.has(token.replace(/^"|"$/g, '').toLowerCase())), ...required].join(' ');
     }
 
     private static async configureWWMILaunchSettings(
@@ -667,6 +681,7 @@ export class LaunchGame {
                 }
             }
             let hotRuntimeDlls: string[] = [];
+            let hotLaunchArgs = config.launchArgs || "";
             const collectHotRuntimeDlls = (plan: HotRuntimePlan): string[] => {
                 const configuredExtras = Array.isArray(config.extraDlls)
                     ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
@@ -682,8 +697,9 @@ export class LaunchGame {
                 return [...plan.dlls, ...extras];
             };
             if (hotRuntime) {
-                hotRuntimeDlls = collectHotRuntimeDlls(hotRuntime);
                 try {
+                    hotRuntimeDlls = collectHotRuntimeDlls(hotRuntime);
+                    hotLaunchArgs = this.applyRequiredLaunchArgs(config.launchArgs || "", hotRuntime);
                     // 只有实际采用热注入计划才调整输入契约；失败时保留普通 Mod 启动。
                     await invoke("configure_dlss5_launch_settings", { gameName, gameExecutable: targetExe });
                 } catch (error) {
@@ -705,17 +721,19 @@ export class LaunchGame {
                         // Shade 单独启用或 DLSS5 回退时也串行预加载，不能让独立注入器抢先进入游戏。
                         hotRuntime = await invoke<HotRuntimePlan | null>("prepare_hoyoshade_hot_runtime", { gameName, gameExecutable: targetExe });
                         shadeHotHandled = !!hotRuntime;
+                        if (hotRuntime) {
+                            hotRuntimeDlls = collectHotRuntimeDlls(hotRuntime);
+                            hotLaunchArgs = this.applyRequiredLaunchArgs(config.launchArgs || "", hotRuntime);
+                            useShell = false;
+                        }
                     } catch (error) {
+                        hotRuntime = null;
                         shadeHotHandled = true;
                         ElMessage.warning({
                             message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "Shade Bridge", error: String(error) }),
                             showClose: true,
                             duration: 12000,
                         });
-                    }
-                    if (hotRuntime) {
-                        hotRuntimeDlls = collectHotRuntimeDlls(hotRuntime);
-                        useShell = false;
                     }
                 }
             }
@@ -767,6 +785,7 @@ export class LaunchGame {
             if (hotRuntime) {
                 await MigotoManager.patchD3dxForLaunch(gameName, {
                     extraDlls: hotRuntimeDlls,
+                    launchArgs: hotLaunchArgs,
                     useShell: false,
                 });
             }

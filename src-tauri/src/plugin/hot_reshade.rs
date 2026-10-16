@@ -4,16 +4,32 @@ use super::{
     managed_reshade::{self, ManagedReShadeConfig},
     registry::{ExternalDependencyStatus, PluginRegistry},
 };
-use std::{fs, io::Write, path::Path};
+use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
+
+#[derive(Debug, Clone)]
+pub(super) struct PreparedConfig {
+    pub game_ini: String,
+    pub preset_ini: String,
+    addon_sources: BTreeMap<String, PathBuf>,
+}
+
+impl From<ManagedReShadeConfig> for PreparedConfig {
+    fn from(config: ManagedReShadeConfig) -> Self {
+        Self { game_ini: config.game_ini, preset_ini: config.preset_ini, addon_sources: BTreeMap::new() }
+    }
+}
 
 /// 配置与默认值分开保存，避免每次启动重置 ReShade 的教程、按键和效果参数。
 pub(super) fn save_config(
     directory: &Path,
-    defaults: ManagedReShadeConfig,
+    defaults: impl Into<PreparedConfig>,
     required_preset: &str,
     addons: &[String],
 ) -> Result<(), String> {
     let root = canonical_path(directory).map_err(|error| error.to_string())?;
+    let transaction = super::managed_files::DirectoryTransaction::open(&root)?;
+    let prepared = defaults.into();
+    let defaults = ManagedReShadeConfig { game_ini: prepared.game_ini, preset_ini: prepared.preset_ini };
     let read = |name: &str| -> Result<Option<String>, String> {
         if root.join(name).exists() {
             read_text(&checked_path(&root, name)?).map(Some)
@@ -35,34 +51,48 @@ pub(super) fn save_config(
         addons,
     );
     let baseline = serde_json::to_string(&defaults).map_err(|error| error.to_string())?;
+    let ownership_name = "ReShade.ssmt-addons.json";
+    let previous_addons: BTreeMap<String, String> = read(ownership_name)?
+        .map(|text| serde_json::from_str(&text).map_err(|e| format!("Add-on 所有权记录无效：{e}")))
+        .transpose()?.unwrap_or_default();
+    let mut changes = BTreeMap::new();
+    let mut ownership = BTreeMap::new();
+    for (name, source) in prepared.addon_sources {
+        super::validate_package_relative_path(&name).map_err(|e| e.to_string())?;
+        if name.contains(['/', '\\']) { return Err("Add-on 文件名无效".into()); }
+        let bytes = fs::read(&source).map_err(|e| e.to_string())?;
+        use sha2::{Digest, Sha256};
+        let applied = format!("{:x}", Sha256::digest(&bytes));
+        let current = super::managed_files::hash(&root.join(&name))?;
+        if current.is_some() && current.as_ref() != Some(&applied)
+            && current.as_ref() != previous_addons.get(&name) {
+            return Err(format!("Add-on {name} 不属于当前贡献，已保留文件"));
+        }
+        ownership.insert(name.clone(), applied);
+        changes.insert(name, Some(bytes));
+    }
+    for (name, applied) in previous_addons {
+        super::validate_package_relative_path(&name).map_err(|e| e.to_string())?;
+        if name.contains(['/', '\\']) { return Err("Add-on 所有权记录文件名无效".into()); }
+        if ownership.contains_key(&name) { continue; }
+        if addons.iter().any(|required| required.eq_ignore_ascii_case(&name)) {
+            return Err(format!("Add-on 所有权与必要组件冲突：{name}"));
+        }
+        let current = super::managed_files::hash(&root.join(&name))?;
+        if current.is_some() && current.as_deref() != Some(&applied) {
+            return Err(format!("Add-on {name} 已被修改，已保留文件"));
+        }
+        changes.insert(name, None);
+    }
+    changes.insert(ownership_name.into(), Some(serde_json::to_vec(&ownership).map_err(|e| e.to_string())?));
     for (name, content) in [
         ("ReShade.ini", composed.game_ini),
         ("ReShadePreset.ini", composed.preset_ini),
         ("ReShade.ssmt-defaults.json", baseline),
     ] {
-        // 临时文件与最终文件均位于本次管理目录中，既有链接不能跳出目录。
-        if root.join(name).exists() {
-            checked_path(&root, name)?;
-        }
-        let temporary = root.join(format!(
-            "{name}.{}-{}.tmp",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-        let write = (|| -> Result<(), std::io::Error> {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)?;
-            file.write_all(content.as_bytes())?;
-            drop(file);
-            fs::rename(&temporary, root.join(name))
-        })();
-        if let Err(error) = write {
-            let _ = fs::remove_file(&temporary);
-            return Err(error.to_string());
-        }
+        changes.insert(name.into(), Some(content.into_bytes()));
     }
+    transaction.commit(changes)?;
     Ok(())
 }
 
@@ -73,10 +103,11 @@ pub(super) fn compose(
     required: &[String],
     dlss_ini: &str,
     dlss_preset: &str,
-) -> Result<ManagedReShadeConfig, String> {
+) -> Result<PreparedConfig, String> {
     let mut base = String::new();
     let mut preset = String::new();
     let mut addons = required.to_vec();
+    let mut addon_sources = BTreeMap::new();
     if let Some(plugin) = registry
         .find(HOYOSHADE_PLUGIN_ID)
         .filter(|plugin| plugin.enabled)
@@ -112,31 +143,42 @@ pub(super) fn compose(
                 if !canonical.starts_with(&dependency) {
                     return Err("Shade Add-on 越出声明的资源目录".into());
                 }
-                fs::copy(canonical, addon_directory.join(&name))
-                    .map_err(|error| error.to_string())?;
+                addon_sources.insert(name.clone(), canonical);
                 addons.push(name);
             }
         }
     }
-    // 关闭插件后移除其上次贡献；不把配置中的非必要禁用项强行打开。
-    for entry in fs::read_dir(addon_directory).map_err(|error| error.to_string())? {
-        let path = entry.map_err(|error| error.to_string())?.path();
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if name.to_ascii_lowercase().ends_with(".addon64")
-            && !addons
-                .iter()
-                .any(|active| active.eq_ignore_ascii_case(&name))
-        {
-            fs::remove_file(path).map_err(|error| error.to_string())?;
-        }
-    }
-    managed_reshade::compose(&base, dlss_ini, &preset, dlss_preset, required)
-        .map_err(|error| error.to_string())
+    let _ = addon_directory;
+    let mut prepared: PreparedConfig = managed_reshade::compose(&base, dlss_ini, &preset, dlss_preset, required)
+        .map_err(|error| error.to_string())?.into();
+    prepared.addon_sources = addon_sources;
+    Ok(prepared)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_addon_is_preserved_and_failed_prepare_keeps_all_configs() {
+        let root = std::env::temp_dir().join(format!("ssmt-addon-ownership-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("source.dll");
+        fs::write(&source, b"original addon").unwrap();
+        let defaults = managed_reshade::compose("[OVERLAY]\nTutorialProgress=0\n", "", "", "", &[]).unwrap();
+        let mut prepared: PreparedConfig = defaults.clone().into();
+        prepared.addon_sources.insert("player.addon64".into(), source);
+        save_config(&root, prepared, "", &[]).unwrap();
+        let ini = fs::read(root.join("ReShade.ini")).unwrap();
+        fs::write(root.join("player.addon64"), b"player updated addon").unwrap();
+        assert!(save_config(&root, defaults.clone(), "", &[]).unwrap_err().contains("已被修改"));
+        assert_eq!(fs::read(root.join("ReShade.ini")).unwrap(), ini);
+        assert_eq!(fs::read(root.join("player.addon64")).unwrap(), b"player updated addon");
+        fs::write(root.join("player.addon64"), b"original addon").unwrap();
+        save_config(&root, defaults, "", &[]).unwrap();
+        assert!(!root.join("player.addon64").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn repeated_launch_preserves_tutorial_controls_and_uniforms_but_removes_disabled_contributions()
@@ -292,7 +334,7 @@ mod tests {
             assert!(combined
                 .preset_ini
                 .contains("DLSS5_Feed@DLSS5_Feed.fx,ShadeEffect@Shade.fx"));
-            assert!(addon.join("ShadeEffect.addon64").is_file());
+            assert!(!addon.join("ShadeEffect.addon64").exists());
             save_config(&addon, combined, "Techniques=DLSS5_Feed@DLSS5_Feed.fx\n", &required).unwrap();
             let mut saved = read_text(&addon.join("ReShade.ini")).unwrap();
             managed_reshade::set_entry(&mut saved, "OVERLAY", "TutorialProgress", "4");

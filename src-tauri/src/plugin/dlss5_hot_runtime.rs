@@ -522,6 +522,8 @@ fn prepare_at(
         .into_iter()
         .collect(),
         runtime_directory: root,
+        required_launch_args: Vec::new(),
+        excluded_launch_args: Vec::new(),
     })
 }
 
@@ -611,7 +613,14 @@ pub fn prepare_dlss5_hot_runtime(
     if installation.route != route {
         return Err("DLSS5 组件与当前游戏预设不符，请重新配置".into());
     }
-    prepare_at(&registry, &installation).map(Some)
+    let mut plan = prepare_at(&registry, &installation)?;
+    if game_scope_preset(&game_name).eq_ignore_ascii_case("WWMI") {
+        // 只约束本次启用路线，不写回玩家保存的启动参数。
+        plan.required_launch_args.push("-dx11".into());
+        plan.excluded_launch_args = ["-dx11", "-d3d11", "-dx12", "-d3d12", "-vulkan"]
+            .into_iter().map(String::from).collect();
+    }
+    Ok(Some(plan))
 }
 
 #[cfg(test)]

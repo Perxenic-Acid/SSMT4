@@ -261,3 +261,32 @@ test('只有实际采用热注入计划才调整画质契约，写入失败仅�
     assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
   }
 });
+
+
+test('可选热注入 DLL 冲突仅提示并继续普通 Mod，不调整画质契约', async () => {
+  for (const shadeOnly of [false, true]) {
+    const plan = { dlls: ['C:/Owned/ReShade64.dll'], environment: {}, runtimeDirectory: 'C:/Owned' };
+    const config = { ...base, gamePreset: 'SRMI', targetExePath: 'C:/Game/StarRail.exe', extraDlls: ['C:/Player/ReShade64.dll'] };
+    const h = harness(config, null, shadeOnly ? null : plan, null, shadeOnly ? plan : null);
+    await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
+    assert.ok(h.calls.some(call => call.command === 'launch_programs'));
+    assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+    if (shadeOnly) assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
+    assert.ok(h.messages.some(message => message.kind === 'warning'));
+    assert.doesNotMatch(h.ini(), /C:\/Owned/);
+    assert.match(h.ini(), /C:\/Player\/ReShade64.dll/);
+  }
+});
+
+test('鸣潮热路线仅本次约束 DX11，保留其他参数和保存配置', async () => {
+  const original = '-dx12 -tracking_code="keep spaces" -custom=1';
+  const config = { ...base, gamePreset: 'WWMI', targetExePath: 'C:/Game/Client-Win64-Shipping.exe', launchArgs: original };
+  const plan = { dlls: ['C:/Owned/ReShade64.dll'], environment: {}, runtimeDirectory: 'C:/Owned', requiredLaunchArgs: ['-dx11'], excludedLaunchArgs: ['-dx12', '-d3d12', '-vulkan'] };
+  const h = harness(config, null, plan);
+  await h.launch.launch('WWMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.match(h.ini(), /launch_args = -tracking_code="keep spaces" -custom=1 -dx11/);
+  assert.equal(config.launchArgs, original);
+  const disabled = harness(config);
+  await disabled.launch.launch('WWMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.match(disabled.ini(), /launch_args = -dx12/);
+});

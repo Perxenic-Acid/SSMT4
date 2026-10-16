@@ -80,6 +80,8 @@ pub struct HotRuntimePlan {
     pub dlls: Vec<PathBuf>,
     pub environment: BTreeMap<String, Option<String>>,
     pub runtime_directory: PathBuf,
+    pub required_launch_args: Vec<String>,
+    pub excluded_launch_args: Vec<String>,
 }
 
 fn profile_files(profile: &str) -> Result<(String, Vec<(String, String)>), String> {
@@ -284,6 +286,8 @@ fn prepare_at(
         dlls,
         environment,
         runtime_directory: root,
+        required_launch_args: Vec::new(),
+        excluded_launch_args: Vec::new(),
     })
 }
 

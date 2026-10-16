@@ -236,7 +236,13 @@ fn prepare_hot_at(
                 game_ini: ui,
                 preset_ini: composed.preset_ini.clone(),
             };
-            composed = managed_reshade::retain_user_state(&composed, None, &current, "", &[]);
+            let defaults = managed_reshade::ManagedReShadeConfig {
+                game_ini: composed.game_ini.clone(),
+                preset_ini: composed.preset_ini.clone(),
+            };
+            let retained = managed_reshade::retain_user_state(&defaults, None, &current, "", &[]);
+            composed.game_ini = retained.game_ini;
+            composed.preset_ini = retained.preset_ini;
         }
     }
     super::hot_reshade::save_config(&root, composed, "", &[])?;
@@ -255,6 +261,8 @@ fn prepare_hot_at(
         .into_iter()
         .collect(),
         runtime_directory: root,
+        required_launch_args: Vec::new(),
+        excluded_launch_args: Vec::new(),
     }))
 }
 

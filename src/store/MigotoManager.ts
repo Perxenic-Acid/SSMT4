@@ -215,7 +215,7 @@ export class MigotoManager {
    */
   static async patchD3dxForLaunch(
     gameName: string,
-    options: { dllInitializationDelay?: number; extraDlls?: string[]; useShell?: boolean } = {},
+    options: { dllInitializationDelay?: number; extraDlls?: string[]; useShell?: boolean; launchArgs?: string } = {},
   ): Promise<void> {
     const gameConfig = await ResourceManager.loadGameConfig(gameName)
     const cfg = gameConfig || {}
@@ -252,8 +252,9 @@ export class MigotoManager {
         lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch')
       }
 
-      if (launchTarget && cfg.launchArgs && cfg.launchArgs.trim()) {
-        lines = D3dxIniManager.setIniValue(lines, 'Loader', 'launch_args', cfg.launchArgs)
+      const launchArgs = options.launchArgs ?? cfg.launchArgs
+      if (launchTarget && launchArgs && launchArgs.trim()) {
+        lines = D3dxIniManager.setIniValue(lines, 'Loader', 'launch_args', launchArgs)
       } else {
         lines = D3dxIniManager.removeIniKey(lines, 'Loader', 'launch_args')
       }
