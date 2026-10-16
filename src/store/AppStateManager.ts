@@ -268,9 +268,8 @@ export const useAppStateStore = defineStore('appState', () => {
             themePath: entry.themePath ? convertFileSrc(entry.themePath) + `?t=${timestamp}` : undefined,
           })),
           selectedBackgroundId: g.selected_background_id,
-          bgIndex: g.selected_background_id
-            ? Math.max(0, (g.background_entries || []).findIndex(entry => entry.id === g.selected_background_id))
-            : 0,
+          bgIndex: Math.max(0, (g.background_entries || []).findIndex(entry => g.selected_background_id
+            ? entry.id === g.selected_background_id : entry.type === g.bg_type)),
           bgType: g.bg_type || BGType.Image,
           showSidebar: g.show_sidebar,
         } as GameInfo
@@ -339,10 +338,10 @@ export const useAppStateStore = defineStore('appState', () => {
     if (useVideo && game.bgVideoPath) {
       const newVideo = game.bgVideoPath || ''
       appSettings.bgTheme = game.bgThemePath || ''
+      appSettings.bgImage = game.bgPath || DEFAULT_BG_IMAGE
       if (appSettings.bgType !== BGType.Video) {
         appSettings.bgType = BGType.Video
         if (appSettings.bgVideo !== newVideo) appSettings.bgVideo = newVideo
-        if (appSettings.bgImage !== '') appSettings.bgImage = ''
       } else if (appSettings.bgVideo !== newVideo) {
         appSettings.bgVideo = newVideo
       }
@@ -371,13 +370,24 @@ export const useAppStateStore = defineStore('appState', () => {
     if (entry.type === BGType.Video && entry.videoPath) {
       appSettings.bgType = BGType.Video
       appSettings.bgVideo = entry.videoPath
-      appSettings.bgImage = entry.imagePath || ''
+      appSettings.bgImage = entry.imagePath
+        || entries.find(item => item.type === BGType.Image && item.imagePath)?.imagePath
+        || game.bgPath || DEFAULT_BG_IMAGE
       appSettings.bgTheme = entry.themePath || ''
       return
     }
 
     appSettings.bgType = BGType.Image
     appSettings.bgImage = entry.imagePath || entry.videoPath || DEFAULT_BG_IMAGE
+    appSettings.bgVideo = ''
+    appSettings.bgTheme = ''
+  }
+
+  function fallbackBackgroundVideo(source: string): void {
+    // 离场视频的延迟错误不能覆盖切换后的游戏或背景。
+    if (!source || appSettings.bgType !== BGType.Video || appSettings.bgVideo !== source) return
+    appSettings.bgType = BGType.Image
+    appSettings.bgImage = appSettings.bgImage || DEFAULT_BG_IMAGE
     appSettings.bgVideo = ''
     appSettings.bgTheme = ''
   }
@@ -492,6 +502,7 @@ export const useAppStateStore = defineStore('appState', () => {
     selectGame,
     switchToGame,
     applyBackgroundEntry,
+    fallbackBackgroundVideo,
     refreshCurrentPage,
     switchToDefaultGame,
     hasSelectedGame,
@@ -517,6 +528,7 @@ export const AppStateManager = {
   get selectGame() { return useAppStateStore().selectGame },
   get switchToGame() { return useAppStateStore().switchToGame },
   get applyBackgroundEntry() { return useAppStateStore().applyBackgroundEntry },
+  get fallbackBackgroundVideo() { return useAppStateStore().fallbackBackgroundVideo },
   get refreshCurrentPage() { return useAppStateStore().refreshCurrentPage },
   get switchToDefaultGame() { return useAppStateStore().switchToDefaultGame },
   get hasSelectedGame() { return useAppStateStore().hasSelectedGame },

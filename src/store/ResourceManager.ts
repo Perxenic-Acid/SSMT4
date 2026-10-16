@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { GlobalConfig } from "./GlobalConfig";
 import { SSMTFileUtils } from "../utils/SSMTFileUtils";
 
-import { exists, writeFile, remove, mkdir, readDir, writeTextFile, copyFile } from '@tauri-apps/plugin-fs';
+import { exists, writeFile, remove, mkdir, readDir, writeTextFile, copyFile, rename } from '@tauri-apps/plugin-fs';
 import { join, resourceDir } from '@tauri-apps/api/path';
 import { fetch } from '@tauri-apps/plugin-http';
 import { invoke } from '@tauri-apps/api/core';
@@ -101,6 +101,7 @@ const fixedBackgroundSources: Record<string, FixedBackgroundSource> = {
     },
     WWMI: {
         imageUrl: 'https://mc.kurogames.com/website-preface/video/bg/bg-poster.webp',
+        videoUrl: 'https://mc.kurogames.com/website-preface/video/bg/bg-video.mp4',
     },
 };
 
@@ -203,7 +204,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         if (!fixed) return [];
         const entries: BackgroundEntry[] = [];
         if (fixed.imageUrl) entries.push({ id: `${gamePreset.toLowerCase()}-image`, type: 'Image', imageUrl: fixed.imageUrl });
-        if (fixed.videoUrl) entries.push({ id: `${gamePreset.toLowerCase()}-video`, type: 'Video', videoUrl: fixed.videoUrl });
+        if (fixed.videoUrl) entries.push({ id: `${gamePreset.toLowerCase()}-video`, type: 'Video', imageUrl: fixed.imageUrl, videoUrl: fixed.videoUrl });
         return entries;
     }
 
@@ -514,15 +515,33 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             return safe || `entry-${index + 1}`;
         };
         const download = async (url: string, path: string): Promise<void> => {
-            const response = await fetch(url, { method: 'GET' });
+            let requestUrl = url;
+            const isWwmiVideo = url === fixedBackgroundSources.WWMI.videoUrl;
+            if (isWwmiVideo) {
+                const nonce = Array.from(crypto.getRandomValues(new Uint8Array(5)), byte => byte.toString(16).padStart(2, '0')).join('');
+                // 临时鉴权只用于请求，配置和缓存比较始终使用不带签名的来源 URL。
+                requestUrl = await invoke<string>('sign_wwmi_background_url', { url, nonce });
+            }
+            const response = await fetch(requestUrl, { method: 'GET', signal: AbortSignal.timeout(120_000) });
             if (!response.ok) {
                 throw new Error(t('resourceManager.messages.downloadFailedWithStatus', { status: response.status }));
             }
-            await writeFile(path, new Uint8Array(await response.arrayBuffer()));
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            if (!bytes.length || (isWwmiVideo && String.fromCharCode(...bytes.subarray(4, 8)) !== 'ftyp')) {
+                throw new Error('背景响应为空或不是有效的 MP4 文件');
+            }
+            const pendingPath = `${path}.download`;
+            try {
+                await writeFile(pendingPath, bytes);
+                await rename(pendingPath, path);
+            } finally {
+                if (await exists(pendingPath)) await remove(pendingPath).catch(() => {});
+            }
         };
 
         const entries: BackgroundEntry[] = [];
         const managedNames = new Set<string>();
+        const savedResources = new Map<string, string | undefined>();
         let changed = false;
         for (let index = 0; index < available.length; index += 1) {
             const remote = available[index];
@@ -532,6 +551,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
 
             const saveResource = async (url: string | undefined, kind: 'image' | 'video' | 'theme', fallbackExt: string): Promise<string | undefined> => {
                 if (!url) return undefined;
+                if (savedResources.has(url)) return savedResources.get(url);
                 const previousPath = previous && (kind === 'image' ? previous.imagePath : kind === 'video' ? previous.videoPath : previous.themePath);
                 const previousUrl = previous && (kind === 'image' ? previous.imageUrl : kind === 'video' ? previous.videoUrl : previous.themeUrl);
                 const ext = extensionFromUrl(url, fallbackExt);
@@ -539,23 +559,43 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
                 const filename = `${prefix}-${id}${kind === 'video' ? `.${ext}` : `.${ext}`}`;
                 const targetPath = await SSMTFileUtils.JoinPath(dirPath, filename);
                 managedNames.add(filename.toLowerCase());
-                if (!previousPath || previousUrl !== url || !(await exists(previousPath))) {
-                    await download(url, targetPath);
-                    changed = true;
-                } else if (previousPath !== targetPath && await exists(previousPath)) {
-                    await copyFile(previousPath, targetPath);
-                    changed = true;
+                let savedPath: string | undefined = targetPath;
+                try {
+                    if (!previousPath || previousUrl !== url || !(await exists(previousPath))) {
+                        await download(url, targetPath);
+                        changed = true;
+                    } else if (previousPath !== targetPath) {
+                        await copyFile(previousPath, targetPath);
+                        changed = true;
+                    }
+                } catch (error) {
+                    if (gamePreset !== 'WWMI') throw error;
+                    console.warn('鸣潮背景资源获取失败，保留本地背景', kind, error);
+                    savedPath = previousPath && await exists(previousPath) ? previousPath : undefined;
+                    if (!savedPath && kind === 'image') {
+                        savedPath = await findExistingFileIgnoreCase(dirPath, BACKGROUND_IMAGE_CANDIDATES) || undefined;
+                    }
+                    if (savedPath) {
+                        managedNames.add(savedPath.split(/[\\/]/).pop()!.toLowerCase());
+                        const sourceKey = kind === 'image' ? 'imageUrl' : kind === 'video' ? 'videoUrl' : 'themeUrl';
+                        // 回退资源不标记为已从新来源下载成功，下次联网仍可重试。
+                        entry[sourceKey] = savedPath === previousPath ? previousUrl : undefined;
+                    }
                 }
-                return targetPath;
+                savedResources.set(url, savedPath);
+                return savedPath;
             };
 
             entry.imagePath = await saveResource(remote.imageUrl, 'image', 'png');
             entry.videoPath = await saveResource(remote.videoUrl, 'video', 'mp4');
             entry.themePath = await saveResource(remote.themeUrl, 'theme', 'webp');
+            // 下载失败的视频不能伪装成第二张静态图加入列表。
+            if (gamePreset === 'WWMI' && remote.type === 'Video' && !entry.videoPath) continue;
             if (entry.imagePath || entry.videoPath || entry.themePath) entries.push(entry);
         }
 
         if (entries.length === 0) {
+            if (gamePreset === 'WWMI') return { path: '', url: '', changed: false };
             throw new Error(t('resourceManager.messages.backgroundsMissingFromServer'));
         }
 
@@ -576,9 +616,10 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         conf.backgroundType = bgType;
         conf.backgroundEntries = entries;
         conf.lastBackgroundUrl = entries.map(entry => entry.videoUrl || entry.imageUrl || '').filter(Boolean).join('|');
+        const selected = entries.find(entry => entry.id === conf.selectedBackgroundId && entry.type === bgType)
+            || entries.find(entry => entry.type === bgType) || entries[0];
+        conf.selectedBackgroundId = selected.id;
         await saveGameConfig(gameName, conf);
-
-        const selected = entries.find(entry => entry.type === bgType) || entries[0];
         const path = bgType === 'Video' ? selected.videoPath || selected.imagePath : selected.imagePath || selected.videoPath;
         const url = bgType === 'Video' ? selected.videoUrl || selected.imageUrl || '' : selected.imageUrl || selected.videoUrl || '';
         if (!lastUrl && !changed) changed = true;

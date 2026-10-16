@@ -181,6 +181,7 @@ pub fn run() {
             config::path_manager::ssmt_install_directory,
             commands::ccswitch::import_ccswitch_providers,
             commands::clipboard::clipboard_write_text,
+            commands::background::sign_wwmi_background_url,
             commands::game_discovery::find_game_executable,
             commands::game_launcher::configure_zzmi_launch_settings,
             commands::gimi_settings::configure_gimi_launch_settings,

@@ -261,7 +261,8 @@ onUnmounted(() => {
 
       <!-- Video Background -->
       <video v-if="appSettings.bgType === BGType.Video && appSettings.bgVideo" :key="appSettings.bgVideo"
-        :src="appSettings.bgVideo" autoplay loop muted playsinline class="bg-item"></video>
+        :src="appSettings.bgVideo" :poster="appSettings.bgImage" autoplay loop muted playsinline class="bg-item"
+        @error="AppStateManager.fallbackBackgroundVideo(($event.currentTarget as HTMLVideoElement).getAttribute('src') || '')"></video>
       <div v-if="appSettings.bgType === BGType.Video && appSettings.bgTheme" :key="appSettings.bgTheme" class="bg-item bg-video-theme"
         :style="{ backgroundImage: `url(${appSettings.bgTheme})` }"></div>
     </transition-group>

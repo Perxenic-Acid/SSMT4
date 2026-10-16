@@ -1,3 +1,4 @@
+pub mod background;
 pub mod ccswitch;
 pub mod clipboard;
 pub mod compress;

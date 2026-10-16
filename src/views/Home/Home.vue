@@ -167,7 +167,7 @@ const backgroundEntries = computed(() => {
 })
 const canSwitchBackground = computed(() => backgroundEntries.value.length > 1)
 const currentBackgroundIndex = computed(() => currentGame.value?.bgIndex || 0)
-const currentBackgroundIsVideo = computed(() => backgroundEntries.value[currentBackgroundIndex.value]?.type === BGType.Video)
+const currentBackgroundIsVideo = computed(() => appSettings.bgType === BGType.Video && backgroundEntries.value[currentBackgroundIndex.value]?.type === BGType.Video)
 const backgroundVideoPaused = ref(false)
 const toggleBackgroundVideo = async () => {
   const video = document.querySelector<HTMLVideoElement>('.bg-layer video.bg-item')
