@@ -6,7 +6,8 @@
 
 本轮反馈按以下顺序处理：
 
-- [ ] 崩铁仍无 Mod：已修复并回归交换链取回底层设备的绕过路径；实机无提示的完整原因及 Mod 画面仍待验收。
+- [ ] 崩铁仍无 Mod：已修复交换链取回底层设备的绕过路径，并补齐 Shade 单独启用时的有序预加载；更新后的游戏内 Mod 画面仍待验收。
+- [x] Shade Bridge 单独启用时共用 Run.exe 预加载链，移除独立注入器竞争和强制 150 ms 延迟；保留源 Add-on 禁用项及游戏已有教程 / 按键状态。
 - [x] 原神启动前按实际采用的 DLSS5 路线自动控制 FSR2，不再依赖玩家手工切换。
 
 - [x] 修复 D3D11 热注入初始化顺序及同名系统 DLL 被误报为 Runtime，补充真实 Runtime 注入回归；崩铁 Mod 画面仍待复测。
@@ -24,6 +25,14 @@
   - [ ] 崩铁游戏内 FPS 验收；任意帧率、相机等 Native 功能仍需单独取得对应版本证据。
 
 ## 验收约束
+
+10 月 16 日用户进一步确认：崩铁关闭 HoYoShade Bridge 后 3DMigoto 可用，开启后无欢迎文字。14:49 的 ReShade 日志显示它从外部资源目录先注入，系统 D3D11 随后才加载。调用链检查发现此前有序预加载只覆盖 DLSS5，Shade 单独开启仍启动独立 `inject.exe`、等待后走 CBT，并强制 Runtime 延迟 150 ms。这条遗漏路径现通过 `prepare_hoyoshade_hot_runtime` 准备同一种启动计划，交给 Run.exe 挂起创建游戏，按系统 D3D11、SSMT Runtime、ReShade 的顺序加载后恢复；不再启动独立注入器。Shell 直接指向同一游戏 EXE 时也使用该策略，不改保存的配置；手动等待和不同外部启动器仍保留原路径，尚未覆盖本次修复。
+
+Shade 单独使用的配置位于 `PluginAssets/ssmt.hoyoshade.bridge/hot/<游戏实例名哈希>/`。复用已有配置组合器及默认值记录，不添加 DLSS 组件或修改抗锯齿；原 HoYoShade 的 Add-on 禁用项保留。首次迁移只读取游戏目录旧 INI 的教程、按键、界面与截图状态，不继承旧注入器重写的 Add-on / Host 路径，也不写入游戏目录。未启用插件时不准备这些资源，准备失败仅横幅提示并继续普通 Mod 启动。DLSS5 准备或画质配置失败时，Shade 同样采用有序预加载回退，不重新启动独立注入器。
+
+本次 118 项 Rust 插件测试、70 项前端 / 启动回归及前端构建通过；另使用本机真实 HoYoShade 资源与崩铁旧 INI 连续准备两次，确认禁用项、教程进度及源文件不变。该资源检查不加载 DLL、不启动游戏；未重复运行 GPU 夹具，不能据此认定游戏内共存已经恢复。本次修改涉及 Tauri 命令和前端，需重新启动开发应用（`bun tauri dev`）；仅重新 `build_native.ps1` 不会更新这条调用链。
+
+复用实际资源检查时设置 `SSMT_SHADE_TEST_SOURCE` 为 HoYoShade 目录、`SSMT_SHADE_TEST_GAME` 为已退出的游戏 EXE，再执行 `cargo test --manifest-path src-tauri/Cargo.toml --lib plugin::hoyoshade::tests::real_shade_assets_prepare_without_executing_or_modifying_sources -- --ignored`。输出仅写到独立临时目录，成功后清理；不会运行其中的 EXE、DLL 或 Add-on。
 
 10 月 16 日继续排查确认 `HackerSwapChain::GetDevice` 原先直接返回系统设备，从它重新取得的 Context 会绕开 Runtime。现改为向交换链所持有的包装设备查询接口，复用原有 Hook / 包装及引用管理策略。新增 Unity 风格 WARP 用例覆盖 BGRA、Device1 / Context1、独立交换链及从交换链取回设备；它通过 INI 的 `post clear` 命令把蓝色清屏改为红色并回读像素，修复前退出 7，修复后通过。三项原生注入回归和原有六项 Context 回归通过。该缺陷与“进程已检测到”是不同层次，仍不能把夹具通过当作崩铁实机恢复。
 

@@ -155,6 +155,7 @@ pub fn run() {
             plugin::star_rail_tweaks::prepare_star_rail_player_tweaks,
             plugin::commands::set_plugin_external_dependency_path,
             plugin::commands::prepare_hoyoshade_launch,
+            plugin::hoyoshade::prepare_hoyoshade_hot_runtime,
             plugin::gimi_hot_runtime::prepare_gimi_hot_runtime,
             plugin::gimi_hot_runtime::import_gimi_hot_runtime,
             plugin::gimi_hot_runtime::download::download_gimi_hot_runtime,

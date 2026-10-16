@@ -17,7 +17,7 @@ function load(relative, mocks) {
   return exports;
 }
 
-function harness(config, hostConfig = null, hotRuntime = null, settingsError = null) {
+function harness(config, hostConfig = null, hotRuntime = null, settingsError = null, shadeHotRuntime = null) {
   let ini = '[Loader]\nloader = XXMI Launcher.exe\nlaunch = C:/old.exe\nlaunch_args = old\nmodule = d3d11.dll\n';
   const calls = [];
   const messages = [];
@@ -48,6 +48,7 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
       calls.push({ command, args });
       if (command === 'prepare_plugin_host_config') return hostConfig;
       if (command === 'prepare_hoyoshade_launch') return null;
+      if (command === 'prepare_hoyoshade_hot_runtime') return typeof shadeHotRuntime === 'function' ? shadeHotRuntime() : shadeHotRuntime;
       if (command === 'prepare_dlss5_hot_runtime') return typeof hotRuntime === 'function' ? hotRuntime() : hotRuntime;
       if (command === 'configure_dlss5_launch_settings') {
         if (settingsError) throw settingsError;
@@ -156,6 +157,52 @@ const hotPlan = {
   dlls: ['C:/SSMT/Owned/ReShade64.dll'], runtimeDirectory: 'C:/SSMT/Owned',
   environment: { RESHADE_BASE_PATH_OVERRIDE: 'C:/SSMT/Owned', RESHADE_DISABLE_GRAPHICS_HOOK: null },
 };
+
+test('Shade 单独启用或 DLSS5 准备失败时仍与 Runtime 有序预加载，不调用独立注入器和 AA 配置', async () => {
+  for (const useShell of [false, true]) {
+    for (const hostConfig of [null, 'C:/Plugins/host.json']) {
+      for (const dlssPlan of [null, () => { throw new Error('NR 组件缺失'); }]) {
+        const target = 'C:/Game/StarRail.exe';
+        const h = harness({ ...base, gamePreset: 'SRMI', targetExePath: target, useShell, launcherExePath: target }, hostConfig, dlssPlan, null, hotPlan);
+        await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
+        const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+        const injector = programs.find(program => program.path.endsWith('/Run.exe'));
+        assert.match(injector.args, /--preload-runtime/);
+        assert.match(injector.args, /--set-env "RESHADE_BASE_PATH_OVERRIDE=/);
+        assert.equal(programs.some(program => program.path === target), false);
+        assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
+        assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+        assert.equal(injector.args.includes('--plugin-host-config'), !!hostConfig);
+        assert.match(h.ini(), /inject_dlls = C:\/SSMT\/Owned\/ReShade64.dll/);
+        assert.doesNotMatch(h.ini(), /dll_initialization_delay = 150/);
+      }
+    }
+  }
+});
+
+test('Shade 热注入失败仅横幅提示并保留普通 Mod，纯净启动不准备 Shade', async () => {
+  const failed = harness({ ...base, gamePreset: 'SRMI', targetExePath: 'C:/Game/StarRail.exe' }, null, null, null, () => { throw new Error('Shade 资源损坏'); });
+  await failed.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.ok(failed.calls.some(call => call.command === 'launch_programs'));
+  assert.equal(failed.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
+  assert.equal(failed.messages.filter(message => message.kind === 'warning').length, 1);
+  const pure = harness({ ...base }, null, null, null, hotPlan);
+  await pure.launch.launch('SRMI', { gameLaunchMode: 'always-pure' }, () => {});
+  assert.equal(pure.calls.some(call => call.command === 'prepare_hoyoshade_hot_runtime'), false);
+});
+
+test('DLSS5 画质配置失败时 Shade 仍走有序预加载，不回退到独立注入器', async () => {
+  const dlssPlan = { ...hotPlan, dlls: [...hotPlan.dlls, 'C:/SSMT/Owned/SSMT-Gimi-Bridge.dll'] };
+  const h = harness({ ...base, gamePreset: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe' }, null, dlssPlan, new Error('备份画质失败'), hotPlan);
+  await h.launch.launch('原神', { gameLaunchMode: 'always-normal' }, () => {});
+  const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+  assert.match(programs[0].args, /--preload-runtime/);
+  assert.match(h.ini(), /inject_dlls = C:\/SSMT\/Owned\/ReShade64.dll/);
+  assert.doesNotMatch(h.ini(), /SSMT-Gimi-Bridge.dll/);
+  assert.equal(h.calls.filter(call => call.command === 'configure_dlss5_launch_settings').length, 1);
+  assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
+  assert.equal(h.messages.filter(message => message.kind === 'warning').length, 1);
+});
 
 test('各游戏热注入计划合并进单次挂起启动，保留 PluginHost，不再启动第二套 Shade 注入器', async () => {
   for (const [preset, name] of [['SRMI', 'StarRail'], ['WWMI', 'Client-Win64-Shipping'], ['ZZMI', 'ZenlessZoneZero'], ['ZZMIDX12', 'ZenlessZoneZero']]) {

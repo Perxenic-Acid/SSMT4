@@ -525,7 +525,7 @@ fn prepare_at(
     })
 }
 
-fn ensure_no_external_host(executable: &Path) -> Result<(), String> {
+pub(super) fn ensure_no_external_host(executable: &Path) -> Result<(), String> {
     let game = executable.parent().ok_or("游戏目录无效")?;
     for name in ["dxgi.dll", "d3d11.dll"] {
         if game.join(name).exists() {

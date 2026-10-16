@@ -86,6 +86,7 @@ async function harness(t, options = {}) {
         if (options.hotError) throw new Error(options.hotError);
         return options.hotRuntime ?? null;
       }
+      if (command === 'prepare_hoyoshade_hot_runtime') return null;
       if (command === 'prepare_plugin_host_config') return options.hostConfig ?? null;
       if (command === 'prepare_hoyoshade_launch') {
         if (options.shadeError) throw new Error(options.shadeError);
