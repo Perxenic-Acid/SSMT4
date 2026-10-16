@@ -145,6 +145,8 @@
       "graphicsRuntime_feeder_stopped": "Feeder 已停止，神经渲染未生效",
       "graphicsRuntime_d3d11_interposer_race": "Feeder 因 DX11 多线程保护不可用且 Present 路径存在插层而停止；神经渲染未生效",
       "graphicsRuntime_nr_evaluated": "日志报告 NR 已执行；请核对持续增长的帧数",
+      "graphicsRuntime_feature18_evaluated": "ReShade 日志记录了 Feature 18 成功执行；请核对后续帧数是否持续增长",
+      "graphicsRuntime_depth_source_mismatch": "当前深度缓冲尺寸与画面不一致，可能选中了阴影图集；请在 ReShade 的 Add-ons → Generic Depth 中选择与画面分辨率匹配的候选项",
       "graphicsRuntime_no_dlss_create": "未检测到 DLSS 创建，神经渲染未生效",
       "graphicsRuntime_no_nr_evidence": "日志中没有神经渲染成功的证据",
       "graphicsRuntime_no_log": "没有运行日志",

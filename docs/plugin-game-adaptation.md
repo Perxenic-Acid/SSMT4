@@ -6,7 +6,7 @@
 
 本轮反馈按以下顺序处理：
 
-- [ ] 崩铁仍无 Mod：已修复交换链取回底层设备的绕过路径，并补齐 Shade 单独启用时的有序预加载；更新后的游戏内 Mod 画面仍待验收。
+- [x] 崩铁 3DMigoto 与 ReShade 共存：已修复交换链取回底层设备的绕过路径，并让 `IDXGISwapChain4` 保持 Runtime 包装；2026-10-16 的真实短测同时加载 SRMI Runtime、ReShade 和 DLSS5，日志确认交换链重载配置、解析 `Mods` 及加载自定义资源，用户确认成功载入。完整游戏内画面和长时间退出行为仍需单独验收。
 - [x] Shade Bridge 单独启用时共用 Run.exe 预加载链，移除独立注入器竞争和强制 150 ms 延迟；保留源 Add-on 禁用项及游戏已有教程 / 按键状态。
 - [x] 原神启动前按实际采用的 DLSS5 路线自动控制 FSR2，不再依赖玩家手工切换。
 
@@ -30,7 +30,7 @@
 
 Shade 单独使用的配置位于 `PluginAssets/ssmt.hoyoshade.bridge/hot/<游戏实例名哈希>/`。复用已有配置组合器及默认值记录，不添加 DLSS 组件或修改抗锯齿；原 HoYoShade 的 Add-on 禁用项保留。首次迁移只读取游戏目录旧 INI 的教程、按键、界面与截图状态，不继承旧注入器重写的 Add-on / Host 路径，也不写入游戏目录。未启用插件时不准备这些资源，准备失败仅横幅提示并继续普通 Mod 启动。DLSS5 准备或画质配置失败时，Shade 同样采用有序预加载回退，不重新启动独立注入器。
 
-本次 118 项 Rust 插件测试、70 项前端 / 启动回归及前端构建通过；另使用本机真实 HoYoShade 资源与崩铁旧 INI 连续准备两次，确认禁用项、教程进度及源文件不变。该资源检查不加载 DLL、不启动游戏；未重复运行 GPU 夹具，不能据此认定游戏内共存已经恢复。本次修改涉及 Tauri 命令和前端，需重新启动开发应用（`bun tauri dev`）；仅重新 `build_native.ps1` 不会更新这条调用链。
+本次 121 项 Rust 插件测试、70 项前端 / 启动回归及前端构建通过；另使用本机真实 HoYoShade 资源与崩铁旧 INI 连续准备两次，确认禁用项、教程进度及源文件不变。该资源检查不加载 DLL、不启动游戏；未重复运行 GPU 夹具，不能据此认定游戏内共存已经恢复。本次修改涉及 Tauri 命令和前端，需重新启动开发应用（`bun tauri dev`）；仅重新 `build_native.ps1` 不会更新这条调用链。
 
 复用实际资源检查时设置 `SSMT_SHADE_TEST_SOURCE` 为 HoYoShade 目录、`SSMT_SHADE_TEST_GAME` 为已退出的游戏 EXE，再执行 `cargo test --manifest-path src-tauri/Cargo.toml --lib plugin::hoyoshade::tests::real_shade_assets_prepare_without_executing_or_modifying_sources -- --ignored`。输出仅写到独立临时目录，成功后清理；不会运行其中的 EXE、DLL 或 Add-on。
 
@@ -39,6 +39,8 @@ Shade 单独使用的配置位于 `PluginAssets/ssmt.hoyoshade.bridge/hot/<游�
 同日用户报告硬件测试期间出现 `nvlddmkm` 事件 153；只读核对 14:06–14:35 共 13 条，时间与真实 ReShade 交换链夹具重合。硬件组合未取得完成标记并超时，已停止重复硬件复测；驱动事件与超时的因果关系、是否涉及设备 / Context 指针冲突均未证实，不扩展为驱动排障任务。ReShade 日志停在初始化后段，不能仅按源码中的联网检查判定全部超时原因。后续自动回归明确使用 WARP，硬件必须显式选择；WARP 不覆盖 ReShade 的完整硬件代理与游戏画面。
 
 本轮崩铁日志确认 Feeder 已接收帧，但 ReShade 在 Runtime 注入之后才延迟加载系统 D3D11。Runtime 只在初始化时挂钩已加载的系统库，因此预加载现先装入系统 D3D11，再装入 Runtime、各插件并恢复目标；最终确认比较完整文件身份。隔离测试覆盖真实进程、系统入口的加载顺序及 Runtime Context 身份，另检查真实 ReShade 共存。原先的 Context 夹具在 EXE 导入阶段就加载系统 D3D11，不能覆盖这次启动顺序。已有 `calls=0` 的旧 Migoto 日志仍不能判断本次是否接管；游戏内 Mod 画面必须复测。
+
+10 月 16 日又核对了用户报告的“DLSS5 缺少依赖但似乎可用”：历史插件包仍声明旧 Swapper、adapter、payload 为依赖，但当前崩铁路线由 SSMT 托管热注入，不使用这三项。生命周期和启动预检现只对 DLSS5 `0.2.1` 及更新包的这三个旧依赖 ID 按可选集成处理；`0.2.0` 及更旧冷路线和其他插件 / 依赖仍按必需项检查。不会修改已安装的插件包。诊断同时读取受管 ReShade 或 SSMT 自有热注入目录中的 `ReShade.log`。Feature 18 成功记录只能证明对应效果执行过，仍需看后续帧计数；日志中的深度源尺寸若为 `5120×3200`、而画面为 `2560×1600`，应在 Generic Depth 中选择与画面匹配的候选项。用户看到的 HoYoShade `v0.1.0` 是插件包版本，SSMT 本体的启动注入修复不会改变该版本号。上述日志只证明 ReShade / 效果运行，不证明 3DMigoto 本次已接管或 Mod 画面恢复；这两项仍待游戏内复测。
 
 插件未安装或未启用时不下载、不扫描专用资源、不复制 DLL、不注入。可选组件准备失败时横幅提示并继续普通启动。检查空组合、单插件、多个插件与全部已知插件；同一进程只能有一套 ReShade Host，关闭插件后不能遗留其 Add-on 贡献。
 

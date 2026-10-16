@@ -45,8 +45,9 @@ interface Dlss5RouteScan {
 
 interface Dlss5LastRunStatus {
   verdict: 'inactive' | 'engaged' | 'unknown';
-  reason: 'd3d11_interposer_race' | 'feeder_stopped' | 'nr_evaluated' | 'no_dlss_create' | 'no_nr_evidence' | 'no_log' | 'log_precedes_install';
+  reason: 'd3d11_interposer_race' | 'feeder_stopped' | 'nr_evaluated' | 'feature18_evaluated' | 'no_dlss_create' | 'no_nr_evidence' | 'no_log' | 'log_precedes_install';
   observedAtMs: number | null;
+  warning: 'depth_source_mismatch' | null;
 }
 
 const dlss5State = ref<Dlss5StateSnapshot | null>(null);
@@ -94,9 +95,12 @@ const refreshGraphicsState = async () => {
       }
     }
     if (state.state === 'broken') graphicsStatusError.value = state.reason || '';
-    if (state.state === 'managed') {
+    if (state.state === 'managed' || hotRuntime.value) {
       try {
-        const lastRun = await invoke<Dlss5LastRunStatus>('inspect_dlss5_last_run', { gameExecutable: target });
+        const lastRun = await invoke<Dlss5LastRunStatus>('inspect_dlss5_last_run', {
+          gameExecutable: target,
+          gameName: props.gameName,
+        });
         if (requestId === graphicsRequestId) dlss5LastRun.value = lastRun;
       } catch (error) {
         if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
@@ -315,7 +319,7 @@ onUnmounted(() => {
       <code v-if="hotRuntime">{{ hotRuntime.root }}</code>
     </div>
     <p v-if="isGimi()" class="graphics-hint">{{ label('自动下载并配置成功后，此游戏下次启动使用所选实现；切换失败保留原路线。', 'Successful setup selects this implementation for the next launch; a failed setup keeps the previous route.') }}</p>
-    <div v-if="dlss5State?.state === 'managed'" class="graphics-hint"
+    <div v-if="dlss5State?.state === 'managed' || hotRuntime" class="graphics-hint"
       :class="{ 'graphics-error': dlss5LastRun?.verdict === 'inactive' }">
       {{ t('gameSettingsModal.fields.graphicsInstalledOnly') }}
       <template v-if="dlss5LastRun">
@@ -323,6 +327,9 @@ onUnmounted(() => {
         <span v-if="dlss5LastRun.observedAtMs">({{ new Date(dlss5LastRun.observedAtMs).toLocaleString() }})</span>
       </template>
     </div>
+    <p v-if="dlss5LastRun?.warning === 'depth_source_mismatch'" class="graphics-error" role="status">
+      {{ t('gameSettingsModal.fields.graphicsRuntime_depth_source_mismatch') }}
+    </p>
   </section>
 </template>
 

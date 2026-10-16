@@ -146,6 +146,8 @@
       "graphicsRuntime_feeder_stopped": "Feeder stopped; neural rendering is inactive",
       "graphicsRuntime_d3d11_interposer_race": "Feeder stopped because DX11 multithread protection is unavailable with a Present interposer; neural rendering is inactive",
       "graphicsRuntime_nr_evaluated": "Log reports NR activity; check that the frame count keeps increasing",
+      "graphicsRuntime_feature18_evaluated": "ReShade logged a successful Feature 18 evaluation; check that later frame counts keep increasing",
+      "graphicsRuntime_depth_source_mismatch": "The selected depth buffer does not match the display resolution and may be a shadow atlas. Choose a matching candidate in ReShade Add-ons → Generic Depth",
       "graphicsRuntime_no_dlss_create": "No DLSS creation observed; neural rendering is inactive",
       "graphicsRuntime_no_nr_evidence": "No evidence of successful neural rendering in the log",
       "graphicsRuntime_no_log": "No run log found",

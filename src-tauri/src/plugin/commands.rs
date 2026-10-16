@@ -49,6 +49,7 @@ pub struct Dlss5LastRunStatus {
     pub verdict: &'static str,
     pub reason: &'static str,
     pub observed_at_ms: Option<u128>,
+    pub warning: Option<&'static str>,
 }
 
 fn inspect_dlss5_last_run_log(path: &std::path::Path) -> Result<Dlss5LastRunStatus, String> {
@@ -68,14 +69,24 @@ fn inspect_dlss5_last_run_log(path: &std::path::Path) -> Result<Dlss5LastRunStat
         ("inactive", "d3d11_interposer_race")
     } else if log.contains("[DLSS 5 Feed] stopped:") {
         ("inactive", "feeder_stopped")
-    } else if log.contains("NR-VERDICT state=ENGAGED") {
-        ("engaged", "nr_evaluated")
     } else if log.contains("NO DLSS CREATE SEEN") {
         ("inactive", "no_dlss_create")
+    } else if log.contains("NR-VERDICT state=ENGAGED") {
+        ("engaged", "nr_evaluated")
+    } else if log.contains("inline feature 18 evaluation succeeded") {
+        ("engaged", "feature18_evaluated")
     } else {
         ("unknown", "no_nr_evidence")
     };
-    Ok(Dlss5LastRunStatus { verdict, reason, observed_at_ms })
+    let warning = log
+        .contains("most likely a shadow map or atlas")
+        .then_some("depth_source_mismatch");
+    Ok(Dlss5LastRunStatus {
+        verdict,
+        reason,
+        observed_at_ms,
+        warning,
+    })
 }
 
 impl From<&Dlss5State> for Dlss5GameStateSnapshot {
@@ -327,27 +338,102 @@ pub fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStat
 }
 
 #[tauri::command]
-pub fn inspect_dlss5_last_run(game_executable: String) -> Result<Dlss5LastRunStatus, String> {
+pub fn inspect_dlss5_last_run(
+    game_executable: String,
+    game_name: Option<String>,
+) -> Result<Dlss5LastRunStatus, String> {
     let executable = PathBuf::from(game_executable);
     if !executable.is_file() {
-        return Err(format!("game executable does not exist: {}", executable.display()));
+        return Err(format!(
+            "game executable does not exist: {}",
+            executable.display()
+        ));
     }
-    let managed = match inspect_game_executable(&executable) {
-        Dlss5State::Managed(state) => state,
-        _ => return Ok(Dlss5LastRunStatus { verdict: "unknown", reason: "no_log", observed_at_ms: None }),
+    let log = match inspect_game_executable(&executable) {
+        Dlss5State::Managed(state) => {
+            let game_log = executable
+                .parent()
+                .ok_or("game executable has no parent directory")?
+                .join("ReShade.log");
+            if !game_log.is_file() {
+                return Ok(Dlss5LastRunStatus {
+                    verdict: "unknown",
+                    reason: "no_log",
+                    observed_at_ms: None,
+                    warning: None,
+                });
+            }
+            let log_modified = fs::metadata(&game_log)
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| error.to_string())?;
+            let manifest_modified = fs::metadata(&state.manifest_path)
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| error.to_string())?;
+            if log_modified < manifest_modified {
+                return Ok(Dlss5LastRunStatus {
+                    verdict: "unknown",
+                    reason: "log_precedes_install",
+                    observed_at_ms: None,
+                    warning: None,
+                });
+            }
+            game_log
+        }
+        Dlss5State::NotManaged => {
+            let Some(game_name) = game_name else {
+                return Ok(Dlss5LastRunStatus {
+                    verdict: "unknown",
+                    reason: "no_log",
+                    observed_at_ms: None,
+                    warning: None,
+                });
+            };
+            let Some(registry) = installed_plugin_registry()? else {
+                return Ok(Dlss5LastRunStatus {
+                    verdict: "unknown",
+                    reason: "no_log",
+                    observed_at_ms: None,
+                    warning: None,
+                });
+            };
+            let scoped = registry.for_game(&game_name);
+            if !scoped
+                .find(super::dlss5::DLSS5_PLUGIN_ID)
+                .is_some_and(|plugin| plugin.enabled)
+            {
+                return Ok(Dlss5LastRunStatus {
+                    verdict: "unknown",
+                    reason: "no_log",
+                    observed_at_ms: None,
+                    warning: None,
+                });
+            }
+            let Some(log) = super::dlss5_hot_runtime::log_path(&game_name)? else {
+                return Ok(Dlss5LastRunStatus {
+                    verdict: "unknown",
+                    reason: "no_log",
+                    observed_at_ms: None,
+                    warning: None,
+                });
+            };
+            log
+        }
+        Dlss5State::Broken { .. } => {
+            return Ok(Dlss5LastRunStatus {
+                verdict: "unknown",
+                reason: "no_log",
+                observed_at_ms: None,
+                warning: None,
+            });
+        }
     };
-    let log = executable.parent().ok_or("game executable has no parent directory")?.join("ReShade.log");
     if !log.is_file() {
         return Ok(Dlss5LastRunStatus {
             verdict: "unknown",
             reason: "no_log",
             observed_at_ms: None,
+            warning: None,
         });
-    }
-    let log_modified = fs::metadata(&log).and_then(|metadata| metadata.modified()).map_err(|error| error.to_string())?;
-    let manifest_modified = fs::metadata(&managed.manifest_path).and_then(|metadata| metadata.modified()).map_err(|error| error.to_string())?;
-    if log_modified < manifest_modified {
-        return Ok(Dlss5LastRunStatus { verdict: "unknown", reason: "log_precedes_install", observed_at_ms: None });
     }
     inspect_dlss5_last_run_log(&log)
 }
@@ -572,8 +658,15 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
 fn lifecycle_status(plugin: &super::registry::InstalledPlugin) -> PluginLifecycleStatus {
     if plugin
         .external_dependencies
-        .values()
-        .any(|dependency| dependency.status != super::registry::ExternalDependencyStatus::Ready)
+        .iter()
+        .any(|(dependency_id, dependency)| {
+            dependency.status != super::registry::ExternalDependencyStatus::Ready
+                && !super::dlss5::is_optional_integration_dependency(
+                    &plugin.manifest.id,
+                    &plugin.manifest.version,
+                    dependency_id,
+                )
+        })
     {
         return PluginLifecycleStatus::ExternalDependencyMissing;
     }
@@ -1025,10 +1118,13 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn dlss5_last_run_requires_runtime_evidence() {
+    fn dlss5_last_run_recognizes_feature18_and_reports_depth_mismatch() {
         let dir = std::env::temp_dir().join(format!(
             "ssmt-dlss5-last-run-{}",
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(&dir).unwrap();
         let log = dir.join("ReShade.log");
@@ -1036,10 +1132,25 @@ mod tests {
         let status = inspect_dlss5_last_run_log(&log).unwrap();
         assert_eq!(status.verdict, "inactive");
         assert_eq!(status.reason, "d3d11_interposer_race");
-        fs::write(&log, "addon loaded\nNR-VERDICT state=ENGAGED; successful frames 60\n").unwrap();
+        fs::write(
+            &log,
+            "addon loaded\ninline feature 18 evaluation succeeded (count=60)\nThe depth source is 5120x3200, most likely a shadow map or atlas\n",
+        )
+        .unwrap();
+        let status = inspect_dlss5_last_run_log(&log).unwrap();
+        assert_eq!(status.verdict, "engaged");
+        assert_eq!(status.reason, "feature18_evaluated");
+        assert_eq!(status.warning, Some("depth_source_mismatch"));
+        fs::write(
+            &log,
+            "addon loaded\nNR-VERDICT state=ENGAGED; successful frames 60\n",
+        )
+        .unwrap();
         assert_eq!(inspect_dlss5_last_run_log(&log).unwrap().verdict, "engaged");
         fs::write(&log, "addon loaded\n").unwrap();
-        assert_eq!(inspect_dlss5_last_run_log(&log).unwrap().verdict, "unknown");
+        let status = inspect_dlss5_last_run_log(&log).unwrap();
+        assert_eq!(status.verdict, "unknown");
+        assert_eq!(status.warning, None);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1241,6 +1352,63 @@ mod tests {
                 status: ExternalDependencyStatus::Missing,
                 path: None,
                 reason: Some("missing file".to_string()),
+            },
+        );
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::ExternalDependencyMissing
+        ));
+    }
+
+    #[test]
+    fn missing_legacy_swapper_paths_do_not_mark_hot_dlss5_as_missing() {
+        let mut plugin = InstalledPlugin {
+            manifest: PluginManifest {
+                schema_version: 1,
+                id: super::super::dlss5::DLSS5_PLUGIN_ID.to_string(),
+                name: "DLSS5 Integration".to_string(),
+                version: "0.2.1".to_string(),
+                author: "SSMT".to_string(),
+                compatibility: PluginCompatibility {
+                    ssmt: ">=4.0.0".to_string(),
+                    platforms: vec!["windows-x64".to_string()],
+                    games: Vec::new(),
+                },
+                contributions: PluginContributions::default(),
+                external_dependencies: Vec::new(),
+                permissions: Vec::new(),
+            },
+            package_root: PathBuf::from("fixture"),
+            enabled: true,
+            official: true,
+            external_dependencies: BTreeMap::new(),
+        };
+        for id in ["dlss5-swapper", "dlss5-adapter", "dlss5-payload"] {
+            plugin.external_dependencies.insert(
+                id.to_string(),
+                ExternalDependencyState {
+                    status: ExternalDependencyStatus::Missing,
+                    path: None,
+                    reason: Some("not configured".to_string()),
+                },
+            );
+        }
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::Enabled
+        ));
+        plugin.manifest.version = "0.2.0".to_string();
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::ExternalDependencyMissing
+        ));
+        plugin.manifest.version = "0.2.1".to_string();
+        plugin.external_dependencies.insert(
+            "required-feature".to_string(),
+            ExternalDependencyState {
+                status: ExternalDependencyStatus::Missing,
+                path: None,
+                reason: Some("missing".to_string()),
             },
         );
         assert!(matches!(

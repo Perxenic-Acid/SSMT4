@@ -9,6 +9,20 @@ pub const DLSS5_BACKUP_DIRECTORY: &str = "_DLSS5_Backup";
 pub const DLSS5_MANIFEST_FILE: &str = "manifest.json";
 const SUPPORTED_MANIFEST_VERSION: u32 = 1;
 
+pub fn is_optional_integration_dependency(
+    plugin_id: &str,
+    plugin_version: &str,
+    dependency_id: &str,
+) -> bool {
+    plugin_id == DLSS5_PLUGIN_ID
+        && semver::Version::parse(plugin_version)
+            .is_ok_and(|version| version >= semver::Version::new(0, 2, 1))
+        && matches!(
+            dependency_id,
+            DLSS5_DEPENDENCY_ID | "dlss5-adapter" | "dlss5-payload"
+        )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dlss5Route {
     Native,
@@ -353,6 +367,36 @@ mod tests {
             "reshade": { "installedByUs": true },
             "futureField": { "ignored": true }
         })
+    }
+
+    #[test]
+    fn only_current_dlss5_package_versions_skip_legacy_swapper_integrations() {
+        for dependency in [
+            DLSS5_DEPENDENCY_ID,
+            "dlss5-adapter",
+            "dlss5-payload",
+        ] {
+            assert!(is_optional_integration_dependency(
+                DLSS5_PLUGIN_ID,
+                "0.2.1",
+                dependency
+            ));
+            assert!(!is_optional_integration_dependency(
+                DLSS5_PLUGIN_ID,
+                "0.2.0",
+                dependency
+            ));
+            assert!(!is_optional_integration_dependency(
+                "third.party.plugin",
+                "99.0.0",
+                dependency
+            ));
+        }
+        assert!(!is_optional_integration_dependency(
+            DLSS5_PLUGIN_ID,
+            "0.2.1",
+            "required-feature"
+        ));
     }
 
     #[test]

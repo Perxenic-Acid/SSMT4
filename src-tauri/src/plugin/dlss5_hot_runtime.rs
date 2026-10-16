@@ -234,6 +234,14 @@ fn load(game_name: &str) -> Result<Option<Installation>, String> {
         .transpose()
 }
 
+pub(super) fn log_path(game_name: &str) -> Result<Option<PathBuf>, String> {
+    let Some(installation) = load(game_name)? else {
+        return Ok(None);
+    };
+    require_owned(&installation)?;
+    Ok(Some(installation.root.join("ReShade.log")))
+}
+
 fn require_owned(installation: &Installation) -> Result<(), String> {
     let root = canonical_path(&installation.root).map_err(|error| error.to_string())?;
     let parent = canonical_path(&installation_parent()).map_err(|error| error.to_string())?;

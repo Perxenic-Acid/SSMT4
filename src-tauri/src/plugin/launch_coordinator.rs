@@ -245,7 +245,13 @@ fn validate_request(request: &LaunchRequest) -> Result<(), LaunchCoordinatorErro
 
 fn validate_plugin_preflight(plugin: &InstalledPlugin) -> Result<(), LaunchCoordinatorError> {
     for (dependency_id, dependency_state) in &plugin.external_dependencies {
-        if dependency_state.status != ExternalDependencyStatus::Ready {
+        if dependency_state.status != ExternalDependencyStatus::Ready
+            && !super::dlss5::is_optional_integration_dependency(
+                &plugin.manifest.id,
+                &plugin.manifest.version,
+                dependency_id,
+            )
+        {
             return Err(LaunchCoordinatorError::MissingExternalDependency {
                 plugin_id: plugin.manifest.id.clone(),
                 dependency_id: dependency_id.clone(),
@@ -313,6 +319,7 @@ fn is_valid_transition(from: LaunchPhase, to: LaunchPhase) -> bool {
 mod tests {
     use super::*;
     use crate::plugin::registry::PluginRegistry;
+    use crate::plugin::PluginManifest;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -406,6 +413,45 @@ mod tests {
             LaunchCoordinatorError::MissingPermission { .. }
         ));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_dlss5_tools_do_not_block_the_managed_hot_runtime() {
+        let plugin = InstalledPlugin {
+            manifest: PluginManifest {
+                schema_version: 1,
+                id: super::super::dlss5::DLSS5_PLUGIN_ID.to_string(),
+                name: "DLSS5 Integration".to_string(),
+                version: "0.2.1".to_string(),
+                author: "SSMT".to_string(),
+                compatibility: crate::plugin::PluginCompatibility {
+                    ssmt: ">=4.0.0".to_string(),
+                    platforms: vec!["windows-x64".to_string()],
+                    games: Vec::new(),
+                },
+                contributions: crate::plugin::PluginContributions::default(),
+                external_dependencies: Vec::new(),
+                permissions: Vec::new(),
+            },
+            package_root: PathBuf::from("fixture"),
+            enabled: true,
+            external_dependencies: std::collections::BTreeMap::from([(
+                "dlss5-adapter".to_string(),
+                crate::plugin::registry::ExternalDependencyState {
+                    status: ExternalDependencyStatus::Missing,
+                    path: None,
+                    reason: Some("not configured".to_string()),
+                },
+            )]),
+            official: true,
+        };
+        assert!(validate_plugin_preflight(&plugin).is_ok());
+        let mut legacy = plugin;
+        legacy.manifest.version = "0.2.0".to_string();
+        assert!(matches!(
+            validate_plugin_preflight(&legacy),
+            Err(LaunchCoordinatorError::MissingExternalDependency { .. })
+        ));
     }
 
     #[test]
