@@ -25,40 +25,113 @@ fn entries(store: &PluginSettingsStore, game: &str) -> Result<Vec<Installation>,
         .transpose()
         .map_err(|e| format!("热组件历史损坏：{e}"))?
         .unwrap_or_default();
-    if let Some(current) = store
-        .get(DLSS5_PLUGIN_ID, &setting_key(game))
-        .map_err(|e| e.to_string())?
-        .filter(|v| !v.is_null())
-    {
-        let current: Installation = serde_json::from_value(current).map_err(|e| e.to_string())?;
-        if !entries.iter().any(|item| item.root == current.root) {
-            entries.push(current);
+    // 保留旧设置键，首次管理时将两种实现的当前安装一起纳入历史。
+    for route in ["gimi-hot", "native"] {
+        if let Some(current) = current(store, game, route)? {
+            if !entries.iter().any(|item| item.root == current.root) {
+                entries.push(current);
+            }
         }
     }
     Ok(entries)
 }
 
+fn gimi_entry(
+    installation: gimi_hot_runtime::HotRuntimeInstallation,
+) -> Result<Installation, String> {
+    Ok(Installation {
+        revision: gimi_hot_runtime::compatibility_revision(&installation.profile)?,
+        root: installation.root,
+        profile: installation.profile,
+        route: "gimi-hot".into(),
+        baseline: None,
+    })
+}
+
+fn gimi_installation(item: &Installation) -> gimi_hot_runtime::HotRuntimeInstallation {
+    gimi_hot_runtime::HotRuntimeInstallation {
+        root: item.root.clone(),
+        profile: item.profile.clone(),
+    }
+}
+
+fn current_key(game: &str, route: &str) -> String {
+    if route == "gimi-hot" {
+        gimi_hot_runtime::setting_key(game)
+    } else {
+        setting_key(game)
+    }
+}
+
+fn current(
+    store: &PluginSettingsStore,
+    game: &str,
+    route: &str,
+) -> Result<Option<Installation>, String> {
+    store
+        .get(DLSS5_PLUGIN_ID, &current_key(game, route))
+        .map_err(|e| e.to_string())?
+        .filter(|v| !v.is_null())
+        .map(|value| {
+            if route == "gimi-hot" {
+                gimi_entry(serde_json::from_value(value).map_err(|e| e.to_string())?)
+            } else {
+                serde_json::from_value(value).map_err(|e| e.to_string())
+            }
+        })
+        .transpose()
+}
+
+fn launch_route(item: &Installation) -> String {
+    if item.route == "gimi-hot" {
+        item.route.clone()
+    } else {
+        format!("ssmt-{}", item.route)
+    }
+}
+
+fn is_active(store: &PluginSettingsStore, game: &str, item: &Installation) -> Result<bool, String> {
+    let selected = current(store, game, &item.route)?;
+    let route = store
+        .get(DLSS5_PLUGIN_ID, &active_route_key(game))
+        .map_err(|e| e.to_string())?;
+    // 未保存路线的原神旧配置继续选择 FSR2 Bridge。
+    let route_matches = route
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .map_or(item.route == "gimi-hot", |route| {
+            route == launch_route(item)
+        });
+    Ok(route_matches && selected.is_some_and(|selected| selected.root == item.root))
+}
+
 fn save(
     store: &mut PluginSettingsStore,
     game: &str,
+    route: &str,
     current: Option<&Installation>,
     history: &[Installation],
+    activate: bool,
 ) -> Result<(), String> {
+    let value = match current {
+        Some(item) if route == "gimi-hot" => serde_json::to_value(gimi_installation(item)),
+        _ => serde_json::to_value(current),
+    }
+    .map_err(|e| e.to_string())?;
     let mut values = vec![
-        (
-            setting_key(game),
-            serde_json::to_value(current).map_err(|e| e.to_string())?,
-        ),
+        (current_key(game, route), value),
         (
             history_key(game),
             serde_json::to_value(history).map_err(|e| e.to_string())?,
         ),
     ];
-    if let Some(current) = current {
-        values.push((
-            active_route_key(game),
-            serde_json::Value::from(format!("ssmt-{}", current.route)),
-        ));
+    if activate {
+        if let Some(current) = current {
+            values.push((
+                active_route_key(game),
+                serde_json::Value::from(launch_route(current)),
+            ));
+        }
     }
     store
         .set_many(DLSS5_PLUGIN_ID, values)
@@ -71,7 +144,7 @@ pub(super) fn record_installation(game: &str, installation: &Installation) -> Re
     // 旧安装没有快照时，仅补入可确认的冻结基线，不能猜测它的组件版本。
     let legacy = manifest()?;
     for item in &mut history {
-        if item.baseline.is_none() && item.revision == legacy.revision {
+        if item.route != "gimi-hot" && item.baseline.is_none() && item.revision == legacy.revision {
             item.baseline = Some(legacy.clone());
         }
     }
@@ -81,8 +154,50 @@ pub(super) fn record_installation(game: &str, installation: &Installation) -> Re
     if history.len() > 32 {
         return Err("热组件历史已达 32 套，请先清理不再使用的组件".into());
     }
-    fs::write(installation.root.join(OWNER_FILE), owner(game)).map_err(|e| e.to_string())?;
-    save(&mut store, game, Some(installation), &history)
+    require_entry_owned(installation)?;
+    let mut marker = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(installation.root.join(OWNER_FILE))
+        .map_err(|e| e.to_string())?;
+    marker
+        .write_all(owner(game).as_bytes())
+        .map_err(|e| e.to_string())?;
+    save(
+        &mut store,
+        game,
+        &installation.route,
+        Some(installation),
+        &history,
+        true,
+    )
+}
+
+pub(crate) fn record_gimi_installation(
+    game: &str,
+    installation: &gimi_hot_runtime::HotRuntimeInstallation,
+) -> Result<(), String> {
+    record_installation(game, &gimi_entry(installation.clone())?)
+}
+
+fn require_entry_owned(item: &Installation) -> Result<(), String> {
+    if item.route == "gimi-hot" {
+        gimi_hot_runtime::require_owned(&gimi_installation(item))
+    } else {
+        require_owned(item)
+    }
+}
+
+fn validate_entry(item: &Installation, registry: &PluginRegistry) -> Result<(), String> {
+    require_entry_owned(item)?;
+    if item.route == "gimi-hot" {
+        if item.revision != gimi_hot_runtime::compatibility_revision(&item.profile)? {
+            return Err("该 FSR2 Bridge 组件基线不受当前版本支持，请重新配置".into());
+        }
+        gimi_hot_runtime::validate(&gimi_installation(item)).map(|_| ())
+    } else {
+        validate(item, &manifest_for(registry)?).map(|_| ())
+    }
 }
 
 #[derive(Serialize)]
@@ -95,6 +210,8 @@ pub struct HistoryEntry {
     current: bool,
     usable: bool,
     reason: Option<String>,
+    removable: bool,
+    cleanup_reason: Option<String>,
 }
 
 #[tauri::command]
@@ -106,25 +223,24 @@ pub fn dlss5_hot_runtime_history(game_name: String) -> Result<Vec<HistoryEntry>,
         return Ok(Vec::new());
     }
     let store = PluginSettingsStore::from_default_location().map_err(|e| e.to_string())?;
-    let current = load(&game_name)?;
-    let manifest = manifest_for(&registry)?;
-    Ok(entries(&store, &game_name)?
+    entries(&store, &game_name)?
         .into_iter()
         .map(|item| {
-            let result = require_owned(&item).and_then(|_| validate(&item, &manifest).map(|_| ()));
-            HistoryEntry {
-                current: current
-                    .as_ref()
-                    .is_some_and(|current| current.root == item.root),
+            let result = validate_entry(&item, &registry);
+            let cleanup = checked_cleanup_root(&item.root, &entry_parent(&item), &game_name);
+            Ok(HistoryEntry {
+                current: is_active(&store, &game_name, &item)?,
                 usable: result.is_ok(),
                 reason: result.err(),
                 root: item.root,
                 profile: item.profile,
                 route: item.route,
                 revision: item.revision,
-            }
+                removable: cleanup.is_ok(),
+                cleanup_reason: cleanup.err(),
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>, String>>()
 }
 
 #[tauri::command]
@@ -143,13 +259,33 @@ pub fn select_dlss5_hot_runtime(
         .iter()
         .find(|item| item.root == root)
         .ok_or("该组件不在当前实例历史中")?;
-    if selected.route != route {
+    if selected.route == "gimi-hot" && !gimi_hot_runtime::applies(Path::new(&game_executable))
+        || selected.route != "gimi-hot" && selected.route != route
+    {
         return Err("组件路线与当前游戏预设不匹配".into());
     }
-    require_owned(selected)?;
     let registry = PluginRegistry::from_default_location().map_err(|e| e.to_string())?;
-    validate(selected, &manifest_for(&registry)?)?;
-    save(&mut store, &game_name, Some(selected), &history)
+    validate_entry(selected, &registry)?;
+    let (confirmed_route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
+    if confirmed_route != route {
+        return Err("校验期间游戏预设已改变，请刷新后重新选择组件".into());
+    }
+    save(
+        &mut store,
+        &game_name,
+        &selected.route,
+        Some(selected),
+        &history,
+        true,
+    )
+}
+
+fn entry_parent(item: &Installation) -> PathBuf {
+    if item.route == "gimi-hot" {
+        gimi_hot_runtime::installation_parent()
+    } else {
+        installation_parent()
+    }
 }
 
 fn checked_cleanup_root(root: &Path, parent: &Path, game: &str) -> Result<PathBuf, String> {
@@ -218,9 +354,7 @@ fn cleanup_files(root: &Path) -> Result<(), String> {
                 collect(&path, files, directories)?;
                 directories.push(path);
             } else if metadata.is_file() {
-                if path.file_name().is_none_or(|name| name != OWNER_FILE) {
-                    files.push(path);
-                }
+                files.push(path);
             } else {
                 return Err("组件目录包含未知文件类型".into());
             }
@@ -233,6 +367,7 @@ fn cleanup_files(root: &Path) -> Result<(), String> {
     let mut files = Vec::new();
     let mut directories = Vec::new();
     collect(root, &mut files, &mut directories)?;
+    files.retain(|path| path != &root.join(OWNER_FILE));
     for file in files {
         fs::remove_file(file).map_err(|e| format!("清理未完成，已保留登记以便重试：{e}"))?;
     }
@@ -261,18 +396,134 @@ pub fn remove_dlss5_hot_runtime(
         .iter()
         .find(|item| item.root == root)
         .ok_or("该组件不在当前实例历史中")?;
-    let target = checked_cleanup_root(&selected.root, &installation_parent(), &game_name)?;
-    let current = load(&game_name)?.filter(|item| item.root != root);
+    let route = selected.route.clone();
+    let target = checked_cleanup_root(&selected.root, &entry_parent(selected), &game_name)?;
+    let current = current(&store, &game_name, &route)?.filter(|item| item.root != root);
     // 先撤销选择，清理失败或进程中断时不再启动残缺组件；历史保留供重试。
-    save(&mut store, &game_name, current.as_ref(), &history)?;
+    save(
+        &mut store,
+        &game_name,
+        &route,
+        current.as_ref(),
+        &history,
+        false,
+    )?;
     cleanup_files(&target)?;
     history.retain(|item| item.root != root);
-    save(&mut store, &game_name, current.as_ref(), &history)
+    save(
+        &mut store,
+        &game_name,
+        &route,
+        current.as_ref(),
+        &history,
+        false,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_gimi_and_feeder_history_switch_together_without_cleanup_changing_routes() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-gimi-history-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir(&root).unwrap();
+        let mut store = PluginSettingsStore::new(root.join("settings.json")).unwrap();
+        let legacy = gimi_hot_runtime::HotRuntimeInstallation {
+            root: root.join("old-gimi"),
+            profile: "rtx50".into(),
+        };
+        store
+            .set(
+                DLSS5_PLUGIN_ID,
+                &gimi_hot_runtime::setting_key("原神"),
+                serde_json::to_value(&legacy).unwrap(),
+            )
+            .unwrap();
+        let gimi = entries(&store, "原神").unwrap().pop().unwrap();
+        assert!(is_active(&store, "原神", &gimi).unwrap());
+        let feeder = Installation {
+            root: root.join("feeder"),
+            route: "feeder".into(),
+            profile: "rtx30".into(),
+            revision: "v1".into(),
+            baseline: None,
+        };
+        let history = [gimi.clone(), feeder.clone()];
+        save(
+            &mut store,
+            "原神",
+            &feeder.route,
+            Some(&feeder),
+            &history,
+            true,
+        )
+        .unwrap();
+        assert!(!is_active(&store, "原神", &gimi).unwrap());
+        assert!(is_active(&store, "原神", &feeder).unwrap());
+        let reopened = PluginSettingsStore::new(root.join("settings.json")).unwrap();
+        assert_eq!(entries(&reopened, "原神").unwrap().len(), 2);
+        assert!(entries(&reopened, "另一个实例").unwrap().is_empty());
+
+        save(&mut store, "原神", &gimi.route, Some(&gimi), &history, true).unwrap();
+        let raw = store
+            .get(DLSS5_PLUGIN_ID, &gimi_hot_runtime::setting_key("原神"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_value::<gimi_hot_runtime::HotRuntimeInstallation>(raw)
+                .unwrap()
+                .root,
+            legacy.root
+        );
+        assert!(is_active(&store, "原神", &gimi).unwrap());
+        assert!(!is_active(&store, "原神", &feeder).unwrap());
+
+        // 清理非活动 Feeder 的旧副本，不能顺带把路线切回 Feeder。
+        save(
+            &mut store,
+            "原神",
+            &feeder.route,
+            Some(&feeder),
+            &history,
+            false,
+        )
+        .unwrap();
+        assert!(is_active(&store, "原神", &gimi).unwrap());
+        save(&mut store, "原神", &gimi.route, None, &history, false).unwrap();
+        assert!(current(&store, "原神", "gimi-hot").unwrap().is_none());
+        assert!(current(&store, "原神", "feeder").unwrap().is_some());
+        assert!(!is_active(&store, "原神", &feeder).unwrap());
+        assert_eq!(
+            entries(&store, "原神").unwrap().len(),
+            2,
+            "撤销选择后仍保留历史供清理重试"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unmarked_legacy_directories_are_preserved_and_nested_marker_files_can_be_cleaned() {
+        let parent = std::env::temp_dir().join(format!(
+            "ssmt-gimi-cleanup-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let root = parent.join("legacy");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("user.ini"), b"preserve").unwrap();
+        assert!(checked_cleanup_root(&root, &parent, "原神").is_err());
+        assert_eq!(fs::read(root.join("user.ini")).unwrap(), b"preserve");
+        fs::write(root.join(OWNER_FILE), owner("原神")).unwrap();
+        fs::write(root.join("nested").join(OWNER_FILE), b"nested file").unwrap();
+        assert!(checked_cleanup_root(&root, &parent, "另一个实例").is_err());
+        cleanup_files(&checked_cleanup_root(&root, &parent, "原神").unwrap()).unwrap();
+        assert!(!root.exists());
+        fs::remove_dir(parent).unwrap();
+    }
+
     #[test]
     fn history_switch_is_atomic_and_cleanup_preserves_other_instances() {
         let root = std::env::temp_dir().join(format!(
@@ -296,15 +547,19 @@ mod tests {
         save(
             &mut store,
             "WWMI",
+            &first.route,
             Some(&first),
             &[first.clone(), second.clone()],
+            true,
         )
         .unwrap();
         save(
             &mut store,
             "WWMI",
+            &second.route,
             Some(&second),
             &[first.clone(), second.clone()],
+            true,
         )
         .unwrap();
         assert_eq!(entries(&store, "WWMI").unwrap().len(), 2);
@@ -315,7 +570,15 @@ mod tests {
                 .unwrap()["profile"],
             "rtx30"
         );
-        save(&mut store, "WWMI", None, &[first.clone(), second.clone()]).unwrap();
+        save(
+            &mut store,
+            "WWMI",
+            &second.route,
+            None,
+            &[first.clone(), second.clone()],
+            false,
+        )
+        .unwrap();
         let reopened = PluginSettingsStore::new(root.join("settings.json")).unwrap();
         assert!(reopened
             .get(DLSS5_PLUGIN_ID, &setting_key("WWMI"))

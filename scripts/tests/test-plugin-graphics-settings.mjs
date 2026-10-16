@@ -241,6 +241,36 @@ test('历史组件切换绑定当前实例，清理需明确确认，取消和�
   assert.ok(!cancelled.calls.some(call => call.command === 'remove_dlss5_hot_runtime'));
 });
 
+test('FSR2 Bridge 与 Feeder 从同一历史入口切换，缺少所有权的旧目录不提交清理', async t => {
+  let active = 'ssmt-feeder';
+  const history = [
+    { root: 'C:/Owned/FSR2', route: 'gimi-hot', profile: 'rtx50', revision: 'fsr2-v1', usable: true, removable: false, cleanupReason: '缺少实例所有权记录' },
+    { root: 'C:/Owned/Feeder', route: 'feeder', profile: 'rtx30', revision: 'v1', usable: true, removable: true },
+  ];
+  const { s, calls } = graphics(t, {
+    routes: ['gimi-hot', 'ssmt-feeder'], history,
+    status: command => ({ root: command === 'gimi_hot_runtime_status' ? history[0].root : history[1].root, profile: 'rtx50', route: 'feeder' }),
+    manage: (command, args) => {
+      if (command === 'select_dlss5_hot_runtime') active = args.root === history[0].root ? 'gimi-hot' : 'ssmt-feeder';
+    },
+  });
+  await s.refreshGraphicsState();
+  s.graphicsSelectedRoute.value = 'ssmt-feeder';
+  s.historySelection.value = history[0].root;
+  await s.manageHotHistory();
+  assert.equal(active, 'gimi-hot');
+  assert.equal(s.graphicsSelectedRoute.value, 'gimi-hot');
+  assert.equal(s.hotRuntime.value.root, history[0].root);
+  s.historySelection.value = history[0].root;
+  await s.manageHotHistory(true);
+  assert.ok(!calls.some(call => call.command === 'remove_dlss5_hot_runtime'));
+  s.historySelection.value = history[1].root;
+  await s.manageHotHistory();
+  assert.equal(active, 'ssmt-feeder');
+  assert.equal(s.graphicsSelectedRoute.value, 'ssmt-feeder');
+  assert.equal(s.hotRuntime.value.root, history[1].root);
+});
+
 test('automatic setup runs only on click, reports progress, and captures the selected profile', async t => {
   const { s, calls, job, pickerCount } = graphics(t);
   await s.refreshGraphicsState();

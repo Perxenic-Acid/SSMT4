@@ -22,7 +22,7 @@ use std::{
 };
 use tauri::ipc::Channel;
 
-static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -623,10 +623,10 @@ pub fn prepare_dlss5_hot_runtime(
     if !enabled(&registry) {
         return Ok(None);
     }
-    let _lock = INSTALL_LOCK.try_lock().map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
+    let lock = INSTALL_LOCK.try_lock().map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
     let (route, _) = route_for_registry(&registry, &game_scope_preset(&game_name), executable)?;
     if gimi_hot_runtime::applies(executable) && gimi_route(&game_name)? == "gimi-hot" {
-        return gimi_hot_runtime::prepare_gimi_hot_runtime(game_name, game_executable);
+        return gimi_hot_runtime::prepare_locked(&registry, &game_name, executable, &lock).map(Some);
     }
     ensure_stopped(executable)?;
     if !matches!(

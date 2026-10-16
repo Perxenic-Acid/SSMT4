@@ -3,8 +3,6 @@ use crate::plugin::resource_cache::download_verified_with_progress;
 use std::io::Write;
 use tauri::ipc::Channel;
 
-static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Manifest {
@@ -77,23 +75,33 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
 }
 
 // 临时目录只能是本次创建的自有目录；失败时不清理既有安装或下载缓存。
-struct PendingInstallation(PathBuf, bool);
+pub(super) struct PendingInstallation {
+    root: PathBuf,
+    parent: PathBuf,
+    pub(super) committed: bool,
+}
+
+impl PendingInstallation {
+    pub(super) fn new(root: PathBuf, parent: PathBuf) -> Self {
+        Self { root, parent, committed: false }
+    }
+}
+
 impl Drop for PendingInstallation {
     fn drop(&mut self) {
-        if self.1 {
+        if self.committed {
             return;
         }
-        if let (Ok(root), Some(parent)) = (self.0.canonicalize(), self.0.parent()) {
-            if let Ok(parent) = parent.canonicalize() {
-                if root.parent() == Some(parent.as_path()) {
-                    let _ = fs::remove_dir_all(root);
-                }
+        if let (Ok(root), Ok(parent)) = (self.root.canonicalize(), self.parent.canonicalize()) {
+            // 父目录必须来自安装器指定范围，不能用目标自身的 parent 反证目标安全。
+            if root.parent() == Some(parent.as_path()) {
+                let _ = fs::remove_dir_all(&self.root);
             }
         }
     }
 }
 
-fn require_enabled(game_name: &str, executable: &Path) -> Result<(), String> {
+pub(super) fn require_enabled(game_name: &str, executable: &Path) -> Result<(), String> {
     let registry = PluginRegistry::from_default_location()
         .map_err(|error| error.to_string())?
         .for_game(game_name);
@@ -262,7 +270,7 @@ pub async fn download_gimi_hot_runtime(
     let root = new_installation_root();
     fs::create_dir_all(root.parent().ok_or("组件目录无效")?).map_err(|error| error.to_string())?;
     fs::create_dir(&root).map_err(|error| error.to_string())?;
-    let mut pending = PendingInstallation(root.clone(), false);
+    let mut pending = PendingInstallation::new(root.clone(), installation_parent());
     let mut last_update = std::time::Instant::now() - std::time::Duration::from_secs(1);
     let installation = download_at(&client, &cache, root, profile, manifest, |event| {
         // 用户切换页面不应让已授权下载变成失败；重返页面可读取最终状态。
@@ -274,14 +282,35 @@ pub async fn download_gimi_hot_runtime(
     .await?;
     // 网络操作期间游戏可能已启动，或用户已关闭插件；此时保留旧配置。
     require_enabled(&game_name, Path::new(&game_executable))?;
-    save_installation(&game_name, &installation)?;
-    pending.1 = true;
+    catalog::record_gimi_installation(&game_name, &installation)?;
+    pending.committed = true;
     Ok(installation)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abandoned_installations_only_cleanup_the_expected_parent_and_keep_committed_copies() {
+        let root = std::env::temp_dir().join(format!("ssmt-gimi-pending-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let parent = root.join("managed");
+        let outside = root.join("outside");
+        let pending = parent.join("pending");
+        fs::create_dir_all(&pending).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(pending.join("partial.dll"), b"partial").unwrap();
+        drop(PendingInstallation::new(outside.clone(), parent.clone()));
+        assert!(outside.is_dir());
+        drop(PendingInstallation::new(pending.clone(), parent.clone()));
+        assert!(!pending.exists());
+        fs::create_dir(&pending).unwrap();
+        let mut completed = PendingInstallation::new(pending.clone(), parent);
+        completed.committed = true;
+        drop(completed);
+        assert!(pending.is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn download_manifest_matches_all_supported_profiles() {
@@ -341,7 +370,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap()
         ));
         fs::create_dir_all(&run).unwrap();
-        let _pending = PendingInstallation(run.clone(), false);
+        let _pending = PendingInstallation::new(run.clone(), root.clone());
         for profile in ["rtx50", "rtx30"] {
             let installation = download_at(
                 &client,

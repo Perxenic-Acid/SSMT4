@@ -12,9 +12,10 @@ const { t, locale } = useI18n();
 const label = (zh: string, en: string) => String(locale.value).startsWith('zh') ? zh : en;
 const hotRuntime = ref<{ root: string; profile: string } | null>(null);
 const hotRuntimes = ref<Record<string, { root: string; profile: string }>>({});
-interface HotHistoryEntry { root: string; profile: string; route: string; revision: string; current: boolean; usable: boolean; reason?: string | null }
+interface HotHistoryEntry { root: string; profile: string; route: string; revision: string; current: boolean; usable: boolean; reason?: string | null; removable?: boolean; cleanupReason?: string | null }
 const hotHistory = ref<HotHistoryEntry[]>([]);
 const historySelection = ref('');
+const selectedHistory = () => hotHistory.value.find(item => item.root === historySelection.value);
 const hotProfile = ref('rtx50');
 const downloadProgress = ref<{ phase: string; downloadedBytes: number; totalBytes: number } | null>(null);
 const isGimi = () => /(?:^|[\\/])(?:YuanShen|GenshinImpact)\.exe$/i.test(props.targetExePath.trim());
@@ -26,6 +27,7 @@ const routeLabel = (route: string) => ({
   'ssmt-native-bridge': label('原生 DLSS · DX11 Bridge', 'Native DLSS · DX11 bridge'),
   'ssmt-native': label('原生 DLSS · DX12', 'Native DLSS · DX12'),
 }[route] || route);
+const historyRoute = (item: HotHistoryEntry) => item.route === 'gimi-hot' ? item.route : `ssmt-${item.route}`;
 const openComponentSource = () => openUrl('https://github.com/CXP-2024/GIMI_reshade_dlss_integration/tree/cc4697187cb57bacc7c932b7f53f16be24af152a').catch(error => ElMessage.error(String(error)));
 
 interface Dlss5StateSnapshot {
@@ -212,6 +214,8 @@ const restoreDlss5Route = async () => {
 
 const manageHotHistory = async (remove = false) => {
   if (graphicsActionBusy.value || !historySelection.value) return;
+  const selected = selectedHistory();
+  if (!selected || (remove ? selected.removable === false : !selected.usable)) return;
   const gameName = props.gameName, gameExecutable = props.targetExePath.trim(), root = historySelection.value;
   if (!gameExecutable) return;
   graphicsActionBusy.value = true;
@@ -224,7 +228,10 @@ const manageHotHistory = async (remove = false) => {
     if (props.gameName !== gameName || props.targetExePath.trim() !== gameExecutable) return;
     await invoke(remove ? 'remove_dlss5_hot_runtime' : 'select_dlss5_hot_runtime', { gameName, gameExecutable, root });
     ElMessage.success(remove ? label('热组件已清理', 'Hot components removed') : label('已选择这套组件，下次启动生效', 'Selected components apply on the next launch'));
-    if (props.gameName === gameName && props.targetExePath.trim() === gameExecutable) await refreshGraphicsState();
+    if (props.gameName === gameName && props.targetExePath.trim() === gameExecutable) {
+      if (!remove) graphicsSelectedRoute.value = historyRoute(selected);
+      await refreshGraphicsState();
+    }
   } catch (error) {
     if (props.gameName === gameName) graphicsStatusError.value = String(error);
     ElMessage.error(String(error));
@@ -329,16 +336,19 @@ onUnmounted(() => {
       <el-progress :percentage="Math.min(100, Math.floor(downloadProgress.downloadedBytes * 100 / Math.max(1, downloadProgress.totalBytes)))" />
     </div>
     <div v-if="hotHistory.length" class="graphics-startup">
-      <h4>{{ label('Feeder / 原生 DLSS 热组件历史', 'Feeder / native DLSS installation history') }}</h4>
-      <p>{{ label('关闭游戏后可重新选择已校验的历史组件，或清理指定实例的自有副本。FSR2 Bridge 的组件由其独立路线管理。', 'Close the game to select a verified previous installation or remove an owned copy. FSR2 bridge components use their separate route.') }}</p>
+      <h4>{{ label('热组件历史', 'Hot installation history') }}</h4>
+      <p>{{ label('关闭游戏后可选择历史组件及对应实现，或清理当前实例的自有副本。清理正在使用的组件后，需要重新选择或配置才能启用 DLSS5。', 'Close the game to select a previous installation and its implementation, or remove an owned copy for this instance. After removing active components, select or configure another installation to use DLSS5.') }}</p>
       <div class="graphics-actions">
         <el-select v-model="historySelection" :disabled="graphicsActionBusy" :aria-label="label('热组件历史', 'Hot installation history')">
           <el-option v-for="item in hotHistory" :key="item.root" :value="item.root"
-            :label="`${item.current ? '● ' : ''}${item.profile} · ${item.revision} · ${item.root.split(/[\\/]/).pop()}${item.usable ? '' : label('（需修复）', ' (needs repair)')}`" />
+            :label="`${item.current ? '● ' : ''}${routeLabel(historyRoute(item))} · ${item.profile} · ${item.revision.slice(0, 14)} · ${item.root.split(/[\\/]/).pop()}${item.usable ? '' : label('（需修复）', ' (needs repair)')}`" />
         </el-select>
         <el-button :disabled="graphicsActionBusy || !hotHistory.some(item => item.root === historySelection && item.usable)" @click="manageHotHistory()">{{ label('使用所选组件', 'Use selected components') }}</el-button>
-        <el-button :disabled="graphicsActionBusy || !historySelection" @click="manageHotHistory(true)">{{ label('清理所选组件', 'Remove selected components') }}</el-button>
+        <el-button :disabled="graphicsActionBusy || !historySelection || selectedHistory()?.removable === false" @click="manageHotHistory(true)">{{ label('清理所选组件', 'Remove selected components') }}</el-button>
       </div>
+      <p v-if="selectedHistory()" class="graphics-path">{{ selectedHistory()?.root }}</p>
+      <p v-if="selectedHistory()?.reason">{{ selectedHistory()?.reason }}</p>
+      <p v-if="selectedHistory()?.cleanupReason">{{ selectedHistory()?.cleanupReason }}</p>
     </div>
     <template v-if="graphicsSelectedRoute === 'gimi-hot'">
       <p class="graphics-hint">{{ label('首次下载约 302 MiB。请先关闭游戏；下载失败保留原组件，普通游戏启动仍可使用。', 'First download: about 302 MiB. Close the game before setup. Failed downloads preserve existing components and normal game launch remains available.') }}</p>

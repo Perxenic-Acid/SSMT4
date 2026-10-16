@@ -1,4 +1,5 @@
 use super::{
+    dlss5_hot_runtime::{catalog, INSTALL_LOCK},
     dlss5::DLSS5_PLUGIN_ID,
     managed_reshade,
     registry::PluginRegistry,
@@ -60,7 +61,7 @@ fn enabled(registry: &PluginRegistry) -> bool {
         .is_some_and(|plugin| plugin.enabled)
 }
 
-fn setting_key(game_name: &str) -> String {
+pub(super) fn setting_key(game_name: &str) -> String {
     format!(
         "gimiHotRuntime.{:x}",
         Sha256::digest(game_name.trim().to_lowercase().as_bytes())
@@ -159,7 +160,23 @@ pub(super) fn verify(path: &Path, expected: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate(installation: &HotRuntimeInstallation) -> Result<(PathBuf, String), String> {
+pub(super) fn compatibility_revision(profile: &str) -> Result<String, String> {
+    // 历史记录须对应本体支持的固定 Bridge/输入契约，不能仅凭自存哈希接受未知组件组。
+    let files = profile_files(profile)?.1;
+    let baseline = serde_json::to_vec(&files).map_err(|e| e.to_string())?;
+    Ok(format!("fsr2-{:x}", Sha256::digest(baseline)))
+}
+
+pub(super) fn require_owned(installation: &HotRuntimeInstallation) -> Result<(), String> {
+    let root = canonical_path(&installation.root).map_err(|e| e.to_string())?;
+    let parent = canonical_path(&installation_parent()).map_err(|e| e.to_string())?;
+    if root.parent() != Some(parent.as_path()) {
+        return Err("FSR2 Bridge 组件不在 SSMT 自有安装目录中".into());
+    }
+    Ok(())
+}
+
+pub(super) fn validate(installation: &HotRuntimeInstallation) -> Result<(PathBuf, String), String> {
     let root = canonical_path(&installation.root).map_err(|error| error.to_string())?;
     let (addon, files) = profile_files(&installation.profile)?;
     for (relative, hash) in files {
@@ -325,6 +342,7 @@ pub fn import_gimi_hot_runtime(
     source_directory: String,
     profile: String,
 ) -> Result<HotRuntimeInstallation, String> {
+    let _lock = INSTALL_LOCK.try_lock().map_err(|_| "热组件正在配置或清理，请稍候")?;
     let registry = PluginRegistry::from_default_location()
         .map_err(|error| error.to_string())?
         .for_game(&game_name);
@@ -336,36 +354,31 @@ pub fn import_gimi_hot_runtime(
         root: PathBuf::from(source_directory),
         profile,
     };
-    let installation = import_at(&source, new_installation_root())?;
-    save_installation(&game_name, &installation)?;
+    let root = new_installation_root();
+    fs::create_dir_all(installation_parent()).map_err(|e| e.to_string())?;
+    fs::create_dir(&root).map_err(|e| e.to_string())?;
+    let mut pending = download::PendingInstallation::new(root.clone(), installation_parent());
+    let installation = import_at(&source, root)?;
+    // 复制期间启用状态和游戏进程可能变化，切换指针前再次检查。
+    download::require_enabled(&game_name, Path::new(&game_executable))?;
+    catalog::record_gimi_installation(&game_name, &installation)?;
+    pending.committed = true;
     Ok(installation)
 }
 
-fn new_installation_root() -> PathBuf {
+pub(super) fn installation_parent() -> PathBuf {
     crate::config::path_manager::PathManager::ssmt_global_config_folder()
         .join("PluginAssets")
         .join(DLSS5_PLUGIN_ID)
         .join("gimi-hot")
-        .join(format!(
-            "{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ))
 }
 
-fn save_installation(game_name: &str, installation: &HotRuntimeInstallation) -> Result<(), String> {
-    // 保存的是 SSMT 管理的副本；之后不会覆写用户提供的第三方目录。
-    PluginSettingsStore::from_default_location()
-        .map_err(|error| error.to_string())?
-        .set_many(
-            DLSS5_PLUGIN_ID,
-            [
-                (setting_key(game_name), serde_json::to_value(&installation).map_err(|error| error.to_string())?),
-                (super::dlss5_hot_runtime::active_route_key(game_name), serde_json::Value::from("gimi-hot")),
-            ],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
+fn new_installation_root() -> PathBuf {
+    installation_parent().join(format!(
+        "{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ))
 }
 
 fn import_at(
@@ -427,6 +440,7 @@ pub fn gimi_hot_runtime_status(
         .map_err(|error| error.to_string())?
         .get(DLSS5_PLUGIN_ID, &setting_key(&game_name))
         .map_err(|error| error.to_string())?
+        .filter(|value| !value.is_null())
         .map(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
         .transpose()
 }
@@ -446,9 +460,20 @@ pub fn prepare_gimi_hot_runtime(
     if !enabled(&registry) {
         return Ok(None);
     }
-    ensure_stopped(Path::new(&game_executable))?;
+    let lock = INSTALL_LOCK.try_lock().map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
+    prepare_locked(&registry, &game_name, Path::new(&game_executable), &lock).map(Some)
+}
+
+pub(super) fn prepare_locked(
+    registry: &PluginRegistry,
+    game_name: &str,
+    game_executable: &Path,
+    _lock: &tokio::sync::MutexGuard<'_, ()>,
+) -> Result<HotRuntimePlan, String> {
+    // 统一入口已持有同一把锁；保持路线选择到配置准备连续，避免重入锁或并发切换实现。
+    ensure_stopped(game_executable)?;
     if !matches!(
-        super::dlss5::inspect_game_executable(Path::new(&game_executable)),
+        super::dlss5::inspect_game_executable(game_executable),
         super::dlss5::Dlss5State::NotManaged
     ) {
         return Err(
@@ -458,20 +483,30 @@ pub fn prepare_gimi_hot_runtime(
     }
     let value = PluginSettingsStore::from_default_location()
         .map_err(|error| error.to_string())?
-        .get(DLSS5_PLUGIN_ID, &setting_key(&game_name))
+        .get(DLSS5_PLUGIN_ID, &setting_key(game_name))
         .map_err(|error| error.to_string())?
+        .filter(|value| !value.is_null())
         .ok_or(
             "原神 DLSS5 组件尚未配置，请到插件市场的 DLSS5 功能设置中选择显卡，自动下载并配置",
         )?;
     let installation = serde_json::from_value(value)
         .map_err(|error| format!("原神热注入组件配置无效：{error}"))?;
-    prepare_at(&registry, &installation).map(Some)
+    require_owned(&installation)?;
+    prepare_at(registry, &installation)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use super::super::hoyoshade::{HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
+
+    #[test]
+    fn compatibility_revision_is_profile_specific_and_rejects_unknown_profiles() {
+        let rtx50 = compatibility_revision("rtx50").unwrap();
+        assert_eq!(rtx50, compatibility_revision("rtx50").unwrap());
+        assert_ne!(rtx50, compatibility_revision("rtx30").unwrap());
+        assert!(compatibility_revision("unknown").is_err());
+    }
 
     #[test]
     fn optiscaler_templates_select_dx11_input_and_keep_user_options() {
