@@ -9,6 +9,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) const MANIFEST_FILE_NAME: &str = "ssmt-plugin.json";
 const STATE_FILE_NAME: &str = "registry-state.json";
 
+pub(crate) fn game_preset(game_name: &str) -> Option<String> {
+    let config = crate::config::path_manager::PathManager::global_config_games_game_folder(game_name)
+        .join("Config.json");
+    let raw = fs::read_to_string(config).ok()?;
+    serde_json::from_str::<serde_json::Value>(&raw).ok()?
+        .get("gamePreset")?.as_str().map(|value| value.trim().to_owned())
+}
+
+pub(crate) fn game_scope_preset(game_name: &str) -> String {
+    game_preset(game_name).unwrap_or_else(|| game_name.trim().to_owned())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExternalDependencyStatus {
@@ -283,19 +295,30 @@ impl PluginRegistry {
 
     // 仅贡献 SSMT 页面时使用全局启用状态；游戏运行时贡献仍按游戏启用。
     pub fn for_game(&self, game_name: &str) -> Self {
+        self.for_game_preset(game_name, &game_scope_preset(game_name))
+    }
+
+    pub(crate) fn for_game_preset(&self, game_name: &str, preset: &str) -> Self {
         let mut scoped = self.clone();
         for plugin in &mut scoped.installed {
             plugin.enabled = if plugin.manifest.is_app_scoped() {
                 self.state.plugins.get(&package_key(plugin.id(), plugin.version()))
                     .is_some_and(|settings| settings.enabled)
             } else {
-                self.game_enabled(game_name, &plugin.manifest.id)
+                plugin.manifest.compatibility.supports_game(preset)
+                    && self.configured_game_enabled(game_name, &plugin.manifest.id)
             };
         }
         scoped
     }
 
     pub fn game_enabled(&self, game_name: &str, id: &str) -> bool {
+        self.configured_game_enabled(game_name, id)
+            && self.find(id).map_or(true, |plugin| plugin.manifest.is_app_scoped()
+                || plugin.manifest.compatibility.supports_game(&game_scope_preset(game_name)))
+    }
+
+    fn configured_game_enabled(&self, game_name: &str, id: &str) -> bool {
         self.state
             .game_plugins
             .get(&game_name.trim().to_lowercase())
@@ -352,8 +375,9 @@ impl PluginRegistry {
         if game_name.is_empty() {
             return Err(PluginRegistryError::State("game name is required".to_string()));
         }
-        if self.find(id).is_none() {
-            return Err(PluginRegistryError::PluginNotFound(id.to_string()));
+        let plugin = self.find(id).ok_or_else(|| PluginRegistryError::PluginNotFound(id.to_string()))?;
+        if enabled && !plugin.manifest.compatibility.supports_game(&game_scope_preset(&game_name)) {
+            return Err(PluginRegistryError::State(format!("插件 {} 不支持当前游戏 {}", plugin.manifest.name, game_name)));
         }
         self.write_game_enabled(&game_name, id, enabled)
     }
@@ -754,6 +778,34 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(config.plugins, expected, "enabled subset: {mask:03b}");
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn game_restricted_plugin_rejects_enablement_and_ignores_legacy_choices() {
+        let root = temp_root("restricted-game");
+        let id = "dev.ssmt.poser.genshin-probe";
+        let source = fixture_package(&root, id, "1.0.0");
+        let manifest_path = source.join(MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["compatibility"]["games"] = serde_json::json!(["GIMI"]);
+        fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&source).unwrap();
+        registry.set_game_enabled("GIMI", id, true).unwrap();
+        assert_eq!(registry.for_game("GIMI").generate_plugin_host_config().plugins.len(), 1);
+        for game in ["SRMI", "WWMI", "ZZMI", "ZZMIDX12", "EFMI"] {
+            assert!(registry.set_game_enabled(game, id, true).is_err());
+            // 模拟旧版已写入的不兼容启用状态，运行时仍须忽略。
+            registry.write_game_enabled(&game.to_lowercase(), id, true).unwrap();
+            assert!(!registry.game_enabled(game, id));
+            assert!(!registry.for_game(game).find(id).unwrap().enabled);
+            assert!(registry.for_game(game).generate_plugin_host_config().plugins.is_empty());
+            registry.set_game_enabled(game, id, false).unwrap();
+        }
+        registry.write_game_enabled("custom genshin", id, true).unwrap();
+        assert!(registry.for_game_preset("Custom Genshin", "gimi").find(id).unwrap().enabled);
+        assert!(!registry.for_game_preset("Custom Genshin", "SRMI").find(id).unwrap().enabled);
         fs::remove_dir_all(root).unwrap();
     }
 

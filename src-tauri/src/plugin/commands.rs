@@ -9,7 +9,7 @@ use super::managed_stack::{self, Dlss5RouteScan, ManagedStackStatus};
 use super::package_installer::{inspect_ssmtpkg, install_verified_ssmtpkg, PackageInspection};
 use super::official_release;
 use super::marketplace::MarketplaceEntry;
-use super::registry::{ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
+use super::registry::{game_preset, game_scope_preset, ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
 use super::settings::PluginSettingsStore;
 use super::{PluginCompatibility, PluginContributions, PluginManifest, PluginPermission};
 use serde::{Deserialize, Serialize};
@@ -460,17 +460,6 @@ fn player_tweaks_available() -> bool {
         .is_file()
 }
 
-fn game_preset(game_name: &str) -> Option<String> {
-    let config = crate::config::path_manager::PathManager::global_config_games_game_folder(game_name)
-        .join("Config.json");
-    let raw = fs::read_to_string(config).ok()?;
-    serde_json::from_str::<serde_json::Value>(&raw)
-        .ok()?
-        .get("gamePreset")?
-        .as_str()
-        .map(str::to_owned)
-}
-
 fn bundled_player_tweaks_snapshot(
     registry: &PluginRegistry,
     game_name: &str,
@@ -511,7 +500,14 @@ fn bundled_player_tweaks_snapshot(
 }
 
 fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<InstalledPluginSnapshot> {
-    let mut plugins = snapshot(&registry.for_game(game_name));
+    let preset = game_scope_preset(game_name);
+    let mut plugins = snapshot(&registry.for_game_preset(game_name, &preset));
+    for plugin in &mut plugins {
+        if !plugin.app_scoped && !plugin.manifest.compatibility.supports_game(&preset) {
+            plugin.enabled = false;
+            plugin.lifecycle_status = PluginLifecycleStatus::Incompatible;
+        }
+    }
     if let Some(bundled) = bundled_player_tweaks_snapshot(registry, game_name) {
         plugins.push(bundled);
     }

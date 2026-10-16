@@ -44,7 +44,7 @@ const dlssPlugin = enabled => ({
 function marketplace(t, options = {}) {
   return component(t, '../../src/views/PluginMarketplace/PluginMarketplace.vue', [
     'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
-    'catalog', 'catalogError', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog',
+    'catalog', 'catalogError', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
     '@tauri-apps/plugin-dialog': {}, 'element-plus': { ElMessage: { success() {}, error: message => { throw new Error(message); } } },
@@ -83,6 +83,22 @@ test('marketplace exposes DLSS5 settings only for the selected enabled game and 
   await setImmediate();
   assert.equal(s.graphicsTargetExe.value, 'D:/Other/GenshinImpact.exe');
   assert.equal(s.graphicsConfigLoading.value, false);
+});
+
+test('不兼容插件不能启用，旧启用状态仍可关闭，更新提示不覆盖不兼容提示', async t => {
+  const calls = [];
+  const s = marketplace(t, { invoke: async (command, args) => { calls.push({ command, args }); return []; } });
+  s.installedGameName.value = 'GIMI';
+  const poser = { ...dlssPlugin(false), lifecycleStatus: 'incompatible', manifest: { ...dlssPlugin(false).manifest, id: 'dev.ssmt.poser.genshin-probe' } };
+  await s.togglePlugin(poser);
+  assert.equal(calls.length, 0);
+  assert.equal(s.lifecycleFor({ version: '9.0.0' }, poser), 'incompatible');
+  await s.togglePlugin({ ...poser, enabled: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.enabled, false);
+  s.selectedGameName.value = 'SRMI';
+  await s.togglePlugin({ ...poser, enabled: true });
+  assert.equal(calls.length, 1, '切换游戏后的旧快照不能修改新游戏的插件选择');
 });
 
 test('marketplace refresh stays busy for every source and preserves the catalog on failure', async t => {

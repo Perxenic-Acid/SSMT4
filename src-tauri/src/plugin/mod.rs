@@ -55,6 +55,10 @@ pub struct PluginCompatibility {
 }
 
 impl PluginCompatibility {
+    pub fn supports_game(&self, game: &str) -> bool {
+        self.games.is_empty() || self.games.iter().any(|item| item.eq_ignore_ascii_case(game.trim()))
+    }
+
     pub fn supports(&self, ssmt_version: &str, platform: &str, game: Option<&str>) -> bool {
         let Ok(version) = Version::parse(ssmt_version) else {
             return false;
@@ -66,7 +70,7 @@ impl PluginCompatibility {
             return false;
         }
         match game {
-            Some(game) if !self.games.is_empty() => self.games.iter().any(|item| item == game),
+            Some(game) => self.supports_game(game),
             _ => true,
         }
     }

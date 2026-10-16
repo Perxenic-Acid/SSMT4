@@ -173,6 +173,7 @@ const updateEntries = computed(() => availableCatalog.value.filter(entry => {
   return current && compareVersions(entry.version, current.manifest.version) > 0
 }))
 const lifecycleFor = (entry: CatalogEntry, plugin: InstalledPlugin) => {
+  if (plugin.lifecycleStatus === 'incompatible') return 'incompatible'
   if (compareVersions(entry.version, plugin.manifest.version) > 0) return 'update_available'
   return plugin.lifecycleStatus
 }
@@ -380,6 +381,8 @@ const configureDependency = async (pluginId: string, dependencyId: string) => {
 
 const togglePlugin = async (plugin: InstalledPlugin) => {
   if (!selectedGameName.value && !plugin.appScoped) return
+  if (!plugin.appScoped && installedGameName.value !== selectedGameName.value) return
+  if (!plugin.enabled && plugin.lifecycleStatus === 'incompatible') return
   const gameName = selectedGameName.value
   const requestId = ++refreshRequestId
   loading.value = true
@@ -608,7 +611,7 @@ onMounted(async () => {
               {{ t('pluginMarketplace.actions.updateOfficial') }}
             </el-button>
             <el-button size="small" :type="selectedPlugin.enabled ? undefined : 'primary'"
-              :disabled="(!selectedGameName && !selectedPlugin.appScoped) || loading || selectedPlugin.lifecycleStatus === 'incompatible'" :loading="loading" @click="togglePlugin(selectedPlugin)">
+              :disabled="(!selectedGameName && !selectedPlugin.appScoped) || (!selectedPlugin.appScoped && installedGameName !== selectedGameName) || loading || (!selectedPlugin.enabled && selectedPlugin.lifecycleStatus === 'incompatible')" :loading="loading" @click="togglePlugin(selectedPlugin)">
               {{ selectedPlugin.enabled ? t('pluginMarketplace.actions.disable') : t('pluginMarketplace.actions.enable') }}
             </el-button>
             <el-button v-if="['ssmt.hoyoshade.bridge', 'ssmt.dlss5.integration'].includes(selectedEntry.id)" size="small" :icon="Setting"
