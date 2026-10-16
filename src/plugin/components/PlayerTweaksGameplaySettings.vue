@@ -48,37 +48,46 @@ const save = async () => {
 </script>
 
 <template>
-  <section class="tweak-settings">
-    <h3>{{ label('运行设置', 'Runtime settings') }}</h3>
-    <p class="tweak-hint">{{ label('按当前游戏单独保存；下次通过 SSMT 启动时生效。', 'Saved per game; takes effect on the next SSMT launch.') }}</p>
-    <p class="tweak-hint">{{ registryFps
-      ? label('崩铁当前支持 120 FPS，通过客户端画质设置生效；国服和国际服按游戏信息区分。关闭插件或下次以关闭的选项启动时恢复原 FPS，并保留其他画质设置。', 'Star Rail currently supports 120 FPS through client graphics settings. CN and Global clients are detected from game metadata. Disabling the plugin, or launching with this option off, restores the previous FPS and preserves other graphics settings.')
-      : label('帧率数值只设置游戏内部目标；NVIDIA App 等外部限制或覆盖仍可能决定实际 FPS。', 'The FPS value sets the game target; NVIDIA App and other external controls may determine actual FPS.') }}</p>
+  <section class="tweak-settings" :aria-busy="loading || saving">
+    <header class="tweak-section-header">
+      <div>
+        <h3>{{ label('性能与便捷', 'Performance & convenience') }}</h3>
+        <p class="tweak-hint">{{ label('按当前游戏保存，下次通过 SSMT 启动时生效。', 'Saved for this game; applies on the next SSMT launch.') }}</p>
+      </div>
+      <el-button type="primary" :loading="saving" :disabled="!gameName || loading" @click="save">
+        {{ label('保存运行设置', 'Save runtime settings') }}
+      </el-button>
+    </header>
     <p v-if="!enabled" class="tweak-hint tweak-hint-warning">{{ label('插件已禁用，这些设置不会应用到游戏。', 'The plugin is disabled; these settings will not be applied.') }}</p>
     <p v-if="!gameName" class="tweak-hint tweak-hint-warning">{{ label('请先在上方选择游戏。', 'Select a game above first.') }}</p>
-    <div v-else class="tweak-grid" :class="{ loading }">
-      <el-checkbox v-model="gameplay.fpsUnlock">{{ registryFps ? label('启用 120 FPS', 'Enable 120 FPS') : label('解锁帧率并关闭 VSync', 'Unlock FPS and disable VSync') }}</el-checkbox>
-      <div v-if="!registryFps" class="tweak-number">
-        <span>{{ label('游戏内部目标帧率（30–240）', 'Game target FPS (30–240)') }}</span>
-        <el-input-number v-model="gameplay.targetFps" :min="30" :max="240" :step="1" size="small" :disabled="!gameplay.fpsUnlock" />
-      </div>
-      <el-checkbox v-if="!registryFps" v-model="gameplay.fastTeamPage">{{ label('快速打开队伍页', 'Fast team page') }}</el-checkbox>
+    <div v-else class="tweak-groups" :inert="loading || saving">
+      <section class="tweak-card" :class="{ 'tweak-card-wide': registryFps }">
+        <h4>{{ label('帧率', 'Frame rate') }}</h4>
+        <div class="tweak-row">
+          <div class="tweak-row-copy">
+            <span>{{ registryFps ? label('启用 120 FPS', 'Enable 120 FPS') : label('解锁帧率', 'Unlock frame rate') }}</span>
+            <small>{{ registryFps ? label('通过客户端画质设置启用。', 'Apply through client graphics settings.') : label('同时关闭游戏内 VSync。', 'Also disable in-game VSync.') }}</small>
+          </div>
+          <el-switch v-model="gameplay.fpsUnlock" :aria-label="registryFps ? label('启用 120 FPS', 'Enable 120 FPS') : label('解锁帧率并关闭 VSync', 'Unlock FPS and disable VSync')" />
+        </div>
+        <div v-if="!registryFps" class="tweak-row" :class="{ 'is-muted': !gameplay.fpsUnlock }">
+          <div class="tweak-row-copy"><span>{{ label('游戏内部目标帧率', 'Game target FPS') }}</span><small>30–240 FPS</small></div>
+          <el-input-number v-model="gameplay.targetFps" :min="30" :max="240" :step="1" size="small" :disabled="!gameplay.fpsUnlock" :aria-label="label('游戏内部目标帧率', 'Game target FPS')" />
+        </div>
+        <p class="tweak-card-hint tweak-footnote">{{ registryFps
+          ? label('按游戏信息区分国服与国际服。关闭插件或以关闭此选项的设置启动时恢复原 FPS，保留其他画质设置。', 'CN and Global clients are detected from game metadata. Disabling the plugin or launching with this option off restores the original FPS and preserves other graphics settings.')
+          : label('NVIDIA App 等外部限制或覆盖仍可能决定实际 FPS。', 'NVIDIA App and other external controls may determine actual FPS.') }}</p>
+      </section>
+      <section v-if="!registryFps" class="tweak-card">
+        <h4>{{ label('便捷操作', 'Convenience') }}</h4>
+        <div class="tweak-row">
+          <div class="tweak-row-copy"><span>{{ label('快速打开队伍页', 'Fast team page') }}</span><small>{{ label('跳过打开队伍配置时的等待。', 'Skip the wait when opening team setup.') }}</small></div>
+          <el-switch v-model="gameplay.fastTeamPage" :aria-label="label('快速打开队伍页', 'Fast team page')" />
+        </div>
+      </section>
     </div>
-    <el-button size="small" type="primary" :loading="saving" :disabled="!gameName || loading" @click="save">
-      {{ label('保存设置', 'Save settings') }}
-    </el-button>
   </section>
 </template>
 
-<style scoped>
-.tweak-settings { border-top: 1px solid var(--market-line); padding-top: 18px; margin-top: 20px; }
-.tweak-settings h3 { margin: 0 0 7px; font-size: 13px; font-weight: 650; }
-.tweak-hint { margin: 0 0 10px; color: rgba(var(--theme-text-secondary-rgb), .8); font-size: 11px; line-height: 1.5; }
-.tweak-hint-warning { color: var(--t-warning-text); }
-.tweak-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); gap: 10px 16px; margin: 14px 0 16px; font-size: 12px; }
-.tweak-grid.loading { opacity: .5; pointer-events: none; }
-.tweak-grid .el-checkbox { margin-right: 0; }
-.tweak-number { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 25px; color: rgba(var(--theme-text-secondary-rgb), .9); }
-.tweak-number :deep(.el-input-number) { width: 110px; flex: none; }
-</style>
+<style scoped src="./playerTweaksSettings.css"></style>
 
