@@ -839,6 +839,8 @@ onMounted(async () => {
 }
 .marketplace-layout { display: grid; grid-template-columns: minmax(270px, 310px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; flex: 1; align-items: start; min-height: 0; }
 .marketplace-sidebar, .plugin-detail {
+  /* 百分比高度包含边框和内边距，保持底边与所在网格对齐。 */
+  box-sizing: border-box;
   min-width: 0;
   border: var(--t-page-panel-border);
   border-radius: var(--t-page-panel-radius);
