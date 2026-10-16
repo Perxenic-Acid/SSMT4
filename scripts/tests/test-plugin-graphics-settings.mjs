@@ -73,7 +73,7 @@ test('崩铁 Player Tweaks 只保存 120 FPS，原神继续支持原有帧率和
   }
 });
 const dlssPlugin = enabled => ({
-  manifest: { id: 'ssmt.dlss5.integration', name: 'DLSS5', author: 'SSMT', version: '0.1.0', externalDependencies: [], permissions: [] },
+  manifest: { id: 'ssmt.dlss5.integration', name: 'DLSS5', author: 'SSMT', version: '0.1.0', externalDependencies: [], permissions: [], contributions: { hostExtensions: [{ id: 'graphics', settingsComponent: 'ssmt.dlss5.settings' }] } },
   enabled, externalDependencies: {}, lifecycleStatus: 'installed', official: true,
 });
 

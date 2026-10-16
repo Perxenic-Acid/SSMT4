@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "processes": ["YuanShen.exe", "GenshinImpact.exe", "Genshin.exe", "BH3.exe", "StarRail.exe", "ZenlessZoneZero.exe", "ZenlessZoneZeroBeta.exe", "ZZZ.exe"],
+  "dependency": "hoyoshade",
+  "hostDll": "ReShade64.dll",
+  "config": "ReShade.ini",
+  "preset": "Presets/Mod OFF.ini",
+  "addons": "reshade-shaders/Addons"
+}

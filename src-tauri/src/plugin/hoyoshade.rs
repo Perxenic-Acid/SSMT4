@@ -169,25 +169,12 @@ fn prepare_hot_at(
         return Ok(None);
     };
     let bridge = HoYoShadeBridge::from_installed(plugin).map_err(|error| error.to_string())?;
-    if !bridge.supports_process(
-        executable
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default(),
-    ) {
-        return Ok(None);
-    }
-    let dependency = plugin
-        .external_dependencies
-        .get(HOYOSHADE_DEPENDENCY_ID)
-        .filter(|dependency| dependency.status == ExternalDependencyStatus::Ready)
-        .and_then(|dependency| dependency.path.as_ref())
-        .ok_or("Shade Bridge 的资源目录尚未就绪")?;
-    let dependency = canonical_path(dependency).map_err(|error| error.to_string())?;
-    bridge
-        .validate_external_directory(&dependency)
-        .map_err(|error| error.to_string())?;
-    let dll = checked_path(&dependency, "ReShade64.dll")?;
+    let policy = super::shade_policy::Policy::load(plugin)?;
+    let process = executable.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    if !policy.processes.iter().any(|name| name.eq_ignore_ascii_case(process)) { return Ok(None); }
+    let dependency = policy.dependency_root(plugin)?;
+    bridge.validate_external_directory(&dependency).map_err(|e| e.to_string())?;
+    let dll = checked_path(&dependency, &policy.host_dll)?;
     super::gimi_hot_runtime::ensure_stopped(executable)?;
     super::dlss5_hot_runtime::ensure_no_external_host(executable)?;
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;

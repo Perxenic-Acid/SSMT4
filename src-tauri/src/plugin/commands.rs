@@ -543,7 +543,7 @@ pub struct InstalledPluginSnapshot {
     pub bundled: bool,
     pub official: bool,
     pub app_scoped: bool,
-    pub features: Vec<&'static str>,
+    pub features: Vec<String>,
 }
 
 const PLAYER_TWEAKS_ID: &str = "ssmt.player-tweaks";
@@ -555,12 +555,8 @@ fn player_tweaks_available() -> bool {
         .is_file()
 }
 
-fn player_tweaks_features(preset: &str) -> Vec<&'static str> {
-    match preset.trim().to_ascii_uppercase().as_str() {
-        "GIMI" => vec!["camera", "fps", "fast-team"],
-        "SRMI" => vec!["fps-120"],
-        _ => Vec::new(),
-    }
+fn player_tweaks_features(preset: &str) -> Vec<String> {
+    super::player_tweaks::features(None, preset).unwrap_or_default()
 }
 
 fn bundled_player_tweaks_snapshot(
@@ -586,7 +582,13 @@ fn bundled_player_tweaks_snapshot(
                 platforms: vec!["windows-x64".to_string()],
                 games: vec!["GIMI".to_string(), "SRMI".to_string()],
             },
-            contributions: PluginContributions::default(),
+            contributions: PluginContributions {
+                host_extensions: vec![super::host_extensions::HostExtensionContribution {
+                    id: "settings".into(), provider: "ssmt.player-tweaks".into(), priority: 0,
+                    config: None, settings_component: Some("ssmt.player-tweaks.settings".into()),
+                }],
+                ..PluginContributions::default()
+            },
             external_dependencies: Vec::new(),
             permissions: if preset.eq_ignore_ascii_case("SRMI") {
                 vec![PluginPermission::FilesystemRead, PluginPermission::FilesystemWrite]
@@ -610,12 +612,18 @@ fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<Installe
     let preset = game_scope_preset(game_name);
     let mut plugins = snapshot(&registry.for_game_preset(game_name, &preset));
     for plugin in &mut plugins {
+        if plugin.manifest.id == PLAYER_TWEAKS_ID {
+            match super::player_tweaks::features(registry.find(PLAYER_TWEAKS_ID), &preset) {
+                Ok(features) => plugin.features = features,
+                Err(_) => { plugin.enabled = false; plugin.lifecycle_status = PluginLifecycleStatus::Broken; }
+            }
+        }
         if !plugin.app_scoped && !plugin.manifest.compatibility.supports_game(&preset) {
             plugin.enabled = false;
             plugin.lifecycle_status = PluginLifecycleStatus::Incompatible;
         }
     }
-    if let Some(bundled) = bundled_player_tweaks_snapshot(registry, game_name) {
+    if let Some(bundled) = (registry.find(PLAYER_TWEAKS_ID).is_none()).then(|| bundled_player_tweaks_snapshot(registry, game_name)).flatten() {
         plugins.push(bundled);
     }
     plugins
@@ -643,7 +651,11 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
         .installed()
         .iter()
         .map(|plugin| InstalledPluginSnapshot {
-            manifest: plugin.manifest.clone(),
+            manifest: {
+                let mut manifest = plugin.manifest.clone();
+                manifest.contributions.host_extensions = super::host_graphics::settings_extensions(plugin);
+                manifest
+            },
             enabled: plugin.enabled,
             lifecycle_status: lifecycle_status(plugin),
             external_dependencies: plugin.external_dependencies.clone(),
@@ -792,7 +804,7 @@ pub fn set_plugin_enabled_for_game(
             Dlss5State::Managed(_) | Dlss5State::NotManaged => {}
         }
     }
-    if id == PLAYER_TWEAKS_ID {
+    if id == PLAYER_TWEAKS_ID && registry.find(&id).is_none() {
         let preset = game_scope_preset(&game_name);
         if enabled && player_tweaks_features(&preset).is_empty() {
             return Err("Player Tweaks 当前支持 GIMI 和 SRMI".to_string());
@@ -805,6 +817,9 @@ pub fn set_plugin_enabled_for_game(
         }
         registry.set_bundled_game_enabled(&game_name, &id, enabled)
     } else {
+        if id == PLAYER_TWEAKS_ID && !enabled && game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI") {
+            super::star_rail_tweaks::release_for_game(&game_name)?;
+        }
         if registry.find(&id).is_some_and(|plugin| plugin.manifest.is_app_scoped()) {
             registry.set_enabled(&id, enabled)
         } else {

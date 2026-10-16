@@ -638,50 +638,17 @@ export class LaunchGame {
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
 
             let hotRuntime: HotRuntimePlan | null = null;
-            let shadeHotHandled = false;
+            let graphicsHotHandled = false;
             let skipDlss5 = false;
-            if (!pureDirectTarget && useRunInjector && targetExe) {
-                try {
-                    hotRuntime = await invoke<HotRuntimePlan | null>("prepare_dlss5_hot_runtime", { gameName, gameExecutable: targetExe });
-                } catch (error) {
-                    // 可选组件未配置或校验失败只影响本次 DLSS5，不改保存的启用状态。
-                    skipDlss5 = true;
-                    console.warn("DLSS5 热注入准备失败，继续普通启动：", error);
-                    ElMessage.warning({
-                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "DLSS5", error: String(error) }),
-                        showClose: true,
-                        duration: 12000,
-                    });
-                }
-            }
-            if (hotRuntime) {
-                let unavailable = "";
-                if (!launchTargetProgram) {
-                    unavailable = t("launchGame.messages.gimiHotManualLaunchUnsupported");
-                } else if (useShell) {
-                    const [launcherPath, targetPath] = await Promise.all([join(launcherExePath), join(targetExe)]);
-                    const comparablePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").toLowerCase();
-                    if (comparablePath(launcherPath) !== comparablePath(targetPath)) {
-                        unavailable = t("launchGame.messages.gimiHotExternalLauncherUnsupported", {
-                            launcher: launcherExePath, target: targetExe,
-                        });
-                    } else {
-                        // Shell 指向同一个游戏时由 Run.exe 创建，以显式继承热注入环境。
-                        useShell = false;
-                    }
-                }
-                if (unavailable) {
-                    hotRuntime = null;
-                    skipDlss5 = true;
-                    ElMessage.warning({
-                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "DLSS5", error: unavailable }),
-                        showClose: true,
-                        duration: 12000,
-                    });
-                }
-            }
             let hotRuntimeDlls: string[] = [];
             let hotLaunchArgs = config.launchArgs || "";
+            const warnContribution = (plugin: string, error: unknown) => {
+                ElMessage.warning({
+                    message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin, error: String(error) }),
+                    showClose: true,
+                    duration: 12000,
+                });
+            };
             const collectHotRuntimeDlls = (plan: HotRuntimePlan): string[] => {
                 const configuredExtras = Array.isArray(config.extraDlls)
                     ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
@@ -696,49 +663,48 @@ export class LaunchGame {
                 }
                 return [...plan.dlls, ...extras];
             };
-            if (hotRuntime) {
-                try {
-                    hotRuntimeDlls = collectHotRuntimeDlls(hotRuntime);
-                    hotLaunchArgs = this.applyRequiredLaunchArgs(config.launchArgs || "", hotRuntime);
-                    // 只有实际采用热注入计划才调整输入契约；失败时保留普通 Mod 启动。
-                    await invoke("configure_dlss5_launch_settings", { gameName, gameExecutable: targetExe });
-                } catch (error) {
-                    hotRuntime = null;
-                    skipDlss5 = true;
-                    ElMessage.warning({
-                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "DLSS5", error: String(error) }),
-                        showClose: true,
-                        duration: 12000,
-                    });
-                }
-            }
-            if (!hotRuntime && !pureDirectTarget && useRunInjector && launchTargetProgram && targetExe &&
-                !useEfmiDirectWait && graphicsDecision !== "suppress_hoyoshade_this_launch") {
+            if (!pureDirectTarget && useRunInjector && targetExe) {
                 const comparablePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").toLowerCase();
-                const canCreateTarget = !useShell || comparablePath(await join(launcherExePath)) === comparablePath(await join(targetExe));
-                if (canCreateTarget) {
-                    try {
-                        // Shade 单独启用或 DLSS5 回退时也串行预加载，不能让独立注入器抢先进入游戏。
-                        hotRuntime = await invoke<HotRuntimePlan | null>("prepare_hoyoshade_hot_runtime", { gameName, gameExecutable: targetExe });
-                        shadeHotHandled = !!hotRuntime;
-                        if (hotRuntime) {
-                            hotRuntimeDlls = collectHotRuntimeDlls(hotRuntime);
-                            hotLaunchArgs = this.applyRequiredLaunchArgs(config.launchArgs || "", hotRuntime);
-                            useShell = false;
+                const canCreateTarget = launchTargetProgram && !useEfmiDirectWait &&
+                    (!useShell || comparablePath(await join(launcherExePath)) === comparablePath(await join(targetExe)));
+                const excludedProviders: string[] = [];
+                try {
+                    while (true) {
+                        const prepared = await invoke<{
+                            candidateId: string | null; plugin: string | null; plan: HotRuntimePlan | null;
+                            handled: boolean; diagnostics: Array<{ plugin: string; error: string }>;
+                        }>("prepare_plugin_graphics_plan", { gameName, gameExecutable: targetExe, allowHotRuntime: canCreateTarget, excludedProviders, graphicsDecision });
+                        graphicsHotHandled ||= prepared.handled;
+                        for (const diagnostic of prepared.diagnostics) {
+                            skipDlss5 = true;
+                            warnContribution(diagnostic.plugin, diagnostic.error);
                         }
-                    } catch (error) {
-                        hotRuntime = null;
-                        shadeHotHandled = true;
-                        ElMessage.warning({
-                            message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "Shade Bridge", error: String(error) }),
-                            showClose: true,
-                            duration: 12000,
-                        });
+                        if (!prepared.plan) break;
+                        const candidateId = prepared.candidateId;
+                        if (!candidateId || excludedProviders.includes(candidateId)) throw new Error("插件返回了重复或无效的启动候选");
+                        try {
+                            const dlls = collectHotRuntimeDlls(prepared.plan);
+                            const args = this.applyRequiredLaunchArgs(config.launchArgs || "", prepared.plan);
+                            await invoke("configure_plugin_launch_contract", { gameName, gameExecutable: targetExe, candidateId });
+                            hotRuntime = prepared.plan;
+                            hotRuntimeDlls = dlls;
+                            hotLaunchArgs = args;
+                            useShell = false;
+                            break;
+                        } catch (error) {
+                            excludedProviders.push(candidateId);
+                            skipDlss5 = true;
+                            warnContribution(prepared.plugin || "Plugin", error);
+                        }
                     }
+                } catch (error) {
+                    graphicsHotHandled = true;
+                    skipDlss5 = true;
+                    warnContribution("Plugin", error);
                 }
             }
             let hoyoshade: PluginLaunchProgram | null = null;
-            if (!hotRuntime && !shadeHotHandled && !pureDirectTarget && launchTargetProgram && targetExe) {
+            if (!hotRuntime && !graphicsHotHandled && !pureDirectTarget && launchTargetProgram && targetExe) {
                 try {
                     hoyoshade = await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
                       gameName,
@@ -899,55 +865,24 @@ export class LaunchGame {
         gameName: string,
         gamePreset?: string,
     ): Promise<void> {
-        const resourcesDir = await GlobalConfig.SSMTResourcesFolder();
-
-        // Run.exe 会注入同目录中的 Player Tweaks。只在本游戏明确启用时部署，
-        // 否则移除旧副本，避免插件市场的禁用状态与实际注入不一致。
-        const isGimi = (gamePreset || "").trim().toUpperCase() === "GIMI";
-        const dllSourcePath = await join(
-            resourcesDir,
-            "SSMT-Player-Tweaks.dll",
-        );
         const dllTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.dll");
         const configTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.ini");
-
         const removeStaleDll = async () => {
-            if (await exists(dllTargetPath)) {
-                await remove(dllTargetPath);
-            }
+            if (await exists(dllTargetPath)) await remove(dllTargetPath);
         };
-
-        if ((gamePreset || "").trim().toUpperCase() === "SRMI") {
-            // 崩铁当前通过客户端设置启用 120 FPS，不注入原神专用 Hook DLL。
-            await removeStaleDll();
-            try {
-                await invoke("prepare_star_rail_player_tweaks", { gameName });
-            } catch (error) {
-                ElMessage.warning({ message: `崩铁 Player Tweaks 准备失败，本次继续普通启动：${String(error)}`, showClose: true, duration: 12000 });
-            }
-            return;
+        let assets: { dll: string } | null = null;
+        try {
+            assets = await invoke<{ dll: string } | null>("prepare_player_tweaks_launch", {
+                gameName, gamePreset: gamePreset || "",
+            });
+        } catch (error) {
+            ElMessage.warning({ message: `Player Tweaks 准备失败，本次继续普通启动：${String(error)}`, showClose: true, duration: 12000 });
         }
-
-        const playerTweaksEnabled = isGimi && await invoke<boolean>(
-            "bundled_player_tweaks_enabled_for_game",
-            { gameName, gamePreset: gamePreset || "" },
-        ).catch((error) => {
-            console.warn("Failed to read bundled plugin selection:", error);
-            return false;
-        });
-        if (!playerTweaksEnabled) {
+        if (!assets) {
             await removeStaleDll();
             return;
         }
-
-        if (!(await exists(dllSourcePath))) {
-            await removeStaleDll();
-            ElMessage.warning(
-                t("launchGame.messages.missingPlayerTweaksSkipped"),
-            );
-            return;
-        }
-
+        const dllSourcePath = assets.dll;
         try {
             const gameConfig = await ResourceManager.loadGameConfig(gameName);
             await writeTextFile(configTargetPath,

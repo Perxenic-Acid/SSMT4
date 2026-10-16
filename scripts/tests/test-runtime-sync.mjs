@@ -79,14 +79,26 @@ async function harness(t, options = {}) {
         return createHash('md5').update(await fs.readFile(args.path)).digest('hex');
       }
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
-      if (command === 'bundled_player_tweaks_enabled_for_game') return false;
+      if (command === 'prepare_player_tweaks_launch') return null;
       if (command === 'configure_gimi_launch_settings') return null;
-        if (command === 'configure_dlss5_launch_settings') return null;
-      if (command === 'prepare_dlss5_hot_runtime') {
-        if (options.hotError) throw new Error(options.hotError);
-        return options.hotRuntime ?? null;
+      if (command === 'configure_plugin_launch_contract') return null;
+      if (command === 'prepare_plugin_graphics_plan') {
+        const diagnostics = [];
+        let handled = false;
+        for (const [id, plugin, present, failure, plan] of [
+          ['dlss', 'DLSS5', options.hotRuntime || options.hotError, options.hotError, options.hotRuntime],
+          ['shade', 'Shade', options.shade || options.shadeError, options.shadeError,
+            { dlls: ['C:/Shade/ReShade64.dll'], environment: {}, runtimeDirectory: 'C:/Shade' }],
+        ]) {
+          if (!present) continue;
+          if (args.excludedProviders.includes(id)) { handled = true; continue; }
+          if (!args.allowHotRuntime) { diagnostics.push({ plugin, error: '当前启动方式无法继承热注入计划' }); continue; }
+          handled = true;
+          if (failure) { diagnostics.push({ plugin, error: failure }); continue; }
+          return { candidateId: id, plugin, plan, handled, diagnostics };
+        }
+        return { candidateId: null, plugin: null, plan: null, handled, diagnostics };
       }
-      if (command === 'prepare_hoyoshade_hot_runtime') return null;
       if (command === 'prepare_plugin_host_config') return options.hostConfig ?? null;
       if (command === 'prepare_hoyoshade_launch') {
         if (options.shadeError) throw new Error(options.shadeError);
@@ -317,18 +329,13 @@ for (const config of [{ extraDlls: ['C:/Other/ReShade64.dll'] }, { launchTargetP
       await fs.writeFile(h.config.launcherExePath, 'launcher fixture');
     }
     await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
-    assert.ok(h.calls.some(call => call.command === 'prepare_dlss5_hot_runtime'), '必须验证模式检查，不能因无效路径提前返回');
-    if (config.extraDlls) {
-      assert.equal(h.calls.some(call => call.command === 'launch_programs'), false);
-      assert.ok(h.dialogs.some(dialog => dialog.kind === 'alert'));
-    } else {
-      const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
-      assert.doesNotMatch(programs[0].args || '', /--preload-runtime/);
-      assert.equal(h.dialogs.length, 0);
-      const warning = h.messages.find(message => message.kind === 'warning');
-      assert.ok(warning);
-      assert.match(JSON.stringify(warning), config.useShell ? /gimiHotExternalLauncherUnsupported/ : /gimiHotManualLaunchUnsupported/);
-    }
+    assert.ok(h.calls.some(call => call.command === 'prepare_plugin_graphics_plan'), '必须验证模式检查，不能因无效路径提前返回');
+    const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+    assert.doesNotMatch(programs[0].args || '', /--preload-runtime/);
+    assert.equal(h.dialogs.length, 0);
+    assert.ok(h.messages.some(message => message.kind === 'warning'));
+    assert.equal(h.calls.some(call => call.command === 'configure_plugin_launch_contract'), false);
+
   });
 }
 
@@ -359,13 +366,15 @@ for (const shade of [null, { path: 'C:/Shade/inject.exe', args: 'YuanShen.exe', 
       const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
       const injector = programs.find(program => program.path.endsWith('Run.exe'));
       assert.ok(injector);
-      assert.doesNotMatch(injector.args || '', /preload-runtime|set-env/);
+      assert.equal((injector.args || '').includes('--preload-runtime'), !!shade);
       assert.equal(injector.args?.includes('--plugin-host-config') || false, !!hostConfig);
-      assert.equal(programs.some(program => program.path === 'C:/Shade/inject.exe'), !!shade);
-      assert.equal(h.calls.find(call => call.command === 'prepare_hoyoshade_launch').args.skipDlss5, true);
+      assert.equal(programs.some(program => program.path === 'C:/Shade/inject.exe'), false);
+      assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
       assert.equal(h.messages.some(message => message.kind === 'warning'), true);
       assert.equal(h.dialogs.length, 0);
-      assert.doesNotMatch(await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8'), /ReShade64.dll|Dx11FsrBridge.dll|OptiScaler.dll/);
+      const configured = await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8');
+      assert.doesNotMatch(configured, /Dx11FsrBridge.dll|OptiScaler.dll/);
+      assert.equal(configured.includes('C:/Shade/ReShade64.dll'), !!shade);
     });
   }
 }

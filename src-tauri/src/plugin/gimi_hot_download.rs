@@ -44,6 +44,38 @@ fn manifest() -> Result<Manifest, String> {
     serde_json::from_str(include_str!("gimi_hot_assets.json")).map_err(|error| error.to_string())
 }
 
+fn manifest_for(registry: &PluginRegistry) -> Result<Manifest, String> {
+    match crate::plugin::dlss5_policy::Policy::from_registry(registry)? {
+        Some(policy) => serde_json::from_str(&policy.assets(true)?).map_err(|e| e.to_string()),
+        None => manifest(),
+    }
+}
+
+fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
+    if manifest.revision.len() != 40 || !manifest.revision.bytes().all(|c| c.is_ascii_hexdigit()) || manifest.assets.is_empty() {
+        return Err("GIMI 组件版本声明无效".into());
+    }
+    let mut names = std::collections::HashSet::new();
+    for asset in &manifest.assets {
+        for path in [&asset.path, &asset.source] {
+            crate::plugin::validate_package_relative_path(path).map_err(|e| e.to_string())?;
+        }
+        if asset.size == 0 || asset.size > 256 * 1024 * 1024
+            || asset.sha256.len() != 64 || !asset.sha256.bytes().all(|c| c.is_ascii_hexdigit())
+            || !names.insert(asset.path.to_ascii_lowercase())
+            || asset.profile.as_ref().is_some_and(|profile| !["rtx30", "rtx50"].contains(&profile.as_str())) {
+            return Err("GIMI 组件路径、大小或校验声明无效".into());
+        }
+    }
+    let url = reqwest::Url::parse(&manifest.nr_archive.url).map_err(|e| e.to_string())?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
+        || manifest.nr_archive.size == 0 || manifest.nr_archive.size > 1024 * 1024 * 1024
+        || manifest.nr_archive.sha256.len() != 64 || !manifest.nr_archive.sha256.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("GIMI NR 归档声明无效".into());
+    }
+    Ok(())
+}
+
 // 临时目录只能是本次创建的自有目录；失败时不清理既有安装或下载缓存。
 struct PendingInstallation(PathBuf, bool);
 impl Drop for PendingInstallation {
@@ -121,10 +153,11 @@ async fn download_at(
     cache: &Path,
     root: PathBuf,
     profile: String,
+    manifest: Manifest,
     mut progress: impl FnMut(DownloadProgress),
 ) -> Result<HotRuntimeInstallation, String> {
     profile_files(&profile)?;
-    let manifest = manifest()?;
+    validate_manifest(&manifest)?;
     let assets = manifest
         .assets
         .iter()
@@ -215,6 +248,8 @@ pub async fn download_gimi_hot_runtime(
         .map_err(|_| "DLSS5 组件正在下载，请等待当前任务完成")?;
     profile_files(&profile)?;
     require_enabled(&game_name, Path::new(&game_executable))?;
+    let registry = PluginRegistry::from_default_location().map_err(|e| e.to_string())?.for_game(&game_name);
+    let manifest = manifest_for(&registry)?;
     let client = reqwest::Client::builder()
         .user_agent("SSMT4-DLSS5-Setup")
         .https_only(true)
@@ -229,7 +264,7 @@ pub async fn download_gimi_hot_runtime(
     fs::create_dir(&root).map_err(|error| error.to_string())?;
     let mut pending = PendingInstallation(root.clone(), false);
     let mut last_update = std::time::Instant::now() - std::time::Duration::from_secs(1);
-    let installation = download_at(&client, &cache, root, profile, |event| {
+    let installation = download_at(&client, &cache, root, profile, manifest, |event| {
         // 用户切换页面不应让已授权下载变成失败；重返页面可读取最终状态。
         if event.phase != "downloading" || last_update.elapsed().as_millis() >= 150 {
             let _ = on_progress.send(event);
@@ -251,6 +286,7 @@ mod tests {
     #[test]
     fn download_manifest_matches_all_supported_profiles() {
         let manifest = manifest().unwrap();
+        validate_manifest(&manifest).unwrap();
         assert_eq!(manifest.revision.len(), 40);
         for profile in ["rtx50", "rtx30"] {
             let (_, files) = profile_files(profile).unwrap();
@@ -280,6 +316,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn package_asset_paths_are_checked_before_any_download_or_write() {
+        let mut manifest = manifest().unwrap();
+        manifest.assets[0].path = "../outside.dll".into();
+        assert!(validate_manifest(&manifest).is_err());
+        manifest.assets[0].path = "safe.dll".into();
+        manifest.nr_archive.url = "http://example.invalid/runtime.7z".into();
+        assert!(validate_manifest(&manifest).is_err());
+    }
+
     #[tokio::test]
     #[ignore = "联网下载约 302 MiB，设置 SSMT_HOT_DOWNLOAD_TEST_ROOT 指定隔离缓存"]
     async fn downloads_and_prepares_both_real_profiles() {
@@ -302,6 +348,7 @@ mod tests {
                 &root.join("cache"),
                 run.join(profile),
                 profile.into(),
+                manifest().unwrap(),
                 |_| {},
             )
             .await

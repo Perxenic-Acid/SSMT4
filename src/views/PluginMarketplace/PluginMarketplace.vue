@@ -38,6 +38,7 @@ interface PluginManifest {
   compatibility?: { games?: string[] }
   permissions: string[]
   externalDependencies: Array<{ id: string; type: string; requiredFiles: string[] }>
+  contributions?: { hostExtensions?: Array<{ id: string; settingsComponent?: string | null }> }
 }
 
 interface InstalledPlugin {
@@ -136,6 +137,9 @@ const installedById = computed(() => {
   return byId
 })
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
+const hasSettings = (plugin: InstalledPlugin | undefined, component: string) =>
+  plugin?.manifest.contributions?.hostExtensions?.some(extension => extension.settingsComponent === component) ?? false
+const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
 const graphicsTargetExe = ref('')
 const graphicsConfigLoading = ref(false)
 const graphicsConfigError = ref('')
@@ -155,7 +159,7 @@ const allEntries = computed<CatalogEntry[]>(() => {
     entries.push({
       id: plugin.manifest.id,
       name: plugin.manifest.name,
-      description: plugin.bundled && plugin.manifest.id === 'ssmt.player-tweaks'
+      description: plugin.bundled && hasSettings(plugin, 'ssmt.player-tweaks.settings')
         ? t('pluginMarketplace.playerTweaksDescription')
         : plugin.manifest.description || t('pluginMarketplace.installedPackage'),
       author: plugin.manifest.author,
@@ -389,7 +393,7 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
   loading.value = true
   try {
     let gameExecutable: string | null = null
-    if (plugin.manifest.id === 'ssmt.dlss5.integration' && plugin.enabled) {
+    if (plugin.enabled && !plugin.appScoped) {
       try {
         gameExecutable = (await ResourceManager.loadGameConfig(gameName)).targetExePath?.trim() || null
       } catch {
@@ -447,11 +451,11 @@ const clearSelectedPluginLog = async () => {
 }
 
 const openPluginSettings = () => {
-  if (selectedEntry.value?.id === 'ssmt.dlss5.integration') {
+  if (selectedSettings.value.includes('ssmt.dlss5.settings') || selectedSettings.value.includes('ssmt.player-tweaks.settings')) {
     detailTab.value = 'features'
     return
   }
-  if (selectedEntry.value?.id === 'ssmt.hoyoshade.bridge') {
+  if (selectedSettings.value.includes('ssmt.reshade.settings')) {
     void router.push({ name: 'Settings', hash: '#settings-plugins' })
   }
 }
@@ -466,7 +470,7 @@ watch(() => [selectedGameName.value, installedGameName.value, selectedPlugin.val
   graphicsTargetExe.value = ''
   graphicsConfigError.value = ''
   graphicsConfigLoading.value = false
-  if (!gameName || installedGameName.value !== gameName || selectedPlugin.value?.manifest.id !== 'ssmt.dlss5.integration' || !selectedPlugin.value.enabled) return
+  if (!gameName || installedGameName.value !== gameName || !selectedSettings.value.includes('ssmt.dlss5.settings') || !selectedPlugin.value?.enabled) return
   graphicsConfigLoading.value = true
   try {
     const config = await ResourceManager.loadGameConfig(gameName)
@@ -615,7 +619,7 @@ onMounted(async () => {
               :disabled="(!selectedGameName && !selectedPlugin.appScoped) || (!selectedPlugin.appScoped && installedGameName !== selectedGameName) || loading || (!selectedPlugin.enabled && selectedPlugin.lifecycleStatus === 'incompatible')" :loading="loading" @click="togglePlugin(selectedPlugin)">
               {{ selectedPlugin.enabled ? t('pluginMarketplace.actions.disable') : t('pluginMarketplace.actions.enable') }}
             </el-button>
-            <el-button v-if="['ssmt.hoyoshade.bridge', 'ssmt.dlss5.integration'].includes(selectedEntry.id)" size="small" :icon="Setting"
+            <el-button v-if="selectedSettings.some(Boolean)" size="small" :icon="Setting"
               @click="openPluginSettings">{{ t('pluginMarketplace.actions.openSettings') }}</el-button>
             <el-button size="small" :icon="Document" :loading="logLoading" @click="openPluginLog">
               {{ t('pluginMarketplace.actions.viewLog') }}
@@ -648,7 +652,7 @@ onMounted(async () => {
         <div class="detail-body">
           <div class="detail-main">
             <section v-if="detailTab === 'features'" class="detail-section">
-              <template v-if="selectedEntry.id === 'ssmt.dlss5.integration' && selectedPlugin">
+              <template v-if="selectedSettings.includes('ssmt.dlss5.settings') && selectedPlugin">
                 <p class="section-hint">{{ t('pluginMarketplace.dlss5SettingsHint') }}</p>
                 <div v-if="!selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5SelectGame') }}</div>
                 <div v-else-if="graphicsConfigLoading || installedGameName !== selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5LoadingGame') }}</div>
@@ -658,7 +662,7 @@ onMounted(async () => {
                   :game-name="selectedGameName" :target-exe-path="graphicsTargetExe" />
                 <div v-else class="muted-copy">{{ t('pluginMarketplace.dlss5ConfigureTarget') }}</div>
               </template>
-              <template v-else-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && installedGameName === selectedGameName && selectedPlugin.lifecycleStatus !== 'incompatible'">
+              <template v-else-if="selectedSettings.includes('ssmt.player-tweaks.settings') && selectedPlugin && installedGameName === selectedGameName && selectedPlugin.lifecycleStatus !== 'incompatible'">
                 <PlayerTweaksCameraSettings
                   v-if="selectedPlugin.features?.includes('camera')"
                   :game-name="selectedGameName"

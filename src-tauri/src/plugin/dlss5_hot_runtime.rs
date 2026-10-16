@@ -72,6 +72,21 @@ fn manifest() -> Result<Manifest, String> {
     serde_json::from_str(include_str!("dlss5_hot_assets.json")).map_err(|error| error.to_string())
 }
 
+fn manifest_for(registry: &PluginRegistry) -> Result<Manifest, String> {
+    match super::dlss5_policy::Policy::from_registry(registry)? {
+        Some(policy) => serde_json::from_str(&policy.assets(false)?).map_err(|e| e.to_string()),
+        None => manifest(),
+    }
+}
+
+fn route_for_registry(registry: &PluginRegistry, preset: &str, executable: &Path) -> Result<(String, String), String> {
+    if let Some(policy) = super::dlss5_policy::Policy::from_registry(registry)? {
+        let route = policy.select(preset, executable)?;
+        return Ok((route.route.clone(), route.api.clone()));
+    }
+    route_for(preset, executable).map(|(route, api)| (route.into(), api.into()))
+}
+
 pub(super) fn applies(executable: &Path) -> bool {
     executable
         .file_name()
@@ -123,7 +138,7 @@ pub(super) fn route_scan(
     if !enabled(registry) {
         return Err("请先为当前游戏启用 DLSS5 插件".into());
     }
-    let (route, expected_api) = route_for(preset, executable)?;
+    let (route, expected_api) = route_for_registry(registry, preset, executable)?;
     if api != "auto" && api != expected_api {
         return Err("图形 API 与游戏预设不一致，请选择对应 DX11 / DX12 预设".into());
     }
@@ -133,7 +148,7 @@ pub(super) fn route_scan(
         } else {
             vec![format!("ssmt-{route}")]
         },
-        api: expected_api.into(),
+        api: expected_api.clone(),
         api_label: if expected_api == "d3d11" {
             "DirectX 11"
         } else {
@@ -251,8 +266,7 @@ fn require_owned(installation: &Installation) -> Result<(), String> {
     Ok(())
 }
 
-fn validate(installation: &Installation) -> Result<PathBuf, String> {
-    let manifest = manifest()?;
+fn validate(installation: &Installation, manifest: &Manifest) -> Result<PathBuf, String> {
     if installation.revision != manifest.revision {
         return Err("DLSS5 组件版本已改变，请重新配置".into());
     }
@@ -330,14 +344,14 @@ fn extract(asset: &Asset, cached: &Path, root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn require_enabled(game: &str, executable: &Path) -> Result<(&'static str, &'static str), String> {
+fn require_enabled(game: &str, executable: &Path) -> Result<(String, String), String> {
     let registry = PluginRegistry::from_default_location()
         .map_err(|error| error.to_string())?
         .for_game(game);
     if !enabled(&registry) {
         return Err("请先为当前游戏启用 DLSS5 插件".into());
     }
-    let route = route_for(&game_scope_preset(game), executable)?;
+    let route = route_for_registry(&registry, &game_scope_preset(game), executable)?;
     ensure_stopped(executable)?;
     Ok(route)
 }
@@ -354,7 +368,7 @@ pub fn dlss5_hot_runtime_status(game_name: String) -> Result<Option<Installation
         return Ok(None);
     };
     require_owned(&installation)?;
-    validate(&installation)?;
+    validate(&installation, &manifest_for(&registry)?)?;
     Ok(Some(installation))
 }
 
@@ -384,8 +398,9 @@ pub async fn download_dlss5_hot_runtime(
         .try_lock()
         .map_err(|_| "DLSS5 组件正在配置，请稍候")?;
     let (route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
-    let manifest = manifest()?;
-    let assets = selected(&manifest, route, &profile)?;
+    let registry = PluginRegistry::from_default_location().map_err(|e| e.to_string())?.for_game(&game_name);
+    let manifest = manifest_for(&registry)?;
+    let assets = selected(&manifest, &route, &profile)?;
     let total_bytes = assets.iter().map(|asset| asset.size).sum();
     let parent = installation_parent();
     fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
@@ -439,10 +454,10 @@ pub async fn download_dlss5_hot_runtime(
     let installation = Installation {
         root,
         profile,
-        route: route.into(),
-        revision: manifest.revision,
+        route: route.clone(),
+        revision: manifest.revision.clone(),
     };
-    validate(&installation)?;
+    validate(&installation, &manifest)?;
     let (current_route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
     if current_route != route {
         return Err("下载期间游戏预设已改变，请重新配置".into());
@@ -465,7 +480,7 @@ fn prepare_at(
     registry: &PluginRegistry,
     installation: &Installation,
 ) -> Result<HotRuntimePlan, String> {
-    let root = validate(installation)?;
+    let root = validate(installation, &manifest_for(registry)?)?;
     let mut required = vec!["renodx-dlss5.addon64".into()];
     match installation.route.as_str() {
         "feeder" => required.push("dlss5-feed.addon64".into()),
@@ -579,7 +594,7 @@ pub fn configure_dlss5_launch_settings(
     if !enabled(&registry.for_game(&game_name)) {
         return Ok(());
     }
-    route_for(&game_scope_preset(&game_name), executable)?;
+    route_for_registry(&registry.for_game(&game_name), &game_scope_preset(&game_name), executable)?;
     ensure_stopped(executable)?;
     crate::commands::gimi_settings::configure_dlss5(
         &game_executable,
@@ -603,7 +618,7 @@ pub fn prepare_dlss5_hot_runtime(
     if !enabled(&registry) {
         return Ok(None);
     }
-    let (route, _) = route_for(&game_scope_preset(&game_name), executable)?;
+    let (route, _) = route_for_registry(&registry, &game_scope_preset(&game_name), executable)?;
     if gimi_hot_runtime::applies(executable) && gimi_route(&game_name)? == "gimi-hot" {
         return gimi_hot_runtime::prepare_gimi_hot_runtime(game_name, game_executable);
     }
@@ -622,8 +637,12 @@ pub fn prepare_dlss5_hot_runtime(
         return Err("DLSS5 组件与当前游戏预设不符，请重新配置".into());
     }
     let mut plan = prepare_at(&registry, &installation)?;
-    if game_scope_preset(&game_name).eq_ignore_ascii_case("WWMI") {
-        // 只约束本次启用路线，不写回玩家保存的启动参数。
+    if let Some(policy) = super::dlss5_policy::Policy::from_registry(&registry)? {
+        let route = policy.select(&game_scope_preset(&game_name), executable)?;
+        plan.required_launch_args = route.required_launch_args.clone();
+        plan.excluded_launch_args = route.excluded_launch_args.clone();
+    } else if game_scope_preset(&game_name).eq_ignore_ascii_case("WWMI") {
+        // 旧包的冻结适配；新包从声明读取本次参数约束。
         plan.required_launch_args.push("-dx11".into());
         plan.excluded_launch_args = ["-dx11", "-d3d11", "-dx12", "-d3d12", "-vulkan"]
             .into_iter().map(String::from).collect();

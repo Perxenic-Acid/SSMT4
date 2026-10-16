@@ -48,10 +48,23 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
       calls.push({ command, args });
       if (command === 'prepare_plugin_host_config') return hostConfig;
       if (command === 'prepare_hoyoshade_launch') return null;
-      if (command === 'prepare_hoyoshade_hot_runtime') return typeof shadeHotRuntime === 'function' ? shadeHotRuntime() : shadeHotRuntime;
-      if (command === 'prepare_dlss5_hot_runtime') return typeof hotRuntime === 'function' ? hotRuntime() : hotRuntime;
-      if (command === 'configure_dlss5_launch_settings') {
-        if (settingsError) throw settingsError;
+      if (command === 'prepare_plugin_graphics_plan') {
+        const diagnostics = [];
+        let handled = false;
+        for (const [id, plugin, candidate] of [['dlss', 'DLSS5', hotRuntime], ['shade', 'Shade', shadeHotRuntime]]) {
+          if (!candidate) continue;
+          if (args.excludedProviders.includes(id)) { handled = true; continue; }
+          if (!args.allowHotRuntime) { diagnostics.push({ plugin, error: '当前启动方式无法继承热注入计划' }); continue; }
+          handled = true;
+          try {
+            const plan = typeof candidate === 'function' ? candidate() : candidate;
+            if (plan) return { candidateId: id, plugin, plan, handled, diagnostics };
+          } catch (error) { diagnostics.push({ plugin, error: String(error) }); }
+        }
+        return { candidateId: null, plugin: null, plan: null, handled, diagnostics };
+      }
+      if (command === 'configure_plugin_launch_contract') {
+        if (settingsError && args.candidateId === 'dlss') throw settingsError;
         return;
       }
       if (command === 'launch_programs') return;
@@ -171,7 +184,7 @@ test('Shade 单独启用或 DLSS5 准备失败时仍与 Runtime 有序预加载�
         assert.match(injector.args, /--set-env "RESHADE_BASE_PATH_OVERRIDE=/);
         assert.equal(programs.some(program => program.path === target), false);
         assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
-        assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+        assert.equal(h.calls.some(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss'), false);
         assert.equal(injector.args.includes('--plugin-host-config'), !!hostConfig);
         assert.match(h.ini(), /inject_dlls = C:\/SSMT\/Owned\/ReShade64.dll/);
         assert.doesNotMatch(h.ini(), /dll_initialization_delay = 150/);
@@ -188,7 +201,7 @@ test('Shade 热注入失败仅横幅提示并保留普通 Mod，纯净启动不�
   assert.equal(failed.messages.filter(message => message.kind === 'warning').length, 1);
   const pure = harness({ ...base }, null, null, null, hotPlan);
   await pure.launch.launch('SRMI', { gameLaunchMode: 'always-pure' }, () => {});
-  assert.equal(pure.calls.some(call => call.command === 'prepare_hoyoshade_hot_runtime'), false);
+  assert.equal(pure.calls.some(call => call.command === 'prepare_plugin_graphics_plan'), false);
 });
 
 test('DLSS5 画质配置失败时 Shade 仍走有序预加载，不回退到独立注入器', async () => {
@@ -199,7 +212,7 @@ test('DLSS5 画质配置失败时 Shade 仍走有序预加载，不回退到独�
   assert.match(programs[0].args, /--preload-runtime/);
   assert.match(h.ini(), /inject_dlls = C:\/SSMT\/Owned\/ReShade64.dll/);
   assert.doesNotMatch(h.ini(), /SSMT-Gimi-Bridge.dll/);
-  assert.equal(h.calls.filter(call => call.command === 'configure_dlss5_launch_settings').length, 1);
+  assert.equal(h.calls.filter(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss').length, 1);
   assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
   assert.equal(h.messages.filter(message => message.kind === 'warning').length, 1);
 });
@@ -229,7 +242,7 @@ test('手动等待或外部启动器无法继承热注入环境时只跳过 DLSS
     await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
     const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
     assert.doesNotMatch(programs[0].args || '', /--preload-runtime|--set-env/);
-    assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+    assert.equal(h.calls.some(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss'), false);
     assert.equal(programs.some(program => program.path === launcher), launchTargetProgram);
     assert.ok(h.messages.some(message => message.kind === 'warning'));
   }
@@ -239,16 +252,16 @@ test('热注入组件准备失败仍提交普通启动队列并传递插件跳�
   const h = harness({ ...base, gamePreset: 'SRMI', targetExePath: 'C:/Game/StarRail.exe' }, null, () => { throw new Error('组件损坏'); });
   await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
   assert.ok(h.calls.some(call => call.command === 'launch_programs'));
-  assert.equal(h.calls.find(call => call.command === 'prepare_hoyoshade_launch').args.skipDlss5, true);
+  assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
   assert.ok(h.messages.some(message => message.kind === 'warning'));
-  assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+  assert.equal(h.calls.some(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss'), false);
 });
 
 test('只有实际采用热注入计划才调整画质契约，写入失败仅跳过 DLSS5', async () => {
   for (const settingsError of [null, new Error('无法备份画质设置')]) {
     const h = harness({ ...base, gamePreset: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe' }, null, hotPlan, settingsError);
     await h.launch.launch('原神', { gameLaunchMode: 'always-normal' }, () => {});
-    const settingsIndex = h.calls.findIndex(call => call.command === 'configure_dlss5_launch_settings');
+    const settingsIndex = h.calls.findIndex(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss');
     const launchIndex = h.calls.findIndex(call => call.command === 'launch_programs');
     assert.ok(settingsIndex >= 0 && launchIndex > settingsIndex);
     const programs = h.calls[launchIndex].args.programs;
@@ -258,7 +271,7 @@ test('只有实际采用热注入计划才调整画质契约，写入失败仅�
   for (const gameLaunchMode of ['always-normal', 'always-pure']) {
     const h = harness({ ...base, gamePreset: 'GIMI' });
     await h.launch.launch('原神', { gameLaunchMode }, () => {});
-    assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+    assert.equal(h.calls.some(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss'), false);
   }
 });
 
@@ -270,7 +283,7 @@ test('可选热注入 DLL 冲突仅提示并继续普通 Mod，不调整画质�
     const h = harness(config, null, shadeOnly ? null : plan, null, shadeOnly ? plan : null);
     await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
     assert.ok(h.calls.some(call => call.command === 'launch_programs'));
-    assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+    assert.equal(h.calls.some(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss'), false);
     if (shadeOnly) assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
     assert.ok(h.messages.some(message => message.kind === 'warning'));
     assert.doesNotMatch(h.ini(), /C:\/Owned/);

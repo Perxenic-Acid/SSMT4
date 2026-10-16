@@ -1,8 +1,7 @@
 use super::{
-    gimi_hot_runtime::{canonical_path, checked_path, read_text, rebase_search_paths},
-    hoyoshade::{HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID},
+    gimi_hot_runtime::{canonical_path, checked_path, read_text},
     managed_reshade::{self, ManagedReShadeConfig},
-    registry::{ExternalDependencyStatus, PluginRegistry},
+    registry::PluginRegistry,
 };
 use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
 
@@ -137,44 +136,17 @@ pub(super) fn compose(
     let mut preset = String::new();
     let mut addons = required.to_vec();
     let mut addon_sources = BTreeMap::new();
-    if let Some(plugin) = registry
-        .find(HOYOSHADE_PLUGIN_ID)
-        .filter(|plugin| plugin.enabled)
-    {
-        let dependency = plugin
-            .external_dependencies
-            .get(HOYOSHADE_DEPENDENCY_ID)
-            .filter(|dependency| dependency.status == ExternalDependencyStatus::Ready)
-            .and_then(|dependency| dependency.path.as_ref())
-            .ok_or("Shade Bridge 的资源目录尚未就绪")?;
-        let dependency = canonical_path(dependency).map_err(|error| error.to_string())?;
-        base = read_text(&checked_path(&dependency, "ReShade.ini")?)?;
-        rebase_search_paths(&mut base, &dependency);
-        if dependency.join("Presets/Mod OFF.ini").is_file() {
-            preset = read_text(&checked_path(&dependency, "Presets/Mod OFF.ini")?)?;
-        }
-        let sources = dependency.join("reshade-shaders/Addons");
-        if sources.is_dir() {
-            for entry in fs::read_dir(sources).map_err(|error| error.to_string())? {
-                let path = entry.map_err(|error| error.to_string())?.path();
-                let name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                if !path.is_file() || !name.to_ascii_lowercase().ends_with(".addon64") {
-                    continue;
-                }
-                if addons.iter().any(|other| other.eq_ignore_ascii_case(&name)) {
-                    return Err(format!("Add-on 资源所有权冲突：{name}"));
-                }
-                let canonical = canonical_path(&path).map_err(|error| error.to_string())?;
-                if !canonical.starts_with(&dependency) {
-                    return Err("Shade Add-on 越出声明的资源目录".into());
-                }
-                addon_sources.insert(name.clone(), canonical);
-                addons.push(name);
+    for contribution in super::host_graphics::reshade_contributions(registry)? {
+        let merged = managed_reshade::compose(&base, &contribution.config, &preset, &contribution.preset, &[])
+            .map_err(|e| e.to_string())?;
+        base = merged.game_ini;
+        preset = merged.preset_ini;
+        for (name, source) in contribution.addons {
+            if addons.iter().any(|other| other.eq_ignore_ascii_case(&name)) {
+                return Err(format!("Add-on 资源所有权冲突：{name}"));
             }
+            addons.push(name.clone());
+            addon_sources.insert(name, source);
         }
     }
 
@@ -188,6 +160,7 @@ pub(super) fn compose(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::hoyoshade::{HOYOSHADE_PLUGIN_ID, HOYOSHADE_DEPENDENCY_ID};
 
     #[test]
     fn separate_config_and_addon_directories_commit_together_without_loading_unknown_addons() {
