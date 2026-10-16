@@ -329,6 +329,7 @@ mod tests {
                     ..Default::default()
                 },
                 external_dependencies: vec![ExternalDependency {
+                    required_for: None,
                     id: HOYOSHADE_DEPENDENCY_ID.to_string(),
                     kind: ExternalDependencyType::Directory,
                     required_files: vec![

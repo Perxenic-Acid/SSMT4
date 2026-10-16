@@ -443,6 +443,7 @@ mod tests {
                 },
                 contributions: PluginContributions::default(),
                 external_dependencies: vec![ExternalDependency {
+                    required_for: None,
                     id: "tool".to_string(),
                     kind: ExternalDependencyType::Directory,
                     required_files: Vec::new(),

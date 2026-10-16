@@ -249,11 +249,11 @@ fn prepare_at(
     ] {
         managed_reshade::set_entry(&mut composed.game_ini, section, key, &value);
     }
-    super::hot_reshade::save_config(&reshade, composed, "", &["nr-before-sr.zh-CN.addon64".into()])?;
     let opti = root.join("components/OptiScaler");
     let mut ini = read_text(&opti.join("OptiScaler.ini"))?;
     configure_optiscaler(&mut ini, &opti);
-    fs::write(opti.join("OptiScaler.ini"), ini).map_err(|error| error.to_string())?;
+    composed.extra_files.insert(opti.join("OptiScaler.ini"), ini.into_bytes());
+    super::hot_reshade::save_config(&reshade, composed, "", &["nr-before-sr.zh-CN.addon64".into()])?;
     let dlls = vec![
         root.join("components/ReShade/ReShade64.dll"),
         bridge,

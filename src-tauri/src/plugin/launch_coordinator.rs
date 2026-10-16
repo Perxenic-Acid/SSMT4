@@ -246,11 +246,7 @@ fn validate_request(request: &LaunchRequest) -> Result<(), LaunchCoordinatorErro
 fn validate_plugin_preflight(plugin: &InstalledPlugin) -> Result<(), LaunchCoordinatorError> {
     for (dependency_id, dependency_state) in &plugin.external_dependencies {
         if dependency_state.status != ExternalDependencyStatus::Ready
-            && !super::dlss5::is_optional_integration_dependency(
-                &plugin.manifest.id,
-                &plugin.manifest.version,
-                dependency_id,
-            )
+            && plugin.manifest.requires_dependency(dependency_id, "launch")
         {
             return Err(LaunchCoordinatorError::MissingExternalDependency {
                 plugin_id: plugin.manifest.id.clone(),

@@ -661,11 +661,7 @@ fn lifecycle_status(plugin: &super::registry::InstalledPlugin) -> PluginLifecycl
         .iter()
         .any(|(dependency_id, dependency)| {
             dependency.status != super::registry::ExternalDependencyStatus::Ready
-                && !super::dlss5::is_optional_integration_dependency(
-                    &plugin.manifest.id,
-                    &plugin.manifest.version,
-                    dependency_id,
-                )
+                && plugin.manifest.requires_dependency(dependency_id, "launch")
         })
     {
         return PluginLifecycleStatus::ExternalDependencyMissing;

@@ -11,11 +11,13 @@ pub(super) struct PreparedConfig {
     pub game_ini: String,
     pub preset_ini: String,
     addon_sources: BTreeMap<String, PathBuf>,
+    addon_directory: Option<PathBuf>,
+    pub extra_files: BTreeMap<PathBuf, Vec<u8>>,
 }
 
 impl From<ManagedReShadeConfig> for PreparedConfig {
     fn from(config: ManagedReShadeConfig) -> Self {
-        Self { game_ini: config.game_ini, preset_ini: config.preset_ini, addon_sources: BTreeMap::new() }
+        Self { game_ini: config.game_ini, preset_ini: config.preset_ini, addon_sources: BTreeMap::new(), addon_directory: None, extra_files: BTreeMap::new() }
     }
 }
 
@@ -27,8 +29,20 @@ pub(super) fn save_config(
     addons: &[String],
 ) -> Result<(), String> {
     let root = canonical_path(directory).map_err(|error| error.to_string())?;
-    let transaction = super::managed_files::DirectoryTransaction::open(&root)?;
     let prepared = defaults.into();
+    let addon_root = prepared.addon_directory.as_deref().unwrap_or(&root);
+    let addon_root = canonical_path(addon_root).map_err(|e| e.to_string())?;
+    let mut transaction_root = root.clone();
+    for directory in std::iter::once(addon_root.as_path()).chain(prepared.extra_files.keys().filter_map(|path| path.parent())) {
+        while !directory.starts_with(&transaction_root) {
+            if !transaction_root.pop() { return Err("配置目录不在同一安装中".into()); }
+        }
+    }
+    let transaction = super::managed_files::DirectoryTransaction::open(&transaction_root)?;
+    let key = |directory: &Path, name: &str| -> Result<String, String> {
+        directory.join(name).strip_prefix(&transaction_root)
+            .map(|path| path.to_string_lossy().replace('\\', "/")).map_err(|e| e.to_string())
+    };
     let defaults = ManagedReShadeConfig { game_ini: prepared.game_ini, preset_ini: prepared.preset_ini };
     let read = |name: &str| -> Result<Option<String>, String> {
         if root.join(name).exists() {
@@ -57,19 +71,30 @@ pub(super) fn save_config(
         .transpose()?.unwrap_or_default();
     let mut changes = BTreeMap::new();
     let mut ownership = BTreeMap::new();
+    // 旧配置尚无所有权记录时不能悄悄加载来源不明的遗留 Add-on。
+    for entry in fs::read_dir(&addon_root).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name.to_ascii_lowercase().ends_with(".addon64")
+            && !addons.iter().any(|item| item.eq_ignore_ascii_case(&name))
+            && !prepared.addon_sources.keys().any(|item| item.eq_ignore_ascii_case(&name))
+            && !previous_addons.keys().any(|item| item.eq_ignore_ascii_case(&name)) {
+            return Err(format!("组件目录存在未登记的 Add-on {name}，请重新配置组件；已保留原文件"));
+        }
+    }
     for (name, source) in prepared.addon_sources {
         super::validate_package_relative_path(&name).map_err(|e| e.to_string())?;
         if name.contains(['/', '\\']) { return Err("Add-on 文件名无效".into()); }
         let bytes = fs::read(&source).map_err(|e| e.to_string())?;
         use sha2::{Digest, Sha256};
         let applied = format!("{:x}", Sha256::digest(&bytes));
-        let current = super::managed_files::hash(&root.join(&name))?;
+        let current = super::managed_files::hash(&addon_root.join(&name))?;
         if current.is_some() && current.as_ref() != Some(&applied)
             && current.as_ref() != previous_addons.get(&name) {
             return Err(format!("Add-on {name} 不属于当前贡献，已保留文件"));
         }
         ownership.insert(name.clone(), applied);
-        changes.insert(name, Some(bytes));
+        changes.insert(key(&addon_root, &name)?, Some(bytes));
     }
     for (name, applied) in previous_addons {
         super::validate_package_relative_path(&name).map_err(|e| e.to_string())?;
@@ -78,19 +103,23 @@ pub(super) fn save_config(
         if addons.iter().any(|required| required.eq_ignore_ascii_case(&name)) {
             return Err(format!("Add-on 所有权与必要组件冲突：{name}"));
         }
-        let current = super::managed_files::hash(&root.join(&name))?;
+        let current = super::managed_files::hash(&addon_root.join(&name))?;
         if current.is_some() && current.as_deref() != Some(&applied) {
             return Err(format!("Add-on {name} 已被修改，已保留文件"));
         }
-        changes.insert(name, None);
+        changes.insert(key(&addon_root, &name)?, None);
     }
-    changes.insert(ownership_name.into(), Some(serde_json::to_vec(&ownership).map_err(|e| e.to_string())?));
+    changes.insert(key(&root, ownership_name)?, Some(serde_json::to_vec(&ownership).map_err(|e| e.to_string())?));
     for (name, content) in [
         ("ReShade.ini", composed.game_ini),
         ("ReShadePreset.ini", composed.preset_ini),
         ("ReShade.ssmt-defaults.json", baseline),
     ] {
-        changes.insert(name.into(), Some(content.into_bytes()));
+        changes.insert(key(&root, name)?, Some(content.into_bytes()));
+    }
+    for (path, bytes) in prepared.extra_files {
+        let relative = path.strip_prefix(&transaction_root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
+        if changes.insert(relative, Some(bytes)).is_some() { return Err("配置文件所有权冲突".into()); }
     }
     transaction.commit(changes)?;
     Ok(())
@@ -148,16 +177,40 @@ pub(super) fn compose(
             }
         }
     }
-    let _ = addon_directory;
+
     let mut prepared: PreparedConfig = managed_reshade::compose(&base, dlss_ini, &preset, dlss_preset, required)
         .map_err(|error| error.to_string())?.into();
     prepared.addon_sources = addon_sources;
+    prepared.addon_directory = Some(canonical_path(addon_directory).map_err(|e| e.to_string())?);
     Ok(prepared)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separate_config_and_addon_directories_commit_together_without_loading_unknown_addons() {
+        let root = std::env::temp_dir().join(format!("ssmt-separated-config-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let config = root.join("state");
+        let addons = root.join("addons");
+        fs::create_dir_all(&config).unwrap();
+        fs::create_dir(&addons).unwrap();
+        let source = root.join("source.dll");
+        fs::write(&source, b"optional addon").unwrap();
+        let mut prepared: PreparedConfig = managed_reshade::compose("", "", "", "", &[]).unwrap().into();
+        prepared.addon_directory = Some(addons.clone());
+        prepared.addon_sources.insert("effect.addon64".into(), source);
+        prepared.extra_files.insert(root.join("backend.ini"), b"configured".to_vec());
+        save_config(&config, prepared.clone(), "", &[]).unwrap();
+        assert!(addons.join("effect.addon64").is_file());
+        assert!(!config.join("effect.addon64").exists());
+        assert_eq!(fs::read(root.join("backend.ini")).unwrap(), b"configured");
+        fs::write(addons.join("unknown.addon64"), b"unknown").unwrap();
+        assert!(save_config(&config, prepared, "", &[]).unwrap_err().contains("未登记"));
+        assert_eq!(fs::read(addons.join("unknown.addon64")).unwrap(), b"unknown");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn changed_addon_is_preserved_and_failed_prepare_keeps_all_configs() {

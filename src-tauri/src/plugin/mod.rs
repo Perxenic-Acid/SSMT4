@@ -7,6 +7,7 @@ pub mod commands;
 pub mod dlss5;
 pub mod external_manager;
 pub mod graphics_stack;
+pub mod host_extensions;
 pub mod gimi_hot_runtime;
 pub mod dlss5_hot_runtime;
 mod hot_reshade;
@@ -83,6 +84,8 @@ impl PluginCompatibility {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginContributions {
+    #[serde(default)]
+    pub host_extensions: Vec<host_extensions::HostExtensionContribution>,
     #[serde(default)]
     pub runtime_plugins: Vec<RuntimePluginContribution>,
     #[serde(default)]
@@ -178,6 +181,8 @@ pub struct ExternalDependency {
     pub kind: ExternalDependencyType,
     #[serde(default)]
     pub required_files: Vec<String>,
+    #[serde(default)]
+    pub required_for: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,6 +347,13 @@ fn validate_contributions(
     contributions: &PluginContributions,
     dependencies: &[ExternalDependency],
 ) -> Result<(), PluginManifestError> {
+    let mut extension_ids = HashSet::new();
+    for extension in &contributions.host_extensions {
+        extension.validate()?;
+        if !extension_ids.insert(&extension.id) {
+            return Err(PluginManifestError::DuplicateValue { field: "host extension id", value: extension.id.clone() });
+        }
+    }
     let dependency_ids: HashSet<&str> = dependencies
         .iter()
         .map(|dependency| dependency.id.as_str())
@@ -450,6 +462,9 @@ fn validate_external_dependencies(
 ) -> Result<(), PluginManifestError> {
     let mut ids = HashSet::new();
     for dependency in dependencies {
+        if let Some(features) = &dependency.required_for {
+            for feature in features { validate_plugin_id(feature)?; }
+        }
         validate_plugin_id(&dependency.id).map_err(|_| {
             PluginManifestError::InvalidExternalDependency(format!("invalid id: {}", dependency.id))
         })?;

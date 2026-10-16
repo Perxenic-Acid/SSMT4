@@ -43,8 +43,10 @@ pub(super) fn hash(path: &Path) -> Result<Option<String>, String> {
 
 fn safe_name(name: &str) -> bool {
     super::validate_package_relative_path(name).is_ok()
-        && !name.contains(['/', '\\'])
-        && !name.starts_with(".ssmt-")
+        && !name
+            .replace('\\', "/")
+            .split('/')
+            .any(|part| part.starts_with(".ssmt-"))
 }
 
 fn sync_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -96,6 +98,18 @@ impl DirectoryTransaction {
         Ok(transaction)
     }
 
+    fn target(&self, name: &str) -> Result<PathBuf, String> {
+        if !safe_name(name) {
+            return Err("受管文件路径无效".into());
+        }
+        let target = self.root.join(name);
+        let parent = target.parent().ok_or("受管文件缺少父目录")?;
+        if parent.canonicalize().map_err(|e| e.to_string())? != parent {
+            return Err("受管文件的父目录不能包含链接".into());
+        }
+        Ok(target)
+    }
+
     fn pending(&self) -> Result<PathBuf, String> {
         let path = self.root.join(TRANSACTION);
         if path.exists() && path.canonicalize().map_err(|e| e.to_string())? != path {
@@ -122,7 +136,7 @@ impl DirectoryTransaction {
             if !safe_name(&record.name) {
                 return Err("配置恢复记录路径无效".into());
             }
-            let current = hash(&self.root.join(&record.name))?;
+            let current = hash(&self.target(&record.name)?)?;
             if current != record.before && current != record.after {
                 return Err(format!(
                     "{} 在配置准备后被修改，已保留文件及恢复记录",
@@ -136,7 +150,7 @@ impl DirectoryTransaction {
             }
         }
         for (index, record) in records.iter().enumerate().rev() {
-            let destination = self.root.join(&record.name);
+            let destination = self.target(&record.name)?;
             if hash(&destination)? == record.before {
                 continue;
             }
@@ -165,7 +179,11 @@ impl DirectoryTransaction {
         changes: BTreeMap<String, Option<Vec<u8>>>,
         fail_after: Option<usize>,
     ) -> Result<(), String> {
+        let mut names = std::collections::HashSet::new();
         for name in changes.keys() {
+            if !names.insert(name.to_ascii_lowercase()) {
+                return Err("受管文件路径重复".into());
+            }
             if !safe_name(name) {
                 return Err(format!("受管文件名无效：{name}"));
             }
@@ -175,7 +193,7 @@ impl DirectoryTransaction {
         let result = (|| {
             let mut records = Vec::new();
             for (index, (name, content)) in changes.iter().enumerate() {
-                let target = self.root.join(name);
+                let target = self.target(name)?;
                 let before = hash(&target)?;
                 if before.is_some() {
                     fs::copy(&target, pending.join(format!("{index}.old")))
@@ -201,7 +219,7 @@ impl DirectoryTransaction {
             fs::rename(pending.join("journal.tmp"), pending.join("journal.json"))
                 .map_err(|e| e.to_string())?;
             for (index, record) in records.iter().enumerate() {
-                let target = self.root.join(&record.name);
+                let target = self.target(&record.name)?;
                 if hash(&target)? != record.before {
                     return Err(format!("{} 在准备期间被修改", record.name));
                 }

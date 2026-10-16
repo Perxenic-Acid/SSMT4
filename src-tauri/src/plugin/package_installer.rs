@@ -129,6 +129,11 @@ pub fn inspect_ssmtpkg(archive_path: &Path) -> Result<PackageInspection, Package
     for runtime in &manifest.contributions.runtime_plugins {
         require_package_file(temporary.path(), &runtime.path)?;
     }
+    for extension in &manifest.contributions.host_extensions {
+        if let Some(config) = &extension.config {
+            require_package_file(temporary.path(), config)?;
+        }
+    }
     // UI page paths are metadata keys resolved by the trusted first-party UI registry.
     for adapter in &manifest.contributions.launcher_adapters {
         if !adapter.executable.contains("${") {
