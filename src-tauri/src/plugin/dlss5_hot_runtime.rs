@@ -370,7 +370,11 @@ fn require_enabled(game: &str, executable: &Path) -> Result<(String, String), St
 }
 
 #[tauri::command]
-pub fn dlss5_hot_runtime_status(game_name: String) -> Result<Option<Installation>, String> {
+pub async fn dlss5_hot_runtime_status(game_name: String) -> Result<Option<Installation>, String> {
+    super::commands::read_graphics_status(move || dlss5_hot_runtime_status_blocking(game_name)).await
+}
+
+fn dlss5_hot_runtime_status_blocking(game_name: String) -> Result<Option<Installation>, String> {
     let Some(registry) = super::commands::installed_plugin_registry()? else {
         return Ok(None);
     };

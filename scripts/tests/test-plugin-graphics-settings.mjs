@@ -19,7 +19,6 @@ function component(t, relative, bindings, mocks, props = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const scope = vue.effectScope();
-  t.after(() => scope.stop());
   const exports = {};
   const unmount = [];
   scope.run(() => vm.runInNewContext(compiled, {
@@ -31,7 +30,11 @@ function component(t, relative, bindings, mocks, props = {}) {
       return mocks[name];
     },
   }));
-  t.after(() => unmount.forEach(fn => fn()));
+  exports.dispose = () => {
+    scope.stop();
+    unmount.splice(0).forEach(fn => fn());
+  };
+  t.after(exports.dispose);
   return exports;
 }
 
@@ -272,7 +275,7 @@ function graphics(t, options = {}) {
   const state = { root: 'C:/Assets/previous', profile: 'rtx50' };
   let pickerCount = 0;
   const s = component(t, '../../src/plugin/components/Dlss5GraphicsSettings.vue', [
-    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError', 'graphicsStateLoading', 'graphicsSelectedRoute', 'hotHistory', 'historySelection', 'manageHotHistory',
+    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError', 'graphicsStateLoading', 'graphicsRoutesLoading', 'graphicsSelectedRoute', 'hotHistory', 'historySelection', 'manageHotHistory', 'dlss5LastRun',
   ], {
     '@tauri-apps/api/core': { Channel: class {}, invoke: async (command, args) => {
       calls.push({ command, args });
@@ -281,10 +284,11 @@ function graphics(t, options = {}) {
         if (options.statusError) throw new Error(options.statusError);
         return options.status ? options.status(command) : state;
       }
-      if (command === 'inspect_dlss5_route_options') return { routes: options.routes ?? [options.route ?? 'gimi-hot'], installedRoute: options.installedRoute };
+      if (command === 'inspect_dlss5_route_options') return options.scan ? options.scan(args) : { routes: options.routes ?? [options.route ?? 'gimi-hot'], installedRoute: options.installedRoute };
+      if (command === 'inspect_dlss5_last_run') return options.lastRun ? options.lastRun(args) : { verdict: 'unknown', reason: 'no_log' };
       if (command === 'download_gimi_hot_runtime' || command === 'download_dlss5_hot_runtime') return job.promise;
       if (command === 'import_gimi_hot_runtime') return {};
-      if (command === 'dlss5_hot_runtime_history') return options.history ?? [];
+      if (command === 'dlss5_hot_runtime_history') return typeof options.history === 'function' ? options.history(args) : options.history ?? [];
       if (command === 'select_dlss5_hot_runtime' || command === 'remove_dlss5_hot_runtime') return options.manage ? options.manage(command, args) : null;
       throw new Error(`Unexpected command ${command}`);
     } },
@@ -295,6 +299,117 @@ function graphics(t, options = {}) {
   }, props);
   return { s, props, calls, messages, job, pickerCount: () => pickerCount };
 }
+
+test('组件校验与历史挂起时，路线先就绪，配置操作可用且旧读取不能覆盖操作结果', async t => {
+  const status = deferred(), history = deferred();
+  const { s, calls, job } = graphics(t, { status: () => status.promise, history: () => history.promise });
+  const reading = s.refreshGraphicsState();
+  await setImmediate();
+  assert.ok(calls.some(call => call.command === 'inspect_dlss5_route_options'));
+  assert.ok(calls.some(call => call.command === 'dlss5_hot_runtime_history'));
+  assert.equal(s.graphicsSelectedRoute.value, 'gimi-hot');
+  assert.equal(s.graphicsRoutesLoading.value, false);
+  assert.equal(s.graphicsStateLoading.value, true);
+  s.hotProfile.value = 'rtx30';
+  const installing = s.installSelectedDlss5Route();
+  assert.equal(s.graphicsActionBusy.value, true);
+  assert.equal(calls.find(call => call.command === 'download_gimi_hot_runtime').args.profile, 'rtx30');
+  status.resolve({ root: 'C:/Stale', profile: 'rtx50' });
+  history.resolve([{ root: 'C:/Stale', current: true }]);
+  await reading;
+  assert.equal(s.hotRuntime.value, null);
+  assert.equal(s.hotHistory.value.length, 0);
+  assert.equal(s.hotProfile.value, 'rtx30');
+  job.reject(new Error('保持原安装'));
+  await installing;
+});
+
+test('单项状态读取失败不阻断其他状态、路线、历史和修复入口', async t => {
+  const { s, calls } = graphics(t, {
+    inspectState: async () => { throw new Error('读取旧安装失败'); },
+    status: async command => {
+      if (command === 'gimi_hot_runtime_status') throw new Error('FSR2 记录损坏');
+      return { root: 'C:/Feeder', profile: 'rtx30', route: 'feeder' };
+    },
+    routes: ['gimi-hot', 'ssmt-feeder'], installedRoute: 'ssmt-feeder',
+    history: [{ root: 'C:/Feeder', current: true }],
+  });
+  await s.refreshGraphicsState();
+  assert.equal(s.graphicsSelectedRoute.value, 'ssmt-feeder');
+  assert.equal(s.hotRuntime.value.root, 'C:/Feeder');
+  assert.equal(s.hotHistory.value.length, 1);
+  assert.ok(calls.some(call => call.command === 'inspect_dlss5_last_run'));
+  assert.equal(s.graphicsStateLoading.value, false);
+  assert.equal(s.graphicsRoutesLoading.value, false);
+  assert.match(s.graphicsStatusError.value, /记录损坏/);
+});
+
+test('慢速组件状态不会覆盖等待期间选择的显卡，历史挂起不阻断其他结果', async t => {
+  const status = deferred(), history = deferred();
+  const { s } = graphics(t, { status: () => status.promise, history: () => history.promise });
+  const reading = s.refreshGraphicsState();
+  await setImmediate();
+  s.hotProfile.value = 'rtx30';
+  status.resolve({ root: 'C:/Configured', profile: 'rtx50' });
+  await setImmediate();
+  assert.equal(s.hotRuntime.value.root, 'C:/Configured');
+  assert.equal(s.hotProfile.value, 'rtx30');
+  assert.equal(s.dlss5LastRun.value.verdict, 'unknown');
+  history.resolve([]);
+  await reading;
+  assert.equal(s.graphicsStateLoading.value, false);
+});
+
+test('切换实例后旧状态、历史和错误全部丢弃，请求始终使用原实例快照', async t => {
+  const oldStatus = deferred(), oldHistory = deferred();
+  const { s, props, calls } = graphics(t, {
+    status: () => oldStatus.promise, history: () => oldHistory.promise,
+  });
+  const reading = s.refreshGraphicsState();
+  props.gameName = 'New Instance';
+  props.targetExePath = 'D:/Game/StarRail.exe';
+  await vue.nextTick();
+  oldStatus.reject(new Error('旧实例错误'));
+  oldHistory.resolve([{ root: 'C:/Stale', current: true }]);
+  await reading;
+  assert.equal(s.hotRuntime.value, null);
+  assert.equal(s.hotHistory.value.length, 0);
+  assert.equal(s.graphicsStatusError.value, '');
+  assert.equal(s.graphicsSelectedRoute.value, '');
+  assert.ok(calls.filter(call => 'gameName' in call.args).every(call => call.args.gameName === 'GIMI'));
+});
+
+test('离开设置后迟到的组件读取不再更新状态或继续读取日志', async t => {
+  const status = deferred(), history = deferred();
+  const { s, calls } = graphics(t, { status: () => status.promise, history: () => history.promise });
+  const reading = s.refreshGraphicsState();
+  s.dispose();
+  status.resolve({ root: 'C:/Old', profile: 'rtx30' });
+  history.resolve([{ root: 'C:/Old', current: true }]);
+  await reading;
+  assert.equal(s.hotRuntime.value, null);
+  assert.equal(s.hotHistory.value.length, 0);
+  assert.equal(s.graphicsStateLoading.value, false);
+  assert.ok(!calls.some(call => call.command === 'inspect_dlss5_last_run'));
+});
+
+test('同一实例重读后，上一轮迟到的校验结果不能覆盖新组件状态', async t => {
+  const status = deferred(), history = deferred();
+  let statusReads = 0, historyReads = 0;
+  const { s } = graphics(t, {
+    status: () => ++statusReads <= 2 ? status.promise : { root: 'C:/Current', profile: 'rtx50' },
+    history: () => ++historyReads === 1 ? history.promise : [{ root: 'C:/Current', current: true }],
+  });
+  const first = s.refreshGraphicsState();
+  await s.refreshGraphicsState();
+  status.resolve({ root: 'C:/Stale', profile: 'rtx30' });
+  history.resolve([{ root: 'C:/Stale', current: true }]);
+  await first;
+  assert.equal(s.hotRuntime.value.root, 'C:/Current');
+  assert.equal(s.hotHistory.value[0].root, 'C:/Current');
+  assert.equal(s.hotProfile.value, 'rtx50');
+  assert.equal(s.graphicsStateLoading.value, false);
+});
 
 test('历史组件切换绑定当前实例，清理需明确确认，取消和切换游戏不会提交清理', async t => {
   const history = [{ root: 'C:/Owned/previous', profile: 'rtx30', revision: 'v1', route: 'native-bridge', usable: true, current: false }];

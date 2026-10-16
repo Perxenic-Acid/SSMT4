@@ -324,7 +324,20 @@ pub fn inspect_graphics_launch(
 }
 
 #[tauri::command]
-pub fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStateSnapshot, String> {
+pub async fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStateSnapshot, String> {
+    read_graphics_status(move || inspect_dlss5_game_state_blocking(game_executable)).await
+}
+
+// 状态读取会遍历历史并校验大型 DLL；异步命令也必须将这些文件 IO 移出调度线程。
+pub(super) async fn read_graphics_status<T: Send + 'static>(
+    read: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(read)
+        .await
+        .map_err(|error| format!("读取图形组件状态失败：{error}"))?
+}
+
+fn inspect_dlss5_game_state_blocking(game_executable: String) -> Result<Dlss5GameStateSnapshot, String> {
     let game_executable = PathBuf::from(game_executable);
     if !game_executable.is_file() {
         return Err(format!(
@@ -338,7 +351,14 @@ pub fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStat
 }
 
 #[tauri::command]
-pub fn inspect_dlss5_last_run(
+pub async fn inspect_dlss5_last_run(
+    game_executable: String,
+    game_name: Option<String>,
+) -> Result<Dlss5LastRunStatus, String> {
+    read_graphics_status(move || inspect_dlss5_last_run_blocking(game_executable, game_name)).await
+}
+
+fn inspect_dlss5_last_run_blocking(
     game_executable: String,
     game_name: Option<String>,
 ) -> Result<Dlss5LastRunStatus, String> {
@@ -460,7 +480,18 @@ pub fn restore_managed_graphics_stack(game_executable: String) -> Result<bool, S
 }
 
 #[tauri::command]
-pub fn inspect_dlss5_route_options(
+pub async fn inspect_dlss5_route_options(
+    game_name: String,
+    game_executable: String,
+    api_override: String,
+) -> Result<Dlss5RouteScan, String> {
+    read_graphics_status(move || {
+        inspect_dlss5_route_options_blocking(game_name, game_executable, api_override)
+    })
+    .await
+}
+
+fn inspect_dlss5_route_options_blocking(
     game_name: String,
     game_executable: String,
     api_override: String,
@@ -1128,6 +1159,36 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn graphics_status_io_does_not_block_the_dispatch_thread() {
+        let caller = std::thread::current().id();
+        let (started, waiting) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let read = tokio::spawn(super::read_graphics_status(move || {
+            let _ = started.send(std::thread::current().id());
+            released
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|e| e.to_string())?;
+            Ok(42)
+        }));
+        let worker = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        // 读取被闸门挂起时，单线程调度器仍可处理别的任务。
+        assert_ne!(worker, caller);
+        tokio::task::yield_now().await;
+        assert!(!read.is_finished());
+        release.send(()).unwrap();
+        assert_eq!(read.await.unwrap().unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn graphics_status_io_preserves_read_errors() {
+        let result = super::read_graphics_status(|| Err::<(), _>("组件校验失败".into())).await;
+        assert_eq!(result.unwrap_err(), "组件校验失败");
+    }
 
     #[test]
     fn dlss5_last_run_recognizes_feature18_and_reports_depth_mismatch() {

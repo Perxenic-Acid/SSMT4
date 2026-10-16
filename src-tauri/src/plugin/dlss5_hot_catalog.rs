@@ -215,7 +215,12 @@ pub struct HistoryEntry {
 }
 
 #[tauri::command]
-pub fn dlss5_hot_runtime_history(game_name: String) -> Result<Vec<HistoryEntry>, String> {
+pub async fn dlss5_hot_runtime_history(game_name: String) -> Result<Vec<HistoryEntry>, String> {
+    super::super::commands::read_graphics_status(move || dlss5_hot_runtime_history_blocking(game_name))
+        .await
+}
+
+fn dlss5_hot_runtime_history_blocking(game_name: String) -> Result<Vec<HistoryEntry>, String> {
     let Some(registry) = super::super::commands::installed_plugin_registry()? else {
         return Ok(Vec::new());
     };

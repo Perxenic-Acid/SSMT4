@@ -64,12 +64,28 @@ const graphicsApiOverride = ref('auto');
 const graphicsSelectedRoute = ref('');
 const graphicsActionBusy = ref(false);
 const graphicsStateLoading = ref(false);
+const graphicsRoutesLoading = ref(false);
 let graphicsRequestId = 0;
 let graphicsTimer: ReturnType<typeof setTimeout> | undefined;
 
+const invalidateGraphicsRead = () => {
+  ++graphicsRequestId;
+  graphicsStateLoading.value = false;
+  graphicsRoutesLoading.value = false;
+};
+
 const refreshGraphicsState = async () => {
   const target = props.targetExePath.trim();
+  const gameName = props.gameName;
+  const apiOverride = graphicsApiOverride.value;
+  const initialProfile = hotProfile.value;
+  const gimi = isGimi();
+  const hotGame = gimi || isOtherHot();
   const requestId = ++graphicsRequestId;
+  const stillCurrent = () => requestId === graphicsRequestId && props.gameName === gameName
+    && props.targetExePath.trim() === target && graphicsApiOverride.value === apiOverride;
+  if (graphicsTimer) clearTimeout(graphicsTimer);
+  graphicsTimer = undefined;
   dlss5State.value = null;
   dlss5LastRun.value = null;
   graphicsStatusError.value = '';
@@ -80,77 +96,70 @@ const refreshGraphicsState = async () => {
   hotHistory.value = [];
   historySelection.value = '';
   graphicsStateLoading.value = false;
+  graphicsRoutesLoading.value = false;
   if (!target) return;
   graphicsStateLoading.value = true;
-  try {
-    const state = await invoke<Dlss5StateSnapshot>('inspect_dlss5_game_state', { gameExecutable: target });
-    if (requestId !== graphicsRequestId) return;
-    dlss5State.value = state;
-    if (isGimi() || isOtherHot()) {
-      try {
-        const commands = isGimi() ? ['gimi_hot_runtime_status', 'dlss5_hot_runtime_status'] : ['dlss5_hot_runtime_status'];
-        for (const command of commands) {
-          const hot = await invoke<{ root: string; profile: string; route?: string } | null>(command, { gameName: props.gameName });
-          if (requestId !== graphicsRequestId) return;
-          if (hot) hotRuntimes.value[command === 'gimi_hot_runtime_status' ? 'gimi-hot' : `ssmt-${hot.route || (isGimi() ? 'feeder' : '')}`] = hot;
-          // 旧状态接口可能不带 route；当前游戏只有一条路线时在扫描后补全。
-          if (hot && !isGimi()) hotRuntime.value = hot;
-        }
-      } catch (error) {
-        // 损坏组件仍应允许重新下载，不能阻断路线读取和修复入口。
-        if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
-      }
-    }
-    if (state.state === 'broken') graphicsStatusError.value = state.reason || '';
-    if (state.state === 'managed' || hotRuntime.value) {
-      try {
-        const lastRun = await invoke<Dlss5LastRunStatus>('inspect_dlss5_last_run', {
-          gameExecutable: target,
-          gameName: props.gameName,
-        });
-        if (requestId === graphicsRequestId) dlss5LastRun.value = lastRun;
-      } catch (error) {
-        if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
-      }
-    }
+  graphicsRoutesLoading.value = true;
+  const read = async <T,>(command: string, args: Record<string, string>, apply: (value: T) => void) => {
     try {
-      const routes = await invoke<Dlss5RouteScan>('inspect_dlss5_route_options', {
-        gameName: props.gameName, gameExecutable: target, apiOverride: graphicsApiOverride.value,
-      });
-      if (requestId === graphicsRequestId) {
-        graphicsRouteScan.value = routes;
-        availableGraphicsRoutes.value = routes.routes;
-        if (!routes.routes.includes(graphicsSelectedRoute.value)) graphicsSelectedRoute.value = routes.installedRoute && routes.routes.includes(routes.installedRoute) ? routes.installedRoute : routes.routes[0] || '';
-        if (isGimi()) hotRuntime.value = hotRuntimes.value[graphicsSelectedRoute.value] || null;
-        if (hotRuntime.value) hotProfile.value = hotRuntime.value.profile;
-      }
+      const value = await invoke<T>(command, args);
+      if (stillCurrent()) apply(value);
     } catch (error) {
-      if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
+      // 损坏或读取失败仅影响该项，其他路线和重新下载入口仍可使用。
+      if (stillCurrent()) graphicsStatusError.value = String(error);
     }
-    try {
-      const history = await invoke<HotHistoryEntry[]>('dlss5_hot_runtime_history', { gameName: props.gameName });
-      if (requestId === graphicsRequestId) {
+  };
+  const applyHotProfile = () => {
+    // 慢速校验返回时，不覆盖玩家在等待期间选择的显卡系列。
+    if (hotRuntime.value && hotProfile.value === initialProfile) hotProfile.value = hotRuntime.value.profile;
+  };
+  // 路线、组件校验与历史互不等待；只有路线未就绪时禁用配置操作。
+  const routes = read<Dlss5RouteScan>('inspect_dlss5_route_options', {
+    gameName, gameExecutable: target, apiOverride,
+  }, routes => {
+    graphicsRouteScan.value = routes;
+    availableGraphicsRoutes.value = routes.routes;
+    if (!routes.routes.includes(graphicsSelectedRoute.value)) graphicsSelectedRoute.value = routes.installedRoute && routes.routes.includes(routes.installedRoute) ? routes.installedRoute : routes.routes[0] || '';
+    if (gimi) hotRuntime.value = hotRuntimes.value[graphicsSelectedRoute.value] || null;
+    applyHotProfile();
+  }).finally(() => { if (stillCurrent()) graphicsRoutesLoading.value = false; });
+  const commands = hotGame ? (gimi ? ['gimi_hot_runtime_status', 'dlss5_hot_runtime_status'] : ['dlss5_hot_runtime_status']) : [];
+  const state = Promise.all([
+    read<Dlss5StateSnapshot>('inspect_dlss5_game_state', { gameExecutable: target }, state => {
+      dlss5State.value = state;
+      if (state.state === 'broken') graphicsStatusError.value = state.reason || '';
+    }),
+    ...commands.map(command => read<{ root: string; profile: string; route?: string } | null>(command, { gameName }, hot => {
+      if (!hot) return;
+      const route = command === 'gimi_hot_runtime_status' ? 'gimi-hot' : `ssmt-${hot.route || (gimi ? 'feeder' : '')}`;
+      hotRuntimes.value[route] = hot;
+      if (!gimi || route === graphicsSelectedRoute.value) hotRuntime.value = hot;
+      applyHotProfile();
+    })),
+  ]).then(async () => {
+    if (stillCurrent() && (dlss5State.value?.state === 'managed' || Object.keys(hotRuntimes.value).length)) {
+      await read<Dlss5LastRunStatus>('inspect_dlss5_last_run', { gameExecutable: target, gameName }, lastRun => { dlss5LastRun.value = lastRun; });
+    }
+  });
+  const history = hotGame
+    ? read<HotHistoryEntry[]>('dlss5_hot_runtime_history', { gameName }, history => {
         hotHistory.value = history;
         historySelection.value = history.find(item => item.current)?.root || history[0]?.root || '';
-      }
-    } catch (error) {
-      if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
-    }
-  } catch (error) {
-    if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
-  } finally {
-    if (requestId === graphicsRequestId) graphicsStateLoading.value = false;
-  }
+      })
+    : Promise.resolve();
+  await Promise.all([routes, state, history]);
+  if (stillCurrent()) graphicsStateLoading.value = false;
 };
 
 const installSelectedDlss5Route = async (offline = false) => {
-  if (graphicsActionBusy.value) return;
+  if (graphicsActionBusy.value || graphicsRoutesLoading.value) return;
   const gameName = props.gameName;
   const gameExecutable = props.targetExePath.trim();
   const route = graphicsSelectedRoute.value;
   const profile = hotProfile.value;
   const stillCurrent = () => props.gameName === gameName && props.targetExePath.trim() === gameExecutable;
   if (!gameExecutable || !route) return;
+  invalidateGraphicsRead();
   if (route === 'optiscaler') {
     try { await invoke('open_dlss5_swapper', { gameName: props.gameName }); }
     catch (error) { ElMessage.error(String(error)); }
@@ -197,8 +206,10 @@ const installSelectedDlss5Route = async (offline = false) => {
 };
 
 const restoreDlss5Route = async () => {
+  if (graphicsActionBusy.value) return;
   const gameExecutable = props.targetExePath.trim();
   if (!gameExecutable) return;
+  invalidateGraphicsRead();
   graphicsActionBusy.value = true;
   try {
     await invoke('restore_dlss5_install', { gameName: props.gameName, gameExecutable });
@@ -218,6 +229,7 @@ const manageHotHistory = async (remove = false) => {
   if (!selected || (remove ? selected.removable === false : !selected.usable)) return;
   const gameName = props.gameName, gameExecutable = props.targetExePath.trim(), root = historySelection.value;
   if (!gameExecutable) return;
+  invalidateGraphicsRead();
   graphicsActionBusy.value = true;
   try {
     if (remove) {
@@ -239,7 +251,7 @@ const manageHotHistory = async (remove = false) => {
 };
 
 watch(() => [props.gameName, props.targetExePath, graphicsApiOverride.value], () => {
-  ++graphicsRequestId;
+  invalidateGraphicsRead();
   hotRuntime.value = null;
   hotRuntimes.value = {};
   hotHistory.value = [];
@@ -250,6 +262,7 @@ watch(() => [props.gameName, props.targetExePath, graphicsApiOverride.value], ()
   graphicsRouteScan.value = null;
   graphicsSelectedRoute.value = '';
   graphicsStateLoading.value = !!props.targetExePath.trim();
+  graphicsRoutesLoading.value = !!props.targetExePath.trim();
   graphicsStatusError.value = '';
   downloadProgress.value = null;
   if (graphicsTimer) clearTimeout(graphicsTimer);
@@ -259,12 +272,12 @@ watch(() => [props.gameName, props.targetExePath, graphicsApiOverride.value], ()
 watch(graphicsSelectedRoute, route => {
   if (isGimi()) {
     hotRuntime.value = hotRuntimes.value[route] || null;
-    if (hotRuntime.value) hotProfile.value = hotRuntime.value.profile;
+    if (hotRuntime.value && !graphicsStateLoading.value) hotProfile.value = hotRuntime.value.profile;
   }
 });
 
 onUnmounted(() => {
-  ++graphicsRequestId;
+  invalidateGraphicsRead();
   if (graphicsTimer) clearTimeout(graphicsTimer);
 });
 </script>
@@ -317,10 +330,10 @@ onUnmounted(() => {
           </label>
       </div>
       <div class="graphics-actions">
-        <el-button type="primary" :icon="Download" :loading="graphicsActionBusy" :disabled="!graphicsSelectedRoute || graphicsStateLoading" @click="installSelectedDlss5Route()">
+        <el-button type="primary" :icon="Download" :loading="graphicsActionBusy" :disabled="!graphicsSelectedRoute || graphicsRoutesLoading" @click="installSelectedDlss5Route()">
           {{ isHotRoute(graphicsSelectedRoute) ? label('自动下载并配置', 'Download and configure') : graphicsSelectedRoute === 'optiscaler' ? t('gameSettingsModal.actions.openSwapper') : dlss5State?.state === 'managed' && !dlss5State.managedHost ? t('gameSettingsModal.actions.migrateGraphicsRoute') : t('gameSettingsModal.actions.installGraphicsRoute') }}
         </el-button>
-        <el-button v-if="graphicsSelectedRoute === 'gimi-hot'" :disabled="graphicsActionBusy || !graphicsSelectedRoute || graphicsStateLoading" @click="installSelectedDlss5Route(true)">
+        <el-button v-if="graphicsSelectedRoute === 'gimi-hot'" :disabled="graphicsActionBusy || !graphicsSelectedRoute || graphicsRoutesLoading" @click="installSelectedDlss5Route(true)">
           {{ label('离线导入', 'Import offline') }}
         </el-button>
         <el-button v-if="dlss5State?.state === 'managed'" :disabled="graphicsActionBusy" @click="restoreDlss5Route">

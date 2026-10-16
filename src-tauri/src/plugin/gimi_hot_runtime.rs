@@ -427,7 +427,13 @@ pub(super) fn ensure_stopped(executable: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn gimi_hot_runtime_status(
+pub async fn gimi_hot_runtime_status(
+    game_name: String,
+) -> Result<Option<HotRuntimeInstallation>, String> {
+    super::commands::read_graphics_status(move || gimi_hot_runtime_status_blocking(game_name)).await
+}
+
+fn gimi_hot_runtime_status_blocking(
     game_name: String,
 ) -> Result<Option<HotRuntimeInstallation>, String> {
     let registry = PluginRegistry::from_default_location()
