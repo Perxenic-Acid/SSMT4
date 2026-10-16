@@ -81,7 +81,7 @@ async function harness(t, options = {}) {
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
       if (command === 'bundled_player_tweaks_enabled_for_game') return false;
       if (command === 'configure_gimi_launch_settings') return null;
-      if (command === 'prepare_gimi_hot_runtime') {
+      if (command === 'prepare_dlss5_hot_runtime') {
         if (options.hotError) throw new Error(options.hotError);
         return options.hotRuntime ?? null;
       }
@@ -306,7 +306,7 @@ for (const differentLauncher of [false, true]) {
 }
 
 for (const config of [{ extraDlls: ['C:/Other/ReShade64.dll'] }, { launchTargetProgram: false }, { useShell: true }]) {
-  test(`unsafe hot-loading plan fails before starting processes: ${JSON.stringify(config)}`, async t => {
+  test(`热注入冲突阻止重复 Host，不支持的启动方式保留普通启动：${JSON.stringify(config)}`, async t => {
     const h = await harness(t, { hotRuntime: hotPlan, config });
     if (config.useShell) {
       const otherGame = path.join(h.root, 'OtherGame');
@@ -315,12 +315,18 @@ for (const config of [{ extraDlls: ['C:/Other/ReShade64.dll'] }, { launchTargetP
       await fs.writeFile(h.config.launcherExePath, 'launcher fixture');
     }
     await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
-    assert.ok(h.calls.some(call => call.command === 'prepare_gimi_hot_runtime'), '必须验证模式检查，不能因无效路径提前返回');
-    assert.equal(h.calls.some(call => call.command === 'launch_programs'), false);
-    assert.ok(h.dialogs.some(dialog => dialog.kind === 'alert'));
-    const error = h.dialogs.find(dialog => dialog.kind === 'alert').args[0];
-    if (config.useShell) assert.match(error, /gimiHotExternalLauncherUnsupported/, '不同完整路径不能仅按相同文件名放行');
-    if (config.launchTargetProgram === false) assert.match(error, /gimiHotManualLaunchUnsupported/);
+    assert.ok(h.calls.some(call => call.command === 'prepare_dlss5_hot_runtime'), '必须验证模式检查，不能因无效路径提前返回');
+    if (config.extraDlls) {
+      assert.equal(h.calls.some(call => call.command === 'launch_programs'), false);
+      assert.ok(h.dialogs.some(dialog => dialog.kind === 'alert'));
+    } else {
+      const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+      assert.doesNotMatch(programs[0].args || '', /--preload-runtime/);
+      assert.equal(h.dialogs.length, 0);
+      const warning = h.messages.find(message => message.kind === 'warning');
+      assert.ok(warning);
+      assert.match(JSON.stringify(warning), config.useShell ? /gimiHotExternalLauncherUnsupported/ : /gimiHotManualLaunchUnsupported/);
+    }
   });
 }
 

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 pub const MANAGED_ADDON_DIR: &str = "_SSMT_Graphics_Addons";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ManagedReShadeConfig {
     pub game_ini: String,
     pub preset_ini: String,
@@ -172,12 +172,8 @@ fn normalize_document(text: &str) -> Result<String, IniConflict> {
     for entry in entries(text) {
         let identity = norm(&entry.section, &entry.key);
         if let Some(previous) = values.get_mut(&identity) {
-            previous.value = merge_value(
-                &entry.section,
-                &entry.key,
-                &previous.value,
-                &entry.value,
-            )?;
+            previous.value =
+                merge_value(&entry.section, &entry.key, &previous.value, &entry.value)?;
         } else {
             values.insert(identity, entry);
         }
@@ -234,7 +230,16 @@ pub fn compose(
         "AddonPath",
         &format!(".\\{MANAGED_ADDON_DIR}"),
     );
-    if let Some(disabled) = get_entry(&game_ini, "ADDON", "DisabledAddons") {
+    enable_required_addons(&mut game_ini, addon_names);
+    let preset_ini = merge_document(hoyo_preset, dlss_preset)?;
+    Ok(ManagedReShadeConfig {
+        game_ini,
+        preset_ini,
+    })
+}
+
+fn enable_required_addons(game_ini: &mut String, addon_names: &[String]) {
+    if let Some(disabled) = get_entry(game_ini, "ADDON", "DisabledAddons") {
         let retained = disabled
             .split(',')
             .map(str::trim)
@@ -246,13 +251,131 @@ pub fn compose(
             })
             .collect::<Vec<_>>()
             .join(",");
-        set_entry(&mut game_ini, "ADDON", "DisabledAddons", &retained);
+        set_entry(game_ini, "ADDON", "DisabledAddons", &retained);
     }
-    let preset_ini = merge_document(hoyo_preset, dlss_preset)?;
-    Ok(ManagedReShadeConfig {
+}
+
+/// 以“上次生成的默认值”为基线保留游戏运行中保存的用户改动。
+/// 插件已移除的贡献不能因复用旧 INI 再次启用；Host 路径始终归启动计划所有。
+pub(super) fn retain_user_state(
+    defaults: &ManagedReShadeConfig,
+    previous: Option<&ManagedReShadeConfig>,
+    current: &ManagedReShadeConfig,
+    required_preset: &str,
+    addons: &[String],
+) -> ManagedReShadeConfig {
+    fn retain(
+        next: &str,
+        old: Option<&str>,
+        current: &str,
+        required: &str,
+        preset: bool,
+    ) -> String {
+        let mut result = next.to_string();
+        let old_entries = entries(old.unwrap_or(next));
+        let next_entries = entries(next);
+        for entry in entries(current) {
+            let section = entry.section.to_ascii_lowercase();
+            let key = entry.key.to_ascii_lowercase();
+            if !preset
+                && matches!(
+                    (section.as_str(), key.as_str()),
+                    ("addon", "addonpath" | "loadfromdllmain")
+                        | (
+                            "general",
+                            "presetpath" | "intermediatecachepath" | "preprocessordefinitions"
+                        )
+                        | ("install", _)
+                        | ("renodx.dlss5", "enablehooks" | "nrenableupscaling")
+                )
+            {
+                continue;
+            }
+            let before = get_entry(old.unwrap_or(next), &entry.section, &entry.key);
+            let after = get_entry(next, &entry.section, &entry.key);
+            if matches!(
+                key.as_str(),
+                "techniques" | "techniquesorting" | "effectsearchpaths" | "texturesearchpaths"
+            ) {
+                let before = before.unwrap_or_default();
+                let after = after.unwrap_or_default();
+                let has = |list: &str, value: &str| {
+                    list.split(',')
+                        .any(|item| item.trim().eq_ignore_ascii_case(value))
+                };
+                let retained = entry
+                    .value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| {
+                        !item.is_empty()
+                            && (has(&after, item) || (old.is_some() && !has(&before, item)))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let additions = after
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !has(&before, item))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let mandatory = if key.ends_with("searchpaths") {
+                    after
+                } else {
+                    get_entry(required, &entry.section, &entry.key).unwrap_or_default()
+                };
+                set_entry(
+                    &mut result,
+                    &entry.section,
+                    &entry.key,
+                    &list_union(&mandatory, &list_union(&retained, &additions)),
+                );
+                continue;
+            }
+            let common = !preset
+                && matches!(
+                    section.as_str(),
+                    "overlay" | "style" | "input" | "screenshot" | "general" | "addon"
+                );
+            let active = next_entries
+                .iter()
+                .any(|item| item.section.eq_ignore_ascii_case(&entry.section));
+            let was_contribution = old_entries
+                .iter()
+                .any(|item| item.section.eq_ignore_ascii_case(&entry.section));
+            if common
+                || ((active || (old.is_some() && !was_contribution))
+                    && before.as_deref() != Some(entry.value.as_str()))
+            {
+                set_entry(&mut result, &entry.section, &entry.key, &entry.value);
+            }
+        }
+        // Feeder 的 provider 与必要 technique 属于输入契约，其余效果参数可由用户调整。
+        for entry in entries(required) {
+            if entry.key.eq_ignore_ascii_case("PreprocessorDefinitions") {
+                set_entry(&mut result, &entry.section, &entry.key, &entry.value);
+            }
+        }
+        result
+    }
+    let mut game_ini = retain(
+        &defaults.game_ini,
+        previous.map(|old| old.game_ini.as_str()),
+        &current.game_ini,
+        "",
+        false,
+    );
+    enable_required_addons(&mut game_ini, addons);
+    ManagedReShadeConfig {
         game_ini,
-        preset_ini,
-    })
+        preset_ini: retain(
+            &defaults.preset_ini,
+            previous.map(|old| old.preset_ini.as_str()),
+            &current.preset_ini,
+            required_preset,
+            true,
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -267,7 +390,9 @@ mod tests {
             "Techniques=HoYo@hoyo.fx\n", "Techniques=DLSS5_Feed@DLSS5_Feed.fx\n",
             &["renodx-dlss5.addon64".into()],
         ).unwrap();
-        assert!(result.game_ini.contains("AddonPath=.\\_SSMT_Graphics_Addons"));
+        assert!(result
+            .game_ini
+            .contains("AddonPath=.\\_SSMT_Graphics_Addons"));
         assert!(result
             .game_ini
             .contains("EffectSearchPaths=C:\\HoYo\\Shaders\\**,.\\reshade-shaders\\Shaders\\**"));

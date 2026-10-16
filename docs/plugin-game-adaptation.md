@@ -8,7 +8,7 @@
 
 - [x] 修复 D3D11 热注入初始化顺序及同名系统 DLL 被误报为 Runtime，补充真实 Runtime 注入回归；崩铁 Mod 画面仍待复测。
 - [x] 原神增加可选择的 Feeder 实现，保留原 FSR2 Bridge 路线；组件配置及启动计划回归通过，画面待实机比较。
-- [ ] 保留 ReShade 教程进度及用户配置，覆盖原神与其他热注入路线。
+- [x] 保留 ReShade 教程进度及用户配置，覆盖原神与其他热注入路线，旧配置首次迁移与重复启动回归通过。
 
 - [x] 原神 MMD Poser：限制为 GIMI；配置入口、后端启用校验和旧状态过滤一起修复。提交 `b9a1e0e`，插件 Rust 测试、界面回归和前端构建通过。
 - [x] DLSS5 配置、下载与启动集成：保留 GIMI 专用 FSR2 热注入链，扩展以下路线。
@@ -33,6 +33,10 @@
 插件市场 → 选择游戏 → 已启用的 DLSS5 → 功能设置 → 选择显卡 → 自动下载并配置。原神继续使用原有组件包；其他三款游戏使用 `dlss5_hot_assets.json` 固定的 ReShade 6.8.0、NR consumer 6.5.3、Bridge 1.4.12、Feeder 1.19.0 和配套 snippet。新增组件存放在 `PluginAssets/ssmt.dlss5.integration/hot/`，启动前合并启用的 Shade Bridge 贡献，只注入一个 Host。
 
 原神的“渲染路线”现在可选 FSR2 Bridge 或 Feeder。前者仍使用 CXP 配套组件；后者使用独立的 Feeder / Lumenite / consumer 配套组件，不载入 OptiScaler 或 FSR2 Bridge，不向游戏目录放置 DLL。Feeder 路线关闭游戏内 FSR2；FSR2 Bridge 路线仍选择 FSR2。所选路线在自动下载或离线导入完整成功后与安装记录一起保存，下载失败保持原路线；旧配置默认继续 FSR2 Bridge。两套资源分别保留，按游戏实例记录选择，重新打开设置时显示当前实现。
+
+热注入配置不再每次直接用模板覆盖 ReShade 的运行结果。自有配置目录中的 `ReShade.ssmt-defaults.json` 保存上次生成的默认值，启动时比较默认值与当前 INI，保留教程进度、界面、按键及仍启用效果的参数。缺少记录的旧配置会迁移已有教程与界面状态。路径、必要 Add-on、Feeder provider 和必要效果顺序由当前启动计划维护，关闭 Shade 后移除其效果、搜索路径及 DLL，保留用户额外效果和非必要禁用项。原神 FSR2 Bridge 使用 `state/reshade-runtime`，Feeder / DX11 Bridge / DX12 使用各自安装根目录；首次使用另一套实现仍有独立的 ReShade 状态。
+
+本轮验证：117 项 Rust 插件测试、66 项前端 / 启动回归及两项原生注入 CTest 通过。原神 FSR2 Bridge 与另外六组路线 / 显卡 Profile 的完整组件提取和配置检查通过；真实 ReShade 与 Runtime 预加载顺序、Context 身份检查通过。尚未在真实游戏中验收本轮修改后的 Mod 画面、原神 Feeder 的 NR 帧或教程完成后的连续重启行为。
 
 已有 RHI / ReShade 安装需先通过原管理器恢复。准备时检查游戏目录的 `dxgi.dll` / `d3d11.dll` 和 `ReShade.ini` 中的 `INSTALL.BasePath`，发现冲突只跳过本次 DLSS5 并提示，不覆盖原文件。ReShade 6.8.0 的游戏目录 BasePath 优先于环境变量，单设 `RESHADE_BASE_PATH_OVERRIDE` 无法隔离旧安装。运行后在自有组件目录查看 `ReShade.log`，Feeder 路线还可查看 `dlss5-feed.log`；只有成功加载日志不能认定 NR 已执行。
 

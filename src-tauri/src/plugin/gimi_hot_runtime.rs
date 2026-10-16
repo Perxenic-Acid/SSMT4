@@ -247,9 +247,7 @@ fn prepare_at(
     ] {
         managed_reshade::set_entry(&mut composed.game_ini, section, key, &value);
     }
-    fs::write(reshade.join("ReShade.ini"), composed.game_ini).map_err(|error| error.to_string())?;
-    fs::write(reshade.join("ReShadePreset.ini"), composed.preset_ini)
-        .map_err(|error| error.to_string())?;
+    super::hot_reshade::save_config(&reshade, composed, "", &["nr-before-sr.zh-CN.addon64".into()])?;
     let opti = root.join("components/OptiScaler");
     let mut ini = read_text(&opti.join("OptiScaler.ini"))?;
     configure_optiscaler(&mut ini, &opti);

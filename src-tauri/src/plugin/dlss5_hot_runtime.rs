@@ -500,9 +500,7 @@ fn prepare_at(
     ] {
         managed_reshade::set_entry(&mut composed.game_ini, section, key, &value);
     }
-    fs::write(root.join("ReShade.ini"), composed.game_ini).map_err(|error| error.to_string())?;
-    fs::write(root.join("ReShadePreset.ini"), composed.preset_ini)
-        .map_err(|error| error.to_string())?;
+    super::hot_reshade::save_config(&root, composed, dlss_preset, &required)?;
     // Feeder 的 SDK 也从 Add-on 同目录寻找 snippet；提前加载绝对路径避免搜索到游戏中的旧副本。
     let mut dlls = Vec::new();
     if installation.route == "feeder" {
