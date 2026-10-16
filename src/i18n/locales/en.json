@@ -368,7 +368,7 @@
     "official": "Official Native Release",
     "thirdParty": "Third-party or unverified source",
     "localBuild": "Local build",
-    "playerTweaksDescription": "Genshin runtime tweaks injected by the SSMT launcher.",
+    "playerTweaksDescription": "Per-game frame rate and gameplay enhancements: Genshin runtime features and Star Rail 120 FPS settings.",
     "gameCompatibilityUnspecified": "No games listed by the package; check actual compatibility.",
     "noFeatures": "This plugin has no configurable options here.",
     "dlss5SettingsHint": "Configure DLSS5 components for the selected game. Switching games shows the corresponding settings.",

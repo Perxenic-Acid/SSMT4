@@ -27,6 +27,7 @@ pub mod process_forwarder;
 pub mod registry;
 pub mod resource_cache;
 pub mod settings;
+pub mod star_rail_tweaks;
 
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const SUPPORTED_PLATFORM: &str = "windows-x64";

@@ -9,7 +9,7 @@ use super::managed_stack::{self, Dlss5RouteScan, ManagedStackStatus};
 use super::package_installer::{inspect_ssmtpkg, install_verified_ssmtpkg, PackageInspection};
 use super::official_release;
 use super::marketplace::MarketplaceEntry;
-use super::registry::{game_preset, game_scope_preset, ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
+use super::registry::{game_scope_preset, ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
 use super::settings::PluginSettingsStore;
 use super::{PluginCompatibility, PluginContributions, PluginManifest, PluginPermission};
 use serde::{Deserialize, Serialize};
@@ -453,6 +453,7 @@ pub struct InstalledPluginSnapshot {
     pub bundled: bool,
     pub official: bool,
     pub app_scoped: bool,
+    pub features: Vec<&'static str>,
 }
 
 const PLAYER_TWEAKS_ID: &str = "ssmt.player-tweaks";
@@ -464,15 +465,24 @@ fn player_tweaks_available() -> bool {
         .is_file()
 }
 
+fn player_tweaks_features(preset: &str) -> Vec<&'static str> {
+    match preset.trim().to_ascii_uppercase().as_str() {
+        "GIMI" => vec!["camera", "fps", "fast-team"],
+        "SRMI" => vec!["fps-120"],
+        _ => Vec::new(),
+    }
+}
+
 fn bundled_player_tweaks_snapshot(
     registry: &PluginRegistry,
     game_name: &str,
 ) -> Option<InstalledPluginSnapshot> {
-    if !player_tweaks_available() {
+    let preset = game_scope_preset(game_name);
+    if !preset.eq_ignore_ascii_case("SRMI") && !player_tweaks_available() {
         return None;
     }
-    let compatible = game_preset(game_name)
-        .is_some_and(|preset| preset.eq_ignore_ascii_case("GIMI"));
+    let features = player_tweaks_features(&preset);
+    let compatible = !features.is_empty();
     let enabled = compatible && registry.game_enabled(game_name, PLAYER_TWEAKS_ID);
     Some(InstalledPluginSnapshot {
         manifest: PluginManifest {
@@ -484,11 +494,13 @@ fn bundled_player_tweaks_snapshot(
             compatibility: PluginCompatibility {
                 ssmt: ">=4.x".to_string(),
                 platforms: vec!["windows-x64".to_string()],
-                games: vec!["GIMI".to_string()],
+                games: vec!["GIMI".to_string(), "SRMI".to_string()],
             },
             contributions: PluginContributions::default(),
             external_dependencies: Vec::new(),
-            permissions: vec![PluginPermission::NativeInject],
+            permissions: if preset.eq_ignore_ascii_case("SRMI") {
+                vec![PluginPermission::FilesystemRead, PluginPermission::FilesystemWrite]
+            } else { vec![PluginPermission::NativeInject] },
         },
         enabled,
         lifecycle_status: if compatible {
@@ -500,6 +512,7 @@ fn bundled_player_tweaks_snapshot(
         bundled: true,
         official: true,
         app_scoped: false,
+        features,
     })
 }
 
@@ -547,6 +560,7 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
             bundled: false,
             official: plugin.official,
             app_scoped: plugin.manifest.is_app_scoped(),
+            features: Vec::new(),
         })
         .collect()
 }
@@ -686,11 +700,15 @@ pub fn set_plugin_enabled_for_game(
         }
     }
     if id == PLAYER_TWEAKS_ID {
-        if !player_tweaks_available() {
+        let preset = game_scope_preset(&game_name);
+        if enabled && player_tweaks_features(&preset).is_empty() {
+            return Err("Player Tweaks 当前支持 GIMI 和 SRMI".to_string());
+        }
+        if enabled && preset.eq_ignore_ascii_case("GIMI") && !player_tweaks_available() {
             return Err("bundled Player Tweaks DLL is unavailable".to_string());
         }
-        if !game_preset(&game_name).is_some_and(|preset| preset.eq_ignore_ascii_case("GIMI")) {
-            return Err("Player Tweaks only supports GIMI".to_string());
+        if !enabled && preset.eq_ignore_ascii_case("SRMI") {
+            super::star_rail_tweaks::release_for_game(&game_name)?;
         }
         registry.set_bundled_game_enabled(&game_name, &id, enabled)
     } else {
@@ -710,7 +728,9 @@ pub fn set_plugin_enabled_for_game(
 
 #[tauri::command]
 pub fn bundled_player_tweaks_enabled_for_game(game_name: String, game_preset: String) -> bool {
-    if !game_preset.eq_ignore_ascii_case("GIMI") || !player_tweaks_available() {
+    let preset = game_scope_preset(&game_name);
+    if !preset.eq_ignore_ascii_case(&game_preset) || player_tweaks_features(&preset).is_empty()
+        || (preset.eq_ignore_ascii_case("GIMI") && !player_tweaks_available()) {
         return false;
     }
     PluginRegistry::from_default_location()
@@ -1072,6 +1092,7 @@ mod tests {
             ids.push(manifest.id);
         }
         assert!(ids.len() >= 3);
+        ids.push(super::PLAYER_TWEAKS_ID.into());
         let mut registry = PluginRegistry::new(root.join("plugins")).unwrap();
         let mut combinations = vec![Vec::new(), ids.clone()];
         for (index, id) in ids.iter().enumerate() {
@@ -1086,6 +1107,11 @@ mod tests {
           fs::write(&executable, b"fixture").unwrap();
           for combination in &combinations {
             for id in &ids {
+                if id == super::PLAYER_TWEAKS_ID {
+                    registry.set_bundled_game_enabled(preset, id,
+                        !super::player_tweaks_features(preset).is_empty() && combination.contains(id)).unwrap();
+                    continue;
+                }
                 let compatible = registry.find(id).unwrap().manifest.compatibility.supports_game(preset);
                 registry
                     .set_game_enabled(preset, id, compatible && combination.contains(id))
@@ -1117,6 +1143,13 @@ mod tests {
           }
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn player_tweaks_exposes_only_implemented_features_for_each_game() {
+        assert_eq!(super::player_tweaks_features("GIMI"), ["camera", "fps", "fast-team"]);
+        assert_eq!(super::player_tweaks_features("srmi"), ["fps-120"]);
+        for preset in ["WWMI", "ZZMI", "EFMI", "ZZMIDX12"] { assert!(super::player_tweaks_features(preset).is_empty()); }
     }
 
     #[test]

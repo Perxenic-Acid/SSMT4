@@ -10,7 +10,9 @@
   - [x] 鸣潮 WWMI：沿用已验证的 RHI 原生 DLSS DX11 Bridge + NR consumer 路线，由 SSMT 管理下载和注入。
   - [x] 绝区零 ZZMI / ZZMIDX12：按 DX11 Bridge / DX12 原生输入分别准备，游戏中必须启用 DLSS。
   - [ ] 新的 SSMT 集成路径实机确认成功 NR 帧、画面与退出行为。不能用之前的 RHI 实测替代这一项。
-- [ ] Player Tweaks：扩展崩铁，功能按游戏区分；不能把原神地址、特征或相机功能直接套到崩铁。
+- [x] Player Tweaks 第一阶段：扩展崩铁 120 FPS，功能按游戏区分；不注入原神专用 DLL。
+  - [x] 国服 / 国际服按实际客户端信息选取设置位置，保存恢复记录，保留其他画质字段及后续用户修改。
+  - [ ] 崩铁游戏内 FPS 验收；任意帧率、相机等 Native 功能仍需单独取得对应版本证据。
 
 ## 验收约束
 
@@ -32,6 +34,21 @@ cargo test --lib extracts_real_pinned_components_and_prepares_each_route -- --ig
 ```
 
 目录文件名依次为 `reshade.exe`、`consumer.zip`、`bridge.addon64`、`feeder.zip`、`sr.zip`、`nr50.zip`、`nr30.zip`、`lumenite.zip`、`ReShade.fxh`、`ReShadeUI.fxh`，来源及哈希以清单为准。检查不会启动游戏或修改游戏目录。
+
+## Player Tweaks 实现与验证
+
+原神保留相机、目标帧率和快速队伍页功能。崩铁当前只显示“启用 120 FPS”，在下次启动前更新客户端的 `GraphicsSettings_Model_h2986158309`；按 `StarRail_Data/app.info` 区分 `miHoYo/崩坏：星穹铁道` 和 `Cognosphere/Star Rail`，不通过注册表键是否存在来猜地区。
+
+插件启用时才处理 FPS。原始 REG_BINARY 备份在 `GameSettingsBackups/SRMI/`，恢复所有权保存在插件设置中。关闭插件前需关闭游戏；最后一个共用客户端的实例停用时，只把仍等于插件写入值的 FPS 恢复成原值，其他画质设置保持玩家当前值。已经由玩家设置为 120 的值不认领。格式未知、资源缺失或并发修改时跳过本次增强并横幅提示，游戏继续启动。
+
+已通过真实国服设置的只读解析与内存往返验证，未修改本机注册表。自动回归覆盖地区识别、JSON / REG_BINARY 格式边界、其他画质字段保留、用户后续修改、已有 120 FPS、多实例共享与最后所有者恢复。新启动路径尚需游戏内实测；没有新增崩铁相机或队伍页 Hook。
+
+```powershell
+$env:SSMT_STAR_RAIL_APP_INFO = '游戏目录/StarRail_Data/app.info'
+cargo test --lib reads_real_settings_and_checks_roundtrip_without_registry_writes -- --ignored --nocapture
+```
+
+清单中的代码项已完成阶段提交，实机项保持未勾选；后续根据游戏日志与画面分别推进。
 
 ## 依据
 

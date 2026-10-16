@@ -152,6 +152,7 @@ pub fn run() {
             plugin::commands::plugin_capabilities,
             plugin::commands::set_plugin_enabled_for_game,
             plugin::commands::bundled_player_tweaks_enabled_for_game,
+            plugin::star_rail_tweaks::prepare_star_rail_player_tweaks,
             plugin::commands::set_plugin_external_dependency_path,
             plugin::commands::prepare_hoyoshade_launch,
             plugin::gimi_hot_runtime::prepare_gimi_hot_runtime,

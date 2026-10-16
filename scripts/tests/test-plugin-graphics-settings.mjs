@@ -36,6 +36,42 @@ function component(t, relative, bindings, mocks, props = {}) {
 }
 
 const i18n = { useI18n: () => ({ t: key => key, locale: vue.ref('zh-CN') }) };
+
+function gameplaySettings(t, registryFps) {
+  const module = { exports: {} };
+  const normalized = ts.transpileModule(readFileSync(new URL('../../src/plugin/playerTweaksGameplay.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  vm.runInNewContext(normalized, { exports: module.exports });
+  const saved = [];
+  const props = vue.reactive({ gameName: registryFps ? 'Custom Star Rail' : 'Custom Genshin', enabled: true, registryFps });
+  const s = component(t, '../../src/plugin/components/PlayerTweaksGameplaySettings.vue', ['gameplay', 'save'], {
+    'vue-i18n': i18n,
+    'element-plus': { ElMessage: { success() {}, error(error) { throw new Error(error); } } },
+    '../playerTweaksGameplay': module.exports,
+    '../../store/ResourceManager': { ResourceManager: {
+      loadGameConfig: async () => ({ gamePreset: registryFps ? 'SRMI' : 'GIMI', unrelated: 'preserve' }),
+      saveGameConfig: async (game, config) => saved.push({ game, config }),
+    } },
+  }, props);
+  return { s, saved };
+}
+
+test('崩铁 Player Tweaks 只保存 120 FPS，原神继续支持原有帧率和队伍页选项', async t => {
+  for (const registry of [true, false]) {
+    const { s, saved } = gameplaySettings(t, registry);
+    await setImmediate();
+    s.gameplay.targetFps = 165;
+    s.gameplay.fastTeamPage = true;
+    s.gameplay.fpsUnlock = false;
+    await s.save();
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].config.unrelated, 'preserve');
+    assert.equal(saved[0].config.playerTweaksGameplay.fpsUnlock, false);
+    assert.equal(saved[0].config.playerTweaksGameplay.targetFps, registry ? 120 : 165);
+    assert.equal(saved[0].config.playerTweaksGameplay.fastTeamPage, !registry);
+  }
+});
 const dlssPlugin = enabled => ({
   manifest: { id: 'ssmt.dlss5.integration', name: 'DLSS5', author: 'SSMT', version: '0.1.0', externalDependencies: [], permissions: [] },
   enabled, externalDependencies: {}, lifecycleStatus: 'installed', official: true,

@@ -853,6 +853,17 @@ export class LaunchGame {
             }
         };
 
+        if ((gamePreset || "").trim().toUpperCase() === "SRMI") {
+            // 崩铁当前通过客户端设置启用 120 FPS，不注入原神专用 Hook DLL。
+            await removeStaleDll();
+            try {
+                await invoke("prepare_star_rail_player_tweaks", { gameName });
+            } catch (error) {
+                ElMessage.warning({ message: `崩铁 Player Tweaks 准备失败，本次继续普通启动：${String(error)}`, showClose: true, duration: 12000 });
+            }
+            return;
+        }
+
         const playerTweaksEnabled = isGimi && await invoke<boolean>(
             "bundled_player_tweaks_enabled_for_game",
             { gameName, gamePreset: gamePreset || "" },

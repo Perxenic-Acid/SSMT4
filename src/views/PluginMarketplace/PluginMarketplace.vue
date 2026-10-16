@@ -48,6 +48,7 @@ interface InstalledPlugin {
   externalDependencies: Record<string, DependencyState>
   official: boolean
   appScoped: boolean
+  features?: string[]
 }
 
 interface CatalogEntry {
@@ -657,14 +658,16 @@ onMounted(async () => {
                   :game-name="selectedGameName" :target-exe-path="graphicsTargetExe" />
                 <div v-else class="muted-copy">{{ t('pluginMarketplace.dlss5ConfigureTarget') }}</div>
               </template>
-              <template v-else-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && selectedPlugin.lifecycleStatus !== 'incompatible'">
+              <template v-else-if="selectedEntry.id === 'ssmt.player-tweaks' && selectedPlugin && installedGameName === selectedGameName && selectedPlugin.lifecycleStatus !== 'incompatible'">
                 <PlayerTweaksCameraSettings
+                  v-if="selectedPlugin.features?.includes('camera')"
                   :game-name="selectedGameName"
                   :enabled="selectedPlugin.enabled"
                 />
                 <PlayerTweaksGameplaySettings
                   :game-name="selectedGameName"
                   :enabled="selectedPlugin.enabled"
+                  :registry-fps="selectedPlugin.features?.includes('fps-120') || false"
                 />
               </template>
               <template v-else>

@@ -367,7 +367,7 @@
     "official": "Native Release 官方包",
     "thirdParty": "第三方或未验证来源",
     "localBuild": "本地构建",
-    "playerTweaksDescription": "原神运行时增强；由 SSMT 启动器单独注入。",
+    "playerTweaksDescription": "按游戏提供帧率与玩法增强：原神运行时功能、崩铁 120 FPS 设置。",
     "gameCompatibilityUnspecified": "插件包未列出游戏；以实际兼容性为准。",
     "noFeatures": "该插件没有可配置的功能选项。",
     "dlss5SettingsHint": "按当前游戏配置 DLSS5 组件，切换游戏后将显示对应设置。",
