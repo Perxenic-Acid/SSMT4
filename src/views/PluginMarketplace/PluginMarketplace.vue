@@ -696,6 +696,9 @@ onMounted(async () => {
                 <div v-if="selectedPlugin?.externalDependencies[dependency.id]?.path" class="dependency-path">
                   {{ selectedPlugin.externalDependencies[dependency.id].path }}
                 </div>
+                <p v-if="selectedPlugin?.externalDependencies[dependency.id]?.reason" class="dependency-reason">
+                  {{ selectedPlugin.externalDependencies[dependency.id].reason }}
+                </p>
                 <el-button v-if="selectedPlugin" size="small" :disabled="loading"
                   @click="configureDependency(selectedEntry.id, dependency.id)">
                   {{ t('pluginMarketplace.actions.chooseDependencyPath') }}
@@ -869,6 +872,7 @@ onMounted(async () => {
 .dependency-files, .dependency-path { margin: 5px 0; color: rgba(var(--theme-text-secondary-rgb), .82); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .dependency-files { margin: 9px 0; }
 .dependency-path { font-family: ui-monospace, Consolas, monospace; padding: 8px 10px; background: var(--t-surface-soft); border-radius: 6px; }
+.dependency-reason { margin: 8px 0; color: var(--t-warning-text); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .dependency-status { flex: none; font-size: 10px; padding: 2px 7px; border-radius: 4px; background: var(--t-surface-raised); }
 .dependency-status.is-ready { color: var(--t-success-text); }
 .dependency-status.is-missing { color: var(--t-warning-text); }

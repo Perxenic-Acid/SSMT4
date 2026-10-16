@@ -152,6 +152,9 @@ impl From<PluginManifestError> for PluginRegistryError {
 struct RegistryState {
     #[serde(default)]
     plugins: BTreeMap<String, PluginSettings>,
+    // 外部工具目录属于插件，而非包版本；启用状态和来源标记仍独立保存在版本设置中。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    external_paths: BTreeMap<String, BTreeMap<String, PathBuf>>,
     #[serde(default)]
     game_plugins: BTreeMap<String, BTreeMap<String, bool>>,
     #[serde(default)]
@@ -167,6 +170,26 @@ struct PluginSettings {
     external_paths: BTreeMap<String, PathBuf>,
     #[serde(default)]
     official: bool,
+}
+
+impl RegistryState {
+    fn external_path(&self, id: &str, version: &str, dependency: &str) -> Option<PathBuf> {
+        if let Some(path) = self.external_paths.get(id).and_then(|paths| paths.get(dependency)) {
+            return Some(path.clone());
+        }
+        if let Some(path) = self.plugins.get(&package_key(id, version))
+            .and_then(|settings| settings.external_paths.get(dependency)) {
+            return Some(path.clone());
+        }
+        // 兼容已经升级的安装：旧版本可能只剩设置记录，不再保留包目录。
+        // 只迁移相同插件与依赖 ID 的路径，校验状态须由当前清单重新计算。
+        let prefix = format!("{id}@");
+        self.plugins.iter().filter_map(|(key, settings)| {
+            let version = semver::Version::parse(key.strip_prefix(&prefix)?).ok()?;
+            let path = settings.external_paths.get(dependency)?;
+            Some((version, path))
+        }).max_by(|left, right| left.0.cmp(&right.0)).map(|(_, path)| path.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -258,7 +281,7 @@ impl PluginRegistry {
                 .external_dependencies
                 .iter()
                 .map(|dependency| {
-                    let configured_path = settings.external_paths.get(&dependency.id).cloned();
+                    let configured_path = self.state.external_path(&manifest.id, &manifest.version, &dependency.id);
                     (
                         dependency.id.clone(),
                         evaluate_dependency(dependency, configured_path),
@@ -450,12 +473,10 @@ impl PluginRegistry {
                 dependency_id: dependency_id.to_string(),
             });
         }
-        let key = package_key(plugin.id(), plugin.version());
         self.state
-            .plugins
-            .entry(key)
-            .or_default()
             .external_paths
+            .entry(id.to_string())
+            .or_default()
             .insert(dependency_id.to_string(), path.into());
         write_state(&self.state_path, &self.state)?;
         self.refresh()
@@ -752,6 +773,77 @@ mod tests {
             config.plugins,
             vec!["ssmt.external/1.0.0/native/example.dll"]
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn upgrades_recover_legacy_paths_without_inheriting_enablement_or_source_trust() {
+        let root = temp_root("dependency-upgrade");
+        let id = "ssmt.external";
+        let source = fixture_package(&root, id, "0.11.0");
+        let manifest = source.join(MANIFEST_FILE_NAME);
+        let raw = fs::read_to_string(&manifest).unwrap().replace(
+            r#""externalDependencies": []"#,
+            r#""externalDependencies": [{"id":"tool","type":"directory","requiredFiles":["tool.exe"]},{"id":"new-tool","type":"directory","requiredFiles":["new.exe"]}]"#,
+        );
+        fs::write(manifest, raw).unwrap();
+        let external = root.join("external");
+        fs::create_dir(&external).unwrap();
+        fs::write(external.join("tool.exe"), b"fixture").unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        // 旧包可以已经被移除，旧设置仍须按语义版本选择最近的路径。
+        for (version, path) in [("0.9.0", root.join("stale")), ("0.10.0", external.clone())] {
+            registry.state.plugins.insert(package_key(id, version), PluginSettings {
+                enabled: true, official: true,
+                external_paths: BTreeMap::from([("tool".into(), path)]),
+            });
+        }
+        registry.state.plugins.insert(package_key("thirdparty.other", "9.0.0"), PluginSettings {
+            external_paths: BTreeMap::from([("tool".into(), root.join("wrong-plugin"))]),
+            ..PluginSettings::default()
+        });
+        write_state(&registry.state_path, &registry.state).unwrap();
+        registry.install_directory_package(&source).unwrap();
+        let restarted = PluginRegistry::new(root.join("Plugins")).unwrap();
+        let plugin = restarted.find(id).unwrap();
+        assert!(!plugin.enabled);
+        assert!(!plugin.official);
+        assert_eq!(plugin.external_dependencies["tool"].path.as_ref(), Some(&external));
+        assert_eq!(plugin.external_dependencies["tool"].status, ExternalDependencyStatus::Ready);
+        assert_eq!(plugin.external_dependencies["new-tool"].status, ExternalDependencyStatus::Missing);
+        fs::remove_file(external.join("tool.exe")).unwrap();
+        registry.refresh().unwrap();
+        assert_eq!(registry.find(id).unwrap().external_dependencies["tool"].status, ExternalDependencyStatus::Invalid);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn selected_dependency_paths_are_shared_across_versions_and_invalid_choices_do_not_fallback() {
+        let root = temp_root("shared-dependency");
+        let id = "ssmt.external";
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        for version in ["1.0.0", "1.1.0"] {
+            let source = fixture_package(&root.join(version), id, version);
+            let manifest = source.join(MANIFEST_FILE_NAME);
+            let raw = fs::read_to_string(&manifest).unwrap().replace(
+                r#""externalDependencies": []"#,
+                r#""externalDependencies": [{"id":"tool","type":"directory","requiredFiles":["tool.exe"]}]"#,
+            );
+            fs::write(manifest, raw).unwrap();
+            registry.install_directory_package(&source).unwrap();
+        }
+        let external = root.join("external");
+        fs::create_dir(&external).unwrap();
+        fs::write(external.join("tool.exe"), b"fixture").unwrap();
+        registry.set_external_dependency_path(id, "tool", &external).unwrap();
+        assert!(registry.installed().iter().all(|plugin| plugin.external_dependencies["tool"].status == ExternalDependencyStatus::Ready));
+        let invalid = root.join("missing");
+        registry.set_external_dependency_path(id, "tool", &invalid).unwrap();
+        let reopened = PluginRegistry::new(root.join("Plugins")).unwrap();
+        assert!(reopened.installed().iter().all(|plugin| {
+            let dependency = &plugin.external_dependencies["tool"];
+            dependency.status == ExternalDependencyStatus::Missing && dependency.path.as_ref() == Some(&invalid)
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 
