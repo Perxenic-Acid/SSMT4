@@ -384,7 +384,11 @@ pub fn inspect_dlss5_route_options(
         .for_game(&game_name);
     let executable = PathBuf::from(game_executable);
     if super::dlss5_hot_runtime::applies(&executable) {
-        return super::dlss5_hot_runtime::route_scan(&registry, &game_scope_preset(&game_name), &executable, &api_override);
+        let mut scan = super::dlss5_hot_runtime::route_scan(&registry, &game_scope_preset(&game_name), &executable, &api_override)?;
+        if super::gimi_hot_runtime::applies(&executable) {
+            scan.installed_route = super::dlss5_hot_runtime::gimi_route(&game_name).ok();
+        }
+        return Ok(scan);
     }
     managed_stack::inspect_routes(&registry, &executable, &api_override)
 }

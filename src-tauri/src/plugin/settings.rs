@@ -73,12 +73,20 @@ impl PluginSettingsStore {
         key: &str,
         value: Value,
     ) -> Result<(), PluginSettingsError> {
-        validate_key(key)?;
-        self.state
-            .namespaces
-            .entry(plugin_id.to_string())
-            .or_default()
-            .insert(key.to_string(), value);
+        self.set_many(plugin_id, [(key.to_string(), value)])
+    }
+
+    /// 安装记录与所选路线在同一次原子写入中提交，失败时保留原状态。
+    pub(super) fn set_many(
+        &mut self,
+        plugin_id: &str,
+        values: impl IntoIterator<Item = (String, Value)>,
+    ) -> Result<(), PluginSettingsError> {
+        let values: Vec<_> = values.into_iter().collect();
+        for (key, _) in &values {
+            validate_key(key)?;
+        }
+        self.state.namespaces.entry(plugin_id.to_string()).or_default().extend(values);
         write_state(&self.path, &self.state)
     }
 }
@@ -154,5 +162,21 @@ mod tests {
             store.set("ssmt.fixture", "../secret", Value::Null),
             Err(PluginSettingsError::InvalidKey(_))
         ));
+    }
+
+    #[test]
+    fn route_and_installation_are_saved_together_and_invalid_batch_changes_nothing() {
+        let path = path();
+        let mut store = PluginSettingsStore::new(&path).unwrap();
+        store.set_many("ssmt.fixture", [
+            ("installation".into(), "old".into()), ("route".into(), "gimi-hot".into()),
+        ]).unwrap();
+        assert!(store.set_many("ssmt.fixture", [
+            ("installation".into(), "new".into()), ("../route".into(), "ssmt-feeder".into()),
+        ]).is_err());
+        let disk = PluginSettingsStore::new(&path).unwrap();
+        assert_eq!(disk.get("ssmt.fixture", "installation").unwrap(), Some("old".into()));
+        assert_eq!(store.get("ssmt.fixture", "installation").unwrap(), Some("old".into()));
+        fs::remove_file(path).unwrap();
     }
 }

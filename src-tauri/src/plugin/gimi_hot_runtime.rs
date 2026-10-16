@@ -355,10 +355,12 @@ fn save_installation(game_name: &str, installation: &HotRuntimeInstallation) -> 
     // 保存的是 SSMT 管理的副本；之后不会覆写用户提供的第三方目录。
     PluginSettingsStore::from_default_location()
         .map_err(|error| error.to_string())?
-        .set(
+        .set_many(
             DLSS5_PLUGIN_ID,
-            &setting_key(game_name),
-            serde_json::to_value(&installation).map_err(|error| error.to_string())?,
+            [
+                (setting_key(game_name), serde_json::to_value(&installation).map_err(|error| error.to_string())?),
+                (super::dlss5_hot_runtime::active_route_key(game_name), serde_json::Value::from("gimi-hot")),
+            ],
         )
         .map_err(|error| error.to_string())?;
     Ok(())

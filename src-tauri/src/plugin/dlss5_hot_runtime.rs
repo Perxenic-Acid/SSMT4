@@ -81,6 +81,8 @@ pub(super) fn applies(executable: &Path) -> bool {
                 "StarRail.exe",
                 "Client-Win64-Shipping.exe",
                 "ZenlessZoneZero.exe",
+                "YuanShen.exe",
+                "GenshinImpact.exe",
             ]
             .iter()
             .any(|expected| name.eq_ignore_ascii_case(expected))
@@ -97,6 +99,7 @@ fn route_for(preset: &str, executable: &Path) -> Result<(&'static str, &'static 
         name.to_ascii_lowercase().as_str(),
     ) {
         ("SRMI", "starrail.exe") => Ok(("feeder", "d3d11")),
+        ("GIMI", "yuanshen.exe" | "genshinimpact.exe") => Ok(("feeder", "d3d11")),
         ("WWMI", "client-win64-shipping.exe") | ("ZZMI", "zenlesszonezero.exe") => {
             Ok(("native-bridge", "d3d11"))
         }
@@ -125,7 +128,11 @@ pub(super) fn route_scan(
         return Err("图形 API 与游戏预设不一致，请选择对应 DX11 / DX12 预设".into());
     }
     Ok(Dlss5RouteScan {
-        routes: vec![format!("ssmt-{route}")],
+        routes: if gimi_hot_runtime::applies(executable) {
+            vec!["gimi-hot".into(), "ssmt-feeder".into()]
+        } else {
+            vec![format!("ssmt-{route}")]
+        },
         api: expected_api.into(),
         api_label: if expected_api == "d3d11" {
             "DirectX 11"
@@ -193,6 +200,27 @@ fn setting_key(game_name: &str) -> String {
         "hotRuntime.{:x}",
         Sha256::digest(game_name.trim().to_lowercase().as_bytes())
     )
+}
+
+pub(super) fn active_route_key(game_name: &str) -> String {
+    format!("hotRoute.{:x}", Sha256::digest(game_name.trim().to_lowercase().as_bytes()))
+}
+
+// 老配置没有路线字段时继续使用 FSR2 Bridge；仅显式配置成功才切换。
+pub(super) fn gimi_route(game_name: &str) -> Result<String, String> {
+    let value = PluginSettingsStore::from_default_location()
+        .map_err(|error| error.to_string())?
+        .get(DLSS5_PLUGIN_ID, &active_route_key(game_name))
+        .map_err(|error| error.to_string())?;
+    decode_gimi_route(value)
+}
+
+fn decode_gimi_route(value: Option<serde_json::Value>) -> Result<String, String> {
+    match value.as_ref().and_then(serde_json::Value::as_str) {
+        None if value.is_none() => Ok("gimi-hot".into()),
+        Some(route @ ("gimi-hot" | "ssmt-feeder")) => Ok(route.into()),
+        _ => Err("原神 DLSS5 路线设置无效，请重新配置组件".into()),
+    }
 }
 
 fn load(game_name: &str) -> Result<Option<Installation>, String> {
@@ -413,10 +441,12 @@ pub async fn download_dlss5_hot_runtime(
     }
     PluginSettingsStore::from_default_location()
         .map_err(|error| error.to_string())?
-        .set(
+        .set_many(
             DLSS5_PLUGIN_ID,
-            &setting_key(&game_name),
-            serde_json::to_value(&installation).map_err(|error| error.to_string())?,
+            [
+                (setting_key(&game_name), serde_json::to_value(&installation).map_err(|error| error.to_string())?),
+                (active_route_key(&game_name), serde_json::Value::from(format!("ssmt-{route}"))),
+            ],
         )
         .map_err(|error| error.to_string())?;
     pending.1 = true;
@@ -532,9 +562,6 @@ pub fn prepare_dlss5_hot_runtime(
     game_executable: String,
 ) -> Result<Option<HotRuntimePlan>, String> {
     let executable = Path::new(&game_executable);
-    if gimi_hot_runtime::applies(executable) {
-        return gimi_hot_runtime::prepare_gimi_hot_runtime(game_name, game_executable);
-    }
     if !applies(executable) {
         return Ok(None);
     }
@@ -546,6 +573,9 @@ pub fn prepare_dlss5_hot_runtime(
         return Ok(None);
     }
     let (route, _) = route_for(&game_scope_preset(&game_name), executable)?;
+    if gimi_hot_runtime::applies(executable) && gimi_route(&game_name)? == "gimi-hot" {
+        return gimi_hot_runtime::prepare_gimi_hot_runtime(game_name, game_executable);
+    }
     ensure_stopped(executable)?;
     if !matches!(
         super::dlss5::inspect_game_executable(executable),
@@ -566,6 +596,15 @@ pub fn prepare_dlss5_hot_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn genshin_keeps_legacy_route_until_explicit_setup_and_exposes_both_implementations() {
+        assert_eq!(decode_gimi_route(None).unwrap(), "gimi-hot");
+        assert_eq!(decode_gimi_route(Some("ssmt-feeder".into())).unwrap(), "ssmt-feeder");
+        assert_eq!(decode_gimi_route(Some("gimi-hot".into())).unwrap(), "gimi-hot");
+        assert!(decode_gimi_route(Some("native".into())).is_err());
+        assert!(decode_gimi_route(Some(serde_json::Value::Null)).is_err());
+    }
 
     #[test]
     fn foreign_proxy_and_base_path_cannot_redirect_or_duplicate_the_managed_host() {
@@ -608,6 +647,8 @@ mod tests {
     #[test]
     fn routes_require_both_actual_preset_and_target() {
         for (preset, exe, expected) in [
+            ("GIMI", "YuanShen.exe", ("feeder", "d3d11")),
+            ("gimi", "GenshinImpact.exe", ("feeder", "d3d11")),
             ("SRMI", "StarRail.exe", ("feeder", "d3d11")),
             (
                 "wwmi",

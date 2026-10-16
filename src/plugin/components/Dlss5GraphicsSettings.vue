@@ -11,13 +11,15 @@ const props = defineProps<{ gameName: string; targetExePath: string }>();
 const { t, locale } = useI18n();
 const label = (zh: string, en: string) => String(locale.value).startsWith('zh') ? zh : en;
 const hotRuntime = ref<{ root: string; profile: string } | null>(null);
+const hotRuntimes = ref<Record<string, { root: string; profile: string }>>({});
 const hotProfile = ref('rtx50');
 const downloadProgress = ref<{ phase: string; downloadedBytes: number; totalBytes: number } | null>(null);
 const isGimi = () => /(?:^|[\\/])(?:YuanShen|GenshinImpact)\.exe$/i.test(props.targetExePath.trim());
 const isOtherHot = () => /(?:^|[\\/])(?:StarRail|Client-Win64-Shipping|ZenlessZoneZero)\.exe$/i.test(props.targetExePath.trim());
 const isHotRoute = (route: string) => route === 'gimi-hot' || route.startsWith('ssmt-');
 const routeLabel = (route: string) => ({
-  'ssmt-feeder': label('崩铁 · Feeder 输入', 'Star Rail · Feeder input'),
+  'gimi-hot': label('原神 · FSR2 Bridge', 'Genshin · FSR2 bridge'),
+  'ssmt-feeder': label('Feeder · 合成输入', 'Feeder · synthetic input'),
   'ssmt-native-bridge': label('原生 DLSS · DX11 Bridge', 'Native DLSS · DX11 bridge'),
   'ssmt-native': label('原生 DLSS · DX12', 'Native DLSS · DX12'),
 }[route] || route);
@@ -68,6 +70,7 @@ const refreshGraphicsState = async () => {
   availableGraphicsRoutes.value = [];
   graphicsRouteScan.value = null;
   hotRuntime.value = null;
+  hotRuntimes.value = {};
   graphicsStateLoading.value = false;
   if (!target) return;
   graphicsStateLoading.value = true;
@@ -77,10 +80,14 @@ const refreshGraphicsState = async () => {
     dlss5State.value = state;
     if (isGimi() || isOtherHot()) {
       try {
-        const hot = await invoke<{ root: string; profile: string } | null>(isGimi() ? 'gimi_hot_runtime_status' : 'dlss5_hot_runtime_status', { gameName: props.gameName });
-        if (requestId !== graphicsRequestId) return;
-        hotRuntime.value = hot;
-        if (hot) hotProfile.value = hot.profile;
+        const commands = isGimi() ? ['gimi_hot_runtime_status', 'dlss5_hot_runtime_status'] : ['dlss5_hot_runtime_status'];
+        for (const command of commands) {
+          const hot = await invoke<{ root: string; profile: string; route?: string } | null>(command, { gameName: props.gameName });
+          if (requestId !== graphicsRequestId) return;
+          if (hot) hotRuntimes.value[command === 'gimi_hot_runtime_status' ? 'gimi-hot' : `ssmt-${hot.route || (isGimi() ? 'feeder' : '')}`] = hot;
+          // 旧状态接口可能不带 route；当前游戏只有一条路线时在扫描后补全。
+          if (hot && !isGimi()) hotRuntime.value = hot;
+        }
       } catch (error) {
         // 损坏组件仍应允许重新下载，不能阻断路线读取和修复入口。
         if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
@@ -102,7 +109,9 @@ const refreshGraphicsState = async () => {
       if (requestId === graphicsRequestId) {
         graphicsRouteScan.value = routes;
         availableGraphicsRoutes.value = routes.routes;
-        if (!routes.routes.includes(graphicsSelectedRoute.value)) graphicsSelectedRoute.value = routes.routes[0] || '';
+        if (!routes.routes.includes(graphicsSelectedRoute.value)) graphicsSelectedRoute.value = routes.installedRoute && routes.routes.includes(routes.installedRoute) ? routes.installedRoute : routes.routes[0] || '';
+        if (isGimi()) hotRuntime.value = hotRuntimes.value[graphicsSelectedRoute.value] || null;
+        if (hotRuntime.value) hotProfile.value = hotRuntime.value.profile;
       }
     } catch (error) {
       if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
@@ -186,6 +195,7 @@ const restoreDlss5Route = async () => {
 watch(() => [props.gameName, props.targetExePath, graphicsApiOverride.value], () => {
   ++graphicsRequestId;
   hotRuntime.value = null;
+  hotRuntimes.value = {};
   dlss5State.value = null;
   dlss5LastRun.value = null;
   availableGraphicsRoutes.value = [];
@@ -197,6 +207,13 @@ watch(() => [props.gameName, props.targetExePath, graphicsApiOverride.value], ()
   if (graphicsTimer) clearTimeout(graphicsTimer);
   graphicsTimer = setTimeout(() => void refreshGraphicsState(), 350);
 }, { immediate: true });
+
+watch(graphicsSelectedRoute, route => {
+  if (isGimi()) {
+    hotRuntime.value = hotRuntimes.value[route] || null;
+    if (hotRuntime.value) hotProfile.value = hotRuntime.value.profile;
+  }
+});
 
 onUnmounted(() => {
   ++graphicsRequestId;
@@ -236,8 +253,7 @@ onUnmounted(() => {
             <el-option value="rtx30" :label="label('RTX 30 / 40（40 为实验支持）', 'RTX 30 / 40 (40 experimental)')" />
           </el-select>
         </label>
-        <template v-if="!isGimi()">
-          <label class="graphics-field">
+          <label v-if="!isGimi()" class="graphics-field">
             <span>{{ t('gameSettingsModal.fields.graphicsApi') }}</span>
             <el-select v-model="graphicsApiOverride" :disabled="graphicsActionBusy" :aria-label="t('gameSettingsModal.fields.graphicsApi')">
               <el-option value="auto" :label="t('gameSettingsModal.fields.graphicsApiAuto')" />
@@ -251,13 +267,12 @@ onUnmounted(() => {
               <el-option v-for="route in availableGraphicsRoutes" :key="route" :value="route" :label="routeLabel(route)" />
             </el-select>
           </label>
-        </template>
       </div>
       <div class="graphics-actions">
         <el-button type="primary" :icon="Download" :loading="graphicsActionBusy" :disabled="!graphicsSelectedRoute || graphicsStateLoading" @click="installSelectedDlss5Route()">
           {{ isHotRoute(graphicsSelectedRoute) ? label('自动下载并配置', 'Download and configure') : graphicsSelectedRoute === 'optiscaler' ? t('gameSettingsModal.actions.openSwapper') : dlss5State?.state === 'managed' && !dlss5State.managedHost ? t('gameSettingsModal.actions.migrateGraphicsRoute') : t('gameSettingsModal.actions.installGraphicsRoute') }}
         </el-button>
-        <el-button v-if="isGimi()" :disabled="graphicsActionBusy || !graphicsSelectedRoute || graphicsStateLoading" @click="installSelectedDlss5Route(true)">
+        <el-button v-if="graphicsSelectedRoute === 'gimi-hot'" :disabled="graphicsActionBusy || !graphicsSelectedRoute || graphicsStateLoading" @click="installSelectedDlss5Route(true)">
           {{ label('离线导入', 'Import offline') }}
         </el-button>
         <el-button v-if="dlss5State?.state === 'managed'" :disabled="graphicsActionBusy" @click="restoreDlss5Route">
@@ -272,7 +287,7 @@ onUnmounted(() => {
       </div>
       <el-progress :percentage="Math.min(100, Math.floor(downloadProgress.downloadedBytes * 100 / Math.max(1, downloadProgress.totalBytes)))" />
     </div>
-    <template v-if="isGimi()">
+    <template v-if="graphicsSelectedRoute === 'gimi-hot'">
       <p class="graphics-hint">{{ label('首次下载约 302 MiB。请先关闭游戏；下载失败保留原组件，普通游戏启动仍可使用。', 'First download: about 302 MiB. Close the game before setup. Failed downloads preserve existing components and normal game launch remains available.') }}</p>
       <div class="graphics-startup">
         <h4>{{ label('启动前', 'Before launching') }}</h4>
@@ -290,15 +305,16 @@ onUnmounted(() => {
         <el-button link type="primary" size="small" @click="openComponentSource">{{ label('查看组件来源', 'View component source') }}</el-button>
       </details>
     </template>
-    <div v-if="isOtherHot()" class="graphics-startup">
+    <div v-if="isOtherHot() || graphicsSelectedRoute === 'ssmt-feeder'" class="graphics-startup">
       <h4>{{ label('启动前', 'Before launching') }}</h4>
       <p>{{ graphicsSelectedRoute === 'ssmt-feeder'
-        ? label('崩铁使用 Feeder 与 Lumenite 运动矢量效果补齐输入，无需游戏原生 DLSS。', 'Star Rail uses Feeder and Lumenite motion vectors without native DLSS.')
+        ? label('使用 Feeder 与 Lumenite 合成运动矢量，无需游戏原生 DLSS。原神请关闭 FSR2，避免同时运行两条重建链；可与 FSR2 Bridge 路线分别比较画质与性能。', 'Feeder and Lumenite synthesize motion vectors without native DLSS. Disable FSR2 in Genshin to avoid two reconstruction pipelines; compare quality and performance with the FSR2 bridge route.')
         : label('请在游戏内开启 DLSS；DX11 / DX12 必须与当前游戏预设一致。', 'Enable DLSS in game and match the DX11 / DX12 game preset.') }}</p>
       <p>{{ label('请先关闭游戏，再自动下载。组件位于 SSMT 自有目录，通过 SSMT 直接启动时热注入；若已有 Swapper 或 RHI / ReShade 安装，请先通过原管理器恢复，避免重复加载 Host。', 'Close the game before setup. Components live in SSMT storage and are hot-injected on direct launch. Restore any previous Swapper or RHI / ReShade installation through its manager to avoid duplicate hosts.') }}</p>
       <p>{{ label('组件按固定版本、大小及哈希校验，来自 ReShade、Feeder、DX11 Bridge、LumeniteFX 和 RHI 组件库。配置完成后仍需游戏内确认 NR 生效。', 'Pinned components are verified by size and hash, from ReShade, Feeder, DX11 Bridge, LumeniteFX and the RHI component repository. Verify NR rendering in game after setup.') }}</p>
       <code v-if="hotRuntime">{{ hotRuntime.root }}</code>
     </div>
+    <p v-if="isGimi()" class="graphics-hint">{{ label('自动下载并配置成功后，此游戏下次启动使用所选实现；切换失败保留原路线。', 'Successful setup selects this implementation for the next launch; a failed setup keeps the previous route.') }}</p>
     <div v-if="dlss5State?.state === 'managed'" class="graphics-hint"
       :class="{ 'graphics-error': dlss5LastRun?.verdict === 'inactive' }">
       {{ t('gameSettingsModal.fields.graphicsInstalledOnly') }}

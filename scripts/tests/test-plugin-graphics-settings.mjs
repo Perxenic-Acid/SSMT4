@@ -198,16 +198,16 @@ function graphics(t, options = {}) {
   const state = { root: 'C:/Assets/previous', profile: 'rtx50' };
   let pickerCount = 0;
   const s = component(t, '../../src/plugin/components/Dlss5GraphicsSettings.vue', [
-    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError', 'graphicsStateLoading',
+    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError', 'graphicsStateLoading', 'graphicsSelectedRoute',
   ], {
     '@tauri-apps/api/core': { Channel: class {}, invoke: async (command, args) => {
       calls.push({ command, args });
       if (command === 'inspect_dlss5_game_state') return options.inspectState ? options.inspectState() : { state: 'not_managed' };
       if (command === 'gimi_hot_runtime_status' || command === 'dlss5_hot_runtime_status') {
         if (options.statusError) throw new Error(options.statusError);
-        return state;
+        return options.status ? options.status(command) : state;
       }
-      if (command === 'inspect_dlss5_route_options') return { routes: [options.route ?? 'gimi-hot'] };
+      if (command === 'inspect_dlss5_route_options') return { routes: options.routes ?? [options.route ?? 'gimi-hot'], installedRoute: options.installedRoute };
       if (command === 'download_gimi_hot_runtime' || command === 'download_dlss5_hot_runtime') return job.promise;
       if (command === 'import_gimi_hot_runtime') return {};
       throw new Error(`Unexpected command ${command}`);
@@ -253,6 +253,24 @@ test('崩铁、鸣潮及绝区零按各自路线下载，不调用 GIMI 或外�
     job.resolve({}); await pending;
     assert.ok(!calls.some(call => /gimi|swapper|install_managed/.test(call.command)));
   }
+});
+
+test('原神记住所选实现，Feeder 与 FSR2 Bridge 分别下载和展示组件', async t => {
+  const { s, calls, job } = graphics(t, {
+    gameName: '我的原神', routes: ['gimi-hot', 'ssmt-feeder'], installedRoute: 'ssmt-feeder',
+    status: command => ({ root: command === 'gimi_hot_runtime_status' ? 'C:/FSR2' : 'C:/Feeder', profile: 'rtx30', route: 'feeder' }),
+  });
+  await s.refreshGraphicsState();
+  assert.equal(s.graphicsSelectedRoute.value, 'ssmt-feeder');
+  assert.equal(s.hotRuntime.value.root, 'C:/Feeder');
+  const pending = s.installSelectedDlss5Route();
+  assert.ok(calls.some(call => call.command === 'download_dlss5_hot_runtime' && call.args.gameName === '我的原神'));
+  assert.ok(!calls.some(call => call.command === 'download_gimi_hot_runtime'));
+  job.resolve({}); await pending;
+  s.graphicsSelectedRoute.value = 'gimi-hot'; await vue.nextTick();
+  assert.equal(s.hotRuntime.value.root, 'C:/FSR2');
+  await s.installSelectedDlss5Route();
+  assert.ok(calls.some(call => call.command === 'download_gimi_hot_runtime'));
 });
 
 test('损坏热注入组件仍保留自动下载修复入口', async t => {
