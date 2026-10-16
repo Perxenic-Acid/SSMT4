@@ -665,6 +665,33 @@ export class LaunchGame {
                     });
                 }
             }
+            let hotRuntimeDlls: string[] = [];
+            if (hotRuntime) {
+                const configuredExtras = Array.isArray(config.extraDlls)
+                    ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
+                    : [];
+                const legacyExtra = typeof config.extraDll === "string" ? config.extraDll.trim() : "";
+                const extras = configuredExtras.length ? configuredExtras : legacyExtra ? [legacyExtra] : [];
+                const owned = hotRuntime.dlls.map(path => this.getProcessNameFromPath(path).toLowerCase());
+                for (const dll of extras) {
+                    if ([...owned, "d3d11.dll", "dxgi.dll"].includes(this.getProcessNameFromPath(dll).toLowerCase())) {
+                        throw new Error(`热注入组件与额外 DLL 重复或所有权冲突：${dll}`);
+                    }
+                }
+                hotRuntimeDlls = [...hotRuntime.dlls, ...extras];
+                try {
+                    // 只有实际采用热注入计划才调整输入契约；失败时保留普通 Mod 启动。
+                    await invoke("configure_dlss5_launch_settings", { gameName, gameExecutable: targetExe });
+                } catch (error) {
+                    hotRuntime = null;
+                    skipDlss5 = true;
+                    ElMessage.warning({
+                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "DLSS5", error: String(error) }),
+                        showClose: true,
+                        duration: 12000,
+                    });
+                }
+            }
             let hoyoshade: PluginLaunchProgram | null = null;
             if (!hotRuntime && !pureDirectTarget && launchTargetProgram && targetExe) {
                 try {
@@ -711,19 +738,8 @@ export class LaunchGame {
             }
 
             if (hotRuntime) {
-                const configuredExtras = Array.isArray(config.extraDlls)
-                    ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
-                    : [];
-                const legacyExtra = typeof config.extraDll === "string" ? config.extraDll.trim() : "";
-                const extras = configuredExtras.length ? configuredExtras : legacyExtra ? [legacyExtra] : [];
-                const owned = hotRuntime.dlls.map(path => this.getProcessNameFromPath(path).toLowerCase());
-                for (const dll of extras) {
-                    if ([...owned, "d3d11.dll", "dxgi.dll"].includes(this.getProcessNameFromPath(dll).toLowerCase())) {
-                        throw new Error(`热注入组件与额外 DLL 重复或所有权冲突：${dll}`);
-                    }
-                }
                 await MigotoManager.patchD3dxForLaunch(gameName, {
-                    extraDlls: [...hotRuntime.dlls, ...extras],
+                    extraDlls: hotRuntimeDlls,
                     useShell: false,
                 });
             }

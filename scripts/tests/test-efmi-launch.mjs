@@ -17,7 +17,7 @@ function load(relative, mocks) {
   return exports;
 }
 
-function harness(config, hostConfig = null, hotRuntime = null) {
+function harness(config, hostConfig = null, hotRuntime = null, settingsError = null) {
   let ini = '[Loader]\nloader = XXMI Launcher.exe\nlaunch = C:/old.exe\nlaunch_args = old\nmodule = d3d11.dll\n';
   const calls = [];
   const messages = [];
@@ -49,6 +49,10 @@ function harness(config, hostConfig = null, hotRuntime = null) {
       if (command === 'prepare_plugin_host_config') return hostConfig;
       if (command === 'prepare_hoyoshade_launch') return null;
       if (command === 'prepare_dlss5_hot_runtime') return typeof hotRuntime === 'function' ? hotRuntime() : hotRuntime;
+      if (command === 'configure_dlss5_launch_settings') {
+        if (settingsError) throw settingsError;
+        return;
+      }
       if (command === 'launch_programs') return;
       assert.fail(`Unexpected IPC: ${command}`);
     } },
@@ -178,6 +182,7 @@ test('手动等待或外部启动器无法继承热注入环境时只跳过 DLSS
     await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
     const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
     assert.doesNotMatch(programs[0].args || '', /--preload-runtime|--set-env/);
+    assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
     assert.equal(programs.some(program => program.path === launcher), launchTargetProgram);
     assert.ok(h.messages.some(message => message.kind === 'warning'));
   }
@@ -189,4 +194,23 @@ test('热注入组件准备失败仍提交普通启动队列并传递插件跳�
   assert.ok(h.calls.some(call => call.command === 'launch_programs'));
   assert.equal(h.calls.find(call => call.command === 'prepare_hoyoshade_launch').args.skipDlss5, true);
   assert.ok(h.messages.some(message => message.kind === 'warning'));
+  assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+});
+
+test('只有实际采用热注入计划才调整画质契约，写入失败仅跳过 DLSS5', async () => {
+  for (const settingsError of [null, new Error('无法备份画质设置')]) {
+    const h = harness({ ...base, gamePreset: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe' }, null, hotPlan, settingsError);
+    await h.launch.launch('原神', { gameLaunchMode: 'always-normal' }, () => {});
+    const settingsIndex = h.calls.findIndex(call => call.command === 'configure_dlss5_launch_settings');
+    const launchIndex = h.calls.findIndex(call => call.command === 'launch_programs');
+    assert.ok(settingsIndex >= 0 && launchIndex > settingsIndex);
+    const programs = h.calls[launchIndex].args.programs;
+    assert.equal(/--preload-runtime/.test(programs[0].args || ''), !settingsError);
+    assert.equal(h.messages.some(message => message.kind === 'warning'), !!settingsError);
+  }
+  for (const gameLaunchMode of ['always-normal', 'always-pure']) {
+    const h = harness({ ...base, gamePreset: 'GIMI' });
+    await h.launch.launch('原神', { gameLaunchMode }, () => {});
+    assert.equal(h.calls.some(call => call.command === 'configure_dlss5_launch_settings'), false);
+  }
 });

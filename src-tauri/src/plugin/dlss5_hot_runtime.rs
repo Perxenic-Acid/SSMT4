@@ -555,6 +555,29 @@ fn ensure_no_external_host(executable: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn configure_dlss5_launch_settings(
+    game_name: String,
+    game_executable: String,
+) -> Result<(), String> {
+    let executable = Path::new(&game_executable);
+    if !gimi_hot_runtime::applies(executable) {
+        return Ok(());
+    }
+    let Some(registry) = super::commands::installed_plugin_registry()? else {
+        return Ok(());
+    };
+    if !enabled(&registry.for_game(&game_name)) {
+        return Ok(());
+    }
+    route_for(&game_scope_preset(&game_name), executable)?;
+    ensure_stopped(executable)?;
+    crate::commands::gimi_settings::configure_dlss5(
+        &game_executable,
+        gimi_route(&game_name)? == "gimi-hot",
+    )
+}
+
+#[tauri::command]
 pub fn prepare_dlss5_hot_runtime(
     game_name: String,
     game_executable: String,

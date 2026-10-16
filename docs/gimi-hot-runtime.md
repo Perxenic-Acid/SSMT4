@@ -13,7 +13,7 @@
 3. 离线情况下点击“离线导入”，选择包含 `components` 的完整 GIMI 集成包根目录。组件来自 [CXP GIMI 集成项目的固定版本](https://github.com/CXP-2024/GIMI_reshade_dlss_integration/tree/cc4697187cb57bacc7c932b7f53f16be24af152a)，必须补齐所选 Profile 的 NR Runtime。SSMT 逐文件校验固定 SHA-256，不接受混用版本或另一 Profile 的 Runtime。具体路径与完整哈希以 `src-tauri/src/plugin/gimi_hot_runtime.rs` 和 `gimi_hot_assets.json` 为准。
 4. 若显示旧的 Swapper 托管安装，先用原有“恢复”操作恢复该安装，再使用热注入。遇到损坏清单先处理该错误，不手动猜测删除游戏文件；热注入不会临时恢复 Swapper 代理文件。
 5. 保持游戏设置中的“启动目标程序”开启。普通启动直接使用目标程序；“使用 Shell 启动”的启动路径与目标路径指向同一个游戏 EXE 时，也属于由 SSMT 直接启动。SSMT 会仅为本次热注入改由 Run.exe 创建挂起进程，保存的 Shell 设置不变。两条路径指向不同程序时，暂不支持通过另一启动程序创建游戏；不能对已经创建的目标补设环境。
-6. 游戏内抗锯齿选择 **FSR2**，渲染精度至少 **1.0**，进入世界观察 Mod、贴图及 NR 效果。仅弹出 ReShade 界面不表示 DLSS5 生效。
+6. SSMT 在实际采用热注入计划后自动配置抗锯齿：FSR2 Bridge 启用 **FSR2**，Feeder 关闭游戏抗锯齿。Bridge 的渲染精度仍至少 **1.0**。进入世界观察 Mod、贴图及 NR 效果；仅弹出 ReShade 界面不表示 DLSS5 生效。
 
 自动下载和离线导入均部署到 SSMT 的 `PluginAssets/ssmt.dlss5.integration/gimi-hot/<唯一目录>`，之后只修改该副本。离线导入只读取选中的源目录。核心文件如下：
 

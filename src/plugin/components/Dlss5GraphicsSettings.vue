@@ -292,7 +292,7 @@ onUnmounted(() => {
       <div class="graphics-startup">
         <h4>{{ label('启动前', 'Before launching') }}</h4>
         <ul>
-          <li>{{ label('游戏内抗锯齿选择 FSR2，渲染精度至少 1.0。', 'Select FSR2 and render resolution 1.0 or higher in game.') }}</li>
+          <li>{{ label('SSMT 启动前会自动启用游戏内 FSR2；渲染精度至少 1.0。', 'SSMT automatically enables in-game FSR2 before launch; use render resolution 1.0 or higher.') }}</li>
           <li>{{ label('保持“启动目标程序”开启；使用 Shell 启动时，将启动路径设为同一个游戏程序。', 'Keep Launch target program enabled. For Shell launch, set the launch path to the same game executable.') }}</li>
         </ul>
         <p>{{ label('组件配置成功仅代表安装完成，NR 效果需进入游戏验证。', 'Configured components indicate installation only; verify NR rendering in game.') }}</p>
@@ -308,7 +308,7 @@ onUnmounted(() => {
     <div v-if="isOtherHot() || graphicsSelectedRoute === 'ssmt-feeder'" class="graphics-startup">
       <h4>{{ label('启动前', 'Before launching') }}</h4>
       <p>{{ graphicsSelectedRoute === 'ssmt-feeder'
-        ? label('使用 Feeder 与 Lumenite 合成运动矢量，无需游戏原生 DLSS。原神请关闭 FSR2，避免同时运行两条重建链；可与 FSR2 Bridge 路线分别比较画质与性能。', 'Feeder and Lumenite synthesize motion vectors without native DLSS. Disable FSR2 in Genshin to avoid two reconstruction pipelines; compare quality and performance with the FSR2 bridge route.')
+        ? label('使用 Feeder 与 Lumenite 合成运动矢量，无需游戏原生 DLSS。原神启动前会自动关闭游戏抗锯齿，避免与 FSR2 重复重建；可与 FSR2 Bridge 路线分别比较画质与性能。', 'Feeder and Lumenite synthesize motion vectors without native DLSS. SSMT automatically disables in-game anti-aliasing in Genshin before launch to avoid duplicate reconstruction; compare quality and performance with the FSR2 bridge route.')
         : label('请在游戏内开启 DLSS；DX11 / DX12 必须与当前游戏预设一致。', 'Enable DLSS in game and match the DX11 / DX12 game preset.') }}</p>
       <p>{{ label('请先关闭游戏，再自动下载。组件位于 SSMT 自有目录，通过 SSMT 直接启动时热注入；若已有 Swapper 或 RHI / ReShade 安装，请先通过原管理器恢复，避免重复加载 Host。', 'Close the game before setup. Components live in SSMT storage and are hot-injected on direct launch. Restore any previous Swapper or RHI / ReShade installation through its manager to avoid duplicate hosts.') }}</p>
       <p>{{ label('组件按固定版本、大小及哈希校验，来自 ReShade、Feeder、DX11 Bridge、LumeniteFX 和 RHI 组件库。配置完成后仍需游戏内确认 NR 生效。', 'Pinned components are verified by size and hash, from ReShade, Feeder, DX11 Bridge, LumeniteFX and the RHI component repository. Verify NR rendering in game after setup.') }}</p>

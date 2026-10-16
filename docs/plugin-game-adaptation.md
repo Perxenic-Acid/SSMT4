@@ -6,6 +6,9 @@
 
 本轮反馈按以下顺序处理：
 
+- [ ] 崩铁仍无 Mod：继续核查设备、Context 与交换链的包装身份，已复现交换链取回底层设备的绕过路径；实机 Mod 画面待验收。
+- [x] 原神启动前按实际采用的 DLSS5 路线自动控制 FSR2，不再依赖玩家手工切换。
+
 - [x] 修复 D3D11 热注入初始化顺序及同名系统 DLL 被误报为 Runtime，补充真实 Runtime 注入回归；崩铁 Mod 画面仍待复测。
 - [x] 原神增加可选择的 Feeder 实现，保留原 FSR2 Bridge 路线；组件配置及启动计划回归通过，画面待实机比较。
 - [x] 保留 ReShade 教程进度及用户配置，覆盖原神与其他热注入路线，旧配置首次迁移与重复启动回归通过。
@@ -29,6 +32,8 @@
 其他游戏的组件使用独立清单与安装目录，不能复用 GIMI 特有的 Bridge 或混搭 NR 链。固定下载版本、大小与 SHA-256，新目录准备完成后才切换设置；不执行下载包内脚本、不伪造 RHI 的安装记录、不覆盖其文件。
 
 ## DLSS5 实现与验证
+
+原神的抗锯齿现在由启动计划自动控制：FSR2 Bridge 启用 FSR2，Feeder 关闭游戏抗锯齿。组件、启动方式及 DLL 所有权检查通过后才修改注册表，同时更新 `graphicsData` 的 key 8 和 `globalPerfData` 的 entryType 8；原始 REG_BINARY 按现有画质备份机制保存，写入前再次比较当前值。关闭插件、纯净启动、组件准备失败或不支持的启动方式均不修改抗锯齿，画质格式未知或备份 / 写入失败仅横幅说明并跳过本次 DLSS5，普通 Mod 启动继续。此操作独立于普通的“配置游戏设置”开关。编码依据为 [Collapse 原神设置模型](https://github.com/CollapseLauncher/Collapse/tree/main/CollapseLauncher/Classes/GameManagement/GameSettings/Genshin/RegistryClass)：Off / FSR2 / SMAA 的 index 为 0 / 1 / 2，graphicsData 的 value 加一。六项 Rust 画质测试与 67 项前端 / 启动回归通过，验证没有写入本机注册表。
 
 插件市场 → 选择游戏 → 已启用的 DLSS5 → 功能设置 → 选择显卡 → 自动下载并配置。原神继续使用原有组件包；其他三款游戏使用 `dlss5_hot_assets.json` 固定的 ReShade 6.8.0、NR consumer 6.5.3、Bridge 1.4.12、Feeder 1.19.0 和配套 snippet。新增组件存放在 `PluginAssets/ssmt.dlss5.integration/hot/`，启动前合并启用的 Shade Bridge 贡献，只注入一个 Host。
 

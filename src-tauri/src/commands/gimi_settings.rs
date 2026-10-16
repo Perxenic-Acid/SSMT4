@@ -3,7 +3,16 @@ use serde_json::{json, Value};
 
 // 原神会同时保存运行时画质和性能预设；只修改其中一份会在下次启动时被覆盖。
 // 与 XXMI GIMI 一致，关闭动态角色分辨率，避免 Mod 使用不同 LOD 的骨骼/顶点缓冲。
+#[cfg(test)]
 fn disable_dynamic_character_resolution(data: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    update_graphics_settings(data, true, None)
+}
+
+fn update_graphics_settings(
+    data: &[u8],
+    disable_dynamic: bool,
+    fsr2: Option<bool>,
+) -> Result<Option<Vec<u8>>, String> {
     let end = data
         .iter()
         .position(|&byte| byte == 0)
@@ -29,7 +38,7 @@ fn disable_dynamic_character_resolution(data: &[u8]) -> Result<Option<Vec<u8>>, 
         let mut field_changed = false;
         for entry in entries
             .iter_mut()
-            .filter(|entry| entry.get(key) == Some(&json!(21)))
+            .filter(|entry| disable_dynamic && entry.get(key) == Some(&json!(21)))
         {
             found = true;
             let current = entry
@@ -44,13 +53,45 @@ fn disable_dynamic_character_resolution(data: &[u8]) -> Result<Option<Vec<u8>>, 
                 field_changed = true;
             }
         }
-        if !found {
+        if disable_dynamic && !found {
             let mut entry = json!({key: 21, value_key: disabled});
             if field == "globalPerfData" {
                 entry["itemVersion"] = json!("OSRELWin5.0.0");
             }
             entries.push(entry);
             field_changed = true;
+        }
+        if let Some(require_fsr2) = fsr2 {
+            // Collapse 的原神设置模型：AA 为 entryType=8，Off/FSR2/SMAA 的 index 为 0/1/2，
+            // graphicsData 的 value 比 index 大一。Feeder 自行重建，统一关闭游戏抗锯齿。
+            let offset = if field == "graphicsData" { 1 } else { 0 };
+            let mut found = false;
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| entry.get(key) == Some(&json!(8)))
+            {
+                found = true;
+                let current = entry
+                    .get(value_key)
+                    .and_then(Value::as_u64)
+                    .ok_or("原神抗锯齿设置格式未知")?;
+                if !(offset..=offset + 2).contains(&current) {
+                    return Err("原神抗锯齿取值未知，未修改游戏设置".into());
+                }
+                let desired = offset + u64::from(require_fsr2);
+                if desired != current {
+                    entry[value_key] = json!(desired);
+                    field_changed = true;
+                }
+            }
+            if !found {
+                let mut entry = json!({key: 8, value_key: offset + u64::from(require_fsr2)});
+                if field == "globalPerfData" {
+                    entry["itemVersion"] = json!("OSRELWin5.0.0");
+                }
+                entries.push(entry);
+                field_changed = true;
+            }
         }
         if field_changed {
             root[field] =
@@ -88,7 +129,7 @@ pub struct ConfigureGimiLaunchSettingsOptions {
 }
 
 #[cfg(windows)]
-fn configure(target: &str) -> Result<(), String> {
+fn configure(target: &str, disable_dynamic: bool, fsr2: Option<bool>) -> Result<(), String> {
     use crate::config::path_manager::PathManager;
     use std::{fs, io::Write, path::Path, ptr};
     use windows_sys::Win32::System::Registry::*;
@@ -168,7 +209,7 @@ fn configure(target: &str) -> Result<(), String> {
         Ok(bytes)
     };
     let original = read()?;
-    let Some(updated) = disable_dynamic_character_resolution(&original)? else {
+    let Some(updated) = update_graphics_settings(&original, disable_dynamic, fsr2)? else {
         return Ok(());
     };
     let folder = PathManager::ssmt_global_config_folder()
@@ -200,11 +241,10 @@ fn configure(target: &str) -> Result<(), String> {
         )
     };
     if error != 0 {
-        return Err(format!("无法关闭原神动态角色分辨率（{error}）"));
+        return Err(format!("无法写入原神画质设置（{error}）"));
     }
     println!(
-        "[GameLauncher] 已关闭原神动态角色分辨率；原始设置备份：{}",
-        backup.display()
+        "[GameLauncher] 原神画质设置已更新：关闭动态角色分辨率={disable_dynamic}，FSR2={fsr2:?}；原始设置备份：{}", backup.display()
     );
     Ok(())
 }
@@ -218,11 +258,23 @@ pub fn configure_gimi_launch_settings(
     }
     #[cfg(windows)]
     {
-        configure(&options.target_exe_path)
+        configure(&options.target_exe_path, true, None)
     }
     #[cfg(not(windows))]
     {
         Err("原神画质设置仅适用于 Windows".to_string())
+    }
+}
+
+pub(crate) fn configure_dlss5(target: &str, fsr2: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        configure(target, false, Some(fsr2))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (target, fsr2);
+        Err("原神画质设置仅适用于 Windows".into())
     }
 }
 
@@ -237,6 +289,58 @@ mod tests {
         })).unwrap();
         bytes.push(0);
         bytes
+    }
+    #[test]
+    fn dlss_routes_control_both_aa_records_without_touching_dynamic_resolution() {
+        let source = fixture(
+            json!([{"key":8,"value":3},{"key":21,"value":2},{"key":2,"value":8}]),
+            json!([{"entryType":8,"index":1,"itemVersion":"CNRELWin7.1.0"},{"entryType":21,"index":1}]),
+        );
+        for fsr2 in [true, false] {
+            let updated = update_graphics_settings(&source, false, Some(fsr2))
+                .unwrap()
+                .unwrap();
+            let root: Value = serde_json::from_slice(&updated[..updated.len() - 1]).unwrap();
+            let graphics: Value =
+                serde_json::from_str(root["graphicsData"].as_str().unwrap()).unwrap();
+            let perf: Value =
+                serde_json::from_str(root["globalPerfData"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                graphics["customVolatileGrades"][0]["value"],
+                1 + u64::from(fsr2)
+            );
+            assert_eq!(perf["saveItems"][0]["index"], u64::from(fsr2));
+            assert_eq!(perf["saveItems"][0]["itemVersion"], "CNRELWin7.1.0");
+            assert_eq!(graphics["customVolatileGrades"][1]["value"], 2);
+            assert_eq!(graphics["customVolatileGrades"][2]["value"], 8);
+            assert_eq!(perf["saveItems"][1]["index"], 1);
+            assert_eq!(
+                update_graphics_settings(&updated, false, Some(fsr2)).unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            update_graphics_settings(&source, false, None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn aa_rejects_future_values_and_repairs_missing_record() {
+        for (value, index) in [(4, 1), (2, 3)] {
+            let source = fixture(
+                json!([{"key":8,"value":value}]),
+                json!([{"entryType":8,"index":index}]),
+            );
+            assert!(update_graphics_settings(&source, false, Some(true)).is_err());
+        }
+        let updated = update_graphics_settings(&fixture(json!([]), json!([])), true, Some(true))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            update_graphics_settings(&updated, true, Some(true)).unwrap(),
+            None
+        );
     }
     #[test]
     fn disables_both_records_and_preserves_other_settings() {

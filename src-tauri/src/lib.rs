@@ -160,6 +160,7 @@ pub fn run() {
             plugin::gimi_hot_runtime::download::download_gimi_hot_runtime,
             plugin::gimi_hot_runtime::gimi_hot_runtime_status,
             plugin::dlss5_hot_runtime::prepare_dlss5_hot_runtime,
+            plugin::dlss5_hot_runtime::configure_dlss5_launch_settings,
             plugin::dlss5_hot_runtime::download_dlss5_hot_runtime,
             plugin::dlss5_hot_runtime::dlss5_hot_runtime_status,
             plugin::commands::prepare_plugin_host_config,

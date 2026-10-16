@@ -81,6 +81,7 @@ async function harness(t, options = {}) {
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
       if (command === 'bundled_player_tweaks_enabled_for_game') return false;
       if (command === 'configure_gimi_launch_settings') return null;
+        if (command === 'configure_dlss5_launch_settings') return null;
       if (command === 'prepare_dlss5_hot_runtime') {
         if (options.hotError) throw new Error(options.hotError);
         return options.hotRuntime ?? null;
