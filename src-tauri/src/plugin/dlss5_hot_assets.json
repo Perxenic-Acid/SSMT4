@@ -1,0 +1,217 @@
+{
+  "assets": [
+    {
+      "zipOffset": 153088,
+      "zipLength": 4157376,
+      "files": [
+        {
+          "path": "ReShade64.dll",
+          "entry": "ReShade64.dll",
+          "sha256": "0cee63f9c9f13f3ac909c5b4903f4dbb4b719a7ab3b4f13b0deaf83c814b94f7",
+          "size": 5592064
+        }
+      ],
+      "route": "",
+      "url": "https://reshade.me/downloads/ReShade_Setup_6.8.0_Addon.exe",
+      "profile": "",
+      "size": 4318424,
+      "sha256": "afe4c8f13048306307983b8b3d41d5bf00a86820440b0e57dea10950e1176445"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "renodx-dlss5.addon64",
+          "entry": "renodx-dlss5.addon64",
+          "sha256": "342341f669f1d64e0c70c8593a07a2fab5075e073dfae97c331c9a6776260a0a",
+          "size": 878080
+        }
+      ],
+      "route": "",
+      "url": "https://github.com/RankFTW/rhi-repo/releases/download/renodx-dlss5-6.5.3/renodx-dlss5_6.5.3.zip",
+      "profile": "",
+      "size": 370292,
+      "sha256": "553b1619b9e5ddfbcb4ebc7f2f3bffff9256a48a25b988f4817f5c63f4caa1de"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "dlss5-bridge.addon64",
+          "entry": "",
+          "sha256": "4f2acecc1026ae89ac0b92767be66ceea2662ad0ef88710b89c7da7840d548d4",
+          "size": 508928
+        }
+      ],
+      "route": "native-bridge",
+      "url": "https://github.com/NIGos/dlss5-bridge/releases/download/v1.4.12/dlss5-bridge.addon64",
+      "profile": "",
+      "size": 508928,
+      "sha256": "4f2acecc1026ae89ac0b92767be66ceea2662ad0ef88710b89c7da7840d548d4"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "Shaders/DLSS5_Feed.fx",
+          "entry": "reshade-shaders/Shaders/DLSS5_Feed.fx",
+          "sha256": "c4ba1610df8e1593faa7c203d6d0517058d3a8ecf2dfda18ca67849844391456",
+          "size": 52600
+        },
+        {
+          "path": "dlss5-feed.addon64",
+          "entry": "dlss5-feed.addon64",
+          "sha256": "2b8c905012fd464ddf0554c6b178cba55030ec10eb917acdcee0e7a2376fe4dd",
+          "size": 343552
+        }
+      ],
+      "route": "feeder",
+      "url": "https://github.com/jlrouzies-fr/DLSS5-Feeder/releases/download/v1.19.0/DLSS5-Feeder-1.19.0.zip",
+      "profile": "",
+      "size": 503554,
+      "sha256": "9cc19e28f8fb4e216ea61621fdf6443e207e338ec639979ab335503c75f48f36"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "nvngx_dlss.dll",
+          "entry": "nvngx_dlss.dll",
+          "sha256": "3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983",
+          "size": 58956912
+        }
+      ],
+      "route": "feeder",
+      "url": "https://github.com/RankFTW/rhi-repo/releases/download/dlss-310.9.1/nvngx_dlss_310.9.1.zip",
+      "profile": "",
+      "size": 30263723,
+      "sha256": "aaba83b288bd145c3808e8d7a0ba03cc8c8676d18ad984b1bfa6563046a3ba37"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "nvngx_dlssnr.dll",
+          "entry": "nvngx_dlssnr.dll",
+          "sha256": "f95feb54137ea11979f9b4ec4f00afd84b5c98a5624d3388fbf6a87714a39fcc",
+          "size": 165840496
+        }
+      ],
+      "route": "",
+      "url": "https://github.com/RankFTW/rhi-repo/releases/download/dlssnr-310.8.Lecram/nvngx_dlssnr_310.8.Lecram.zip",
+      "profile": "rtx50",
+      "size": 116658260,
+      "sha256": "ddb64e5545ba3f217c32555d2eb8fdfe76b9510d2256f13e8a5ecb1a9650ca54"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "nvngx_dlssnr.dll",
+          "entry": "nvngx_dlssnr.dll",
+          "sha256": "6eb209e764f39872625debd6abaf45e2bb6322f6f270f781f70c059ae30b3927",
+          "size": 165830144
+        }
+      ],
+      "route": "",
+      "url": "https://github.com/RankFTW/rhi-repo/releases/download/dlssnr-310.8.SF-v2/nvngx_dlssnr_310.8.SF-v2.zip",
+      "profile": "rtx30",
+      "size": 116693212,
+      "sha256": "1da35941894994eb087e017577829e492454e9bae3a6a9397027069ceb74955c"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "licenses/LumeniteFX/LICENSE.md",
+          "entry": "LumeniteFX-f80e98d716ad72e12af6f7baa727bcfeb4be5094/LICENSE.md",
+          "sha256": "e7db77f66f2d17b832823a93ef9350c4e475c5887e13638b5dd1160ff0ba2f28",
+          "size": 4761
+        },
+        {
+          "path": "licenses/LumeniteFX/NOTICE",
+          "entry": "LumeniteFX-f80e98d716ad72e12af6f7baa727bcfeb4be5094/NOTICE",
+          "sha256": "dabc90a3c5c463cefe33b0252f0d8d383b88e9669532412ae13568dcbdeab0bb",
+          "size": 4728
+        },
+        {
+          "path": "Shaders/include/lumenite_ColorManagement.fxh",
+          "entry": "LumeniteFX-f80e98d716ad72e12af6f7baa727bcfeb4be5094/Shaders/include/lumenite_ColorManagement.fxh",
+          "sha256": "116d3c41cd48f7787a2ed87eefc65fb2d9083fc1ab609766a3fbcca3e62649a6",
+          "size": 7811
+        },
+        {
+          "path": "Shaders/include/lumenite_Compute.fxh",
+          "entry": "LumeniteFX-f80e98d716ad72e12af6f7baa727bcfeb4be5094/Shaders/include/lumenite_Compute.fxh",
+          "sha256": "736e3f39fc0c48a405c4d10b0d158502009db940e2673ff778e6b919d3c1a55f",
+          "size": 1843
+        },
+        {
+          "path": "Shaders/include/lumenite_Helpers.fxh",
+          "entry": "LumeniteFX-f80e98d716ad72e12af6f7baa727bcfeb4be5094/Shaders/include/lumenite_Helpers.fxh",
+          "sha256": "8826d613944be27e14095982b20098fff6d45e91c7d4028473c2f5b784c80028",
+          "size": 3270
+        },
+        {
+          "path": "Shaders/include/lumenite_Projections.fxh",
+          "entry": "LumeniteFX-f80e98d716ad72e12af6f7baa727bcfeb4be5094/Shaders/include/lumenite_Projections.fxh",
+          "sha256": "709ec414649b74e573ca0f12a5ef25998d332238f7cab14a3d91053c8d388cab",
+          "size": 3523
+        },
+        {
+          "path": "Shaders/lumenite_Kernel.fx",
+          "entry": "LumeniteFX-f80e98d716ad72e12af6f7baa727bcfeb4be5094/Shaders/lumenite_Kernel.fx",
+          "sha256": "869821002c97ead3424740d747af1972f9869adeb75288166f5ffdfa56b6c8ce",
+          "size": 73022
+        }
+      ],
+      "route": "feeder",
+      "url": "https://github.com/umar-afzaal/LumeniteFX/archive/f80e98d716ad72e12af6f7baa727bcfeb4be5094.zip",
+      "profile": "",
+      "size": 326266,
+      "sha256": "982a18507df0249118950ba68af52bb43d8cbd85458a4704f96e49de0b4d0e74"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "Shaders/ReShade.fxh",
+          "entry": "",
+          "sha256": "6dabfbbaf968c3871905d2ea17f96572ff7b1cec01310b5d0e5252b66b30174f",
+          "size": 4250
+        }
+      ],
+      "route": "feeder",
+      "url": "https://raw.githubusercontent.com/crosire/reshade-shaders/fd0022170615ce0d8162d219bff07232fa6dd84f/Shaders/ReShade.fxh",
+      "profile": "",
+      "size": 4250,
+      "sha256": "6dabfbbaf968c3871905d2ea17f96572ff7b1cec01310b5d0e5252b66b30174f"
+    },
+    {
+      "zipOffset": 0,
+      "zipLength": 0,
+      "files": [
+        {
+          "path": "Shaders/ReShadeUI.fxh",
+          "entry": "",
+          "sha256": "78adf672df47460297eb9fe6dd238d2aafa24510b52b84feb1a745dff70eb901",
+          "size": 9930
+        }
+      ],
+      "route": "feeder",
+      "url": "https://raw.githubusercontent.com/crosire/reshade-shaders/fd0022170615ce0d8162d219bff07232fa6dd84f/Shaders/ReShadeUI.fxh",
+      "profile": "",
+      "size": 9930,
+      "sha256": "78adf672df47460297eb9fe6dd238d2aafa24510b52b84feb1a745dff70eb901"
+    }
+  ],
+  "revision": "rhi-20261016-1"
+}

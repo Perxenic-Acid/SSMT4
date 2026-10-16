@@ -627,7 +627,7 @@ export class LaunchGame {
             let skipDlss5 = false;
             if (!pureDirectTarget && useRunInjector && targetExe) {
                 try {
-                    hotRuntime = await invoke<HotRuntimePlan | null>("prepare_gimi_hot_runtime", { gameName, gameExecutable: targetExe });
+                    hotRuntime = await invoke<HotRuntimePlan | null>("prepare_dlss5_hot_runtime", { gameName, gameExecutable: targetExe });
                 } catch (error) {
                     // 可选组件未配置或校验失败只影响本次 DLSS5，不改保存的启用状态。
                     skipDlss5 = true;

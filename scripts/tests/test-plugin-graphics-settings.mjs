@@ -158,7 +158,7 @@ test('switching the selected plugin keeps the pending log and clear action bound
 
 function graphics(t, options = {}) {
   const calls = [], messages = [], job = deferred();
-  const props = vue.reactive({ gameName: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe' });
+  const props = vue.reactive({ gameName: options.gameName ?? 'GIMI', targetExePath: options.targetExePath ?? 'C:/Game/YuanShen.exe' });
   const state = { root: 'C:/Assets/previous', profile: 'rtx50' };
   let pickerCount = 0;
   const s = component(t, '../../src/plugin/components/Dlss5GraphicsSettings.vue', [
@@ -167,9 +167,12 @@ function graphics(t, options = {}) {
     '@tauri-apps/api/core': { Channel: class {}, invoke: async (command, args) => {
       calls.push({ command, args });
       if (command === 'inspect_dlss5_game_state') return options.inspectState ? options.inspectState() : { state: 'not_managed' };
-      if (command === 'gimi_hot_runtime_status') return state;
-      if (command === 'inspect_dlss5_route_options') return { routes: ['gimi-hot'] };
-      if (command === 'download_gimi_hot_runtime') return job.promise;
+      if (command === 'gimi_hot_runtime_status' || command === 'dlss5_hot_runtime_status') {
+        if (options.statusError) throw new Error(options.statusError);
+        return state;
+      }
+      if (command === 'inspect_dlss5_route_options') return { routes: [options.route ?? 'gimi-hot'] };
+      if (command === 'download_gimi_hot_runtime' || command === 'download_dlss5_hot_runtime') return job.promise;
       if (command === 'import_gimi_hot_runtime') return {};
       throw new Error(`Unexpected command ${command}`);
     } },
@@ -198,6 +201,31 @@ test('automatic setup runs only on click, reports progress, and captures the sel
   assert.equal(pickerCount(), 0);
   assert.equal(s.graphicsActionBusy.value, false);
   assert.ok(!calls.some(call => call.command === 'install_managed_dlss5_route'));
+});
+
+test('崩铁、鸣潮及绝区零按各自路线下载，不调用 GIMI 或外部 Swapper', async t => {
+  for (const [gameName, executable, route] of [
+    ['SRMI', 'StarRail', 'ssmt-feeder'], ['WWMI', 'Client-Win64-Shipping', 'ssmt-native-bridge'],
+    ['ZZMI', 'ZenlessZoneZero', 'ssmt-native-bridge'], ['ZZMIDX12', 'ZenlessZoneZero', 'ssmt-native'],
+  ]) {
+    const { s, calls, job } = graphics(t, { gameName, targetExePath: `C:/Game/${executable}.exe`, route });
+    await s.refreshGraphicsState();
+    assert.ok(calls.some(call => call.command === 'dlss5_hot_runtime_status'));
+    assert.ok(!calls.some(call => call.command.includes('download')));
+    const pending = s.installSelectedDlss5Route();
+    assert.equal(calls.find(call => call.command === 'download_dlss5_hot_runtime').args.gameName, gameName);
+    job.resolve({}); await pending;
+    assert.ok(!calls.some(call => /gimi|swapper|install_managed/.test(call.command)));
+  }
+});
+
+test('损坏热注入组件仍保留自动下载修复入口', async t => {
+  const { s, calls, job } = graphics(t, { gameName: 'SRMI', targetExePath: 'C:/Game/StarRail.exe', route: 'ssmt-feeder', statusError: '组件哈希不匹配' });
+  await s.refreshGraphicsState();
+  assert.match(s.graphicsStatusError.value, /哈希/);
+  const pending = s.installSelectedDlss5Route();
+  assert.ok(calls.some(call => call.command === 'download_dlss5_hot_runtime'));
+  job.resolve({}); await pending;
 });
 
 test('clearing the executable while reading graphics state ends loading and discards the old response', async t => {

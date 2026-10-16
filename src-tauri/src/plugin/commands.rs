@@ -219,7 +219,7 @@ fn inspect_graphics_for_launch(
             Dlss5State::NotManaged
         },
     };
-    if dlss5_enabled && super::gimi_hot_runtime::applies(game_executable) {
+    if dlss5_enabled && (super::gimi_hot_runtime::applies(game_executable) || super::dlss5_hot_runtime::applies(game_executable)) {
         let clean = matches!(state.dlss5, Dlss5State::NotManaged);
         return Ok(GraphicsLaunchInspection {
             hoyoshade_requested,
@@ -238,8 +238,8 @@ fn inspect_graphics_for_launch(
                     vec![super::graphics_stack::GraphicsCompatibilityIssue {
                         level: CompatibilityLevel::Conflict,
                         components: vec![DLSS5_PLUGIN_ID.into()],
-                        code: "gimi_legacy_cold_install".into(),
-                        message: "原神只允许热注入。请先在 DLSS5 设置中恢复旧的 Swapper 安装，再导入 GIMI 热注入组件。".into(),
+                        code: if super::gimi_hot_runtime::applies(game_executable) { "gimi_legacy_cold_install" } else { "dlss5_legacy_cold_install" }.into(),
+                        message: "当前 DLSS5 路线使用热注入。请先在 DLSS5 设置中恢复旧的 Swapper 安装，再配置热注入组件。".into(),
                         possible_actions: vec![super::graphics_stack::GraphicsConflictAction::CancelLaunch],
                     }]
                 },
@@ -382,7 +382,11 @@ pub fn inspect_dlss5_route_options(
     let registry = PluginRegistry::from_default_location()
         .map_err(|error| error.to_string())?
         .for_game(&game_name);
-    managed_stack::inspect_routes(&registry, &PathBuf::from(game_executable), &api_override)
+    let executable = PathBuf::from(game_executable);
+    if super::dlss5_hot_runtime::applies(&executable) {
+        return super::dlss5_hot_runtime::route_scan(&registry, &game_scope_preset(&game_name), &executable, &api_override);
+    }
+    managed_stack::inspect_routes(&registry, &executable, &api_override)
 }
 
 #[tauri::command]
@@ -739,14 +743,15 @@ pub fn prepare_hoyoshade_launch(
         return Ok(None);
     };
     let game_executable = PathBuf::from(game_executable);
-    let skip_dlss5 = skip_dlss5.unwrap_or(false) && super::gimi_hot_runtime::applies(&game_executable);
-    if super::gimi_hot_runtime::applies(&game_executable)
+    let hot_route = super::gimi_hot_runtime::applies(&game_executable) || super::dlss5_hot_runtime::applies(&game_executable);
+    let skip_dlss5 = skip_dlss5.unwrap_or(false) && hot_route;
+    if hot_route
         && !skip_dlss5
         && registry
             .find(DLSS5_PLUGIN_ID)
             .is_some_and(|plugin| plugin.enabled)
     {
-        return Err("原神 DLSS5 必须由热注入计划启动，不能另起 ReShade 注入器".into());
+        return Err("当前游戏的 DLSS5 必须由热注入计划启动，不能另起 ReShade 注入器".into());
     }
     let inspection = inspect_graphics_for_launch(&registry, &game_executable, skip_dlss5)?;
     if !should_launch_hoyoshade(&inspection, graphics_decision)? {
@@ -1029,7 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn gimi_hot_preflight_covers_official_plugin_combinations() {
+    fn hot_preflight_covers_every_game_and_official_plugin_combination() {
         let root = std::env::temp_dir().join(format!(
             "ssmt-gimi-combinations-{}",
             SystemTime::now()
@@ -1075,15 +1080,22 @@ mod tests {
                 combinations.push(vec![id.clone(), other.clone()]);
             }
         }
-        for combination in combinations {
+        for (preset, name) in [("GIMI", "YuanShen.exe"), ("SRMI", "StarRail.exe"),
+            ("WWMI", "Client-Win64-Shipping.exe"), ("ZZMI", "ZenlessZoneZero.exe"), ("ZZMIDX12", "ZenlessZoneZero.exe")] {
+          let executable = game.join(name);
+          fs::write(&executable, b"fixture").unwrap();
+          for combination in &combinations {
             for id in &ids {
+                let compatible = registry.find(id).unwrap().manifest.compatibility.supports_game(preset);
                 registry
-                    .set_game_enabled("GIMI", id, combination.contains(id))
+                    .set_game_enabled(preset, id, compatible && combination.contains(id))
                     .unwrap();
             }
-            let scoped = registry.for_game("GIMI");
+            let scoped = registry.for_game(preset);
             let dlss5 = combination.iter().any(|id| id == "ssmt.dlss5.integration");
-            let shade = combination.iter().any(|id| id == "ssmt.hoyoshade.bridge");
+            let shade = combination.iter().any(|id| id == super::super::hoyoshade::HOYOSHADE_PLUGIN_ID)
+                && scoped.find(super::super::hoyoshade::HOYOSHADE_PLUGIN_ID).is_some_and(|plugin|
+                    super::super::hoyoshade::HoYoShadeBridge::from_installed(plugin).unwrap().supports_process(name));
             let clean = inspect_graphics_for_executable(&scoped, &executable).unwrap();
             assert_eq!(clean.resolution.level, CompatibilityLevel::Compatible);
             assert_eq!(clean.host_requested, dlss5 || shade);
@@ -1102,6 +1114,7 @@ mod tests {
             assert_eq!(fallback.host_requested, shade);
             assert_eq!(fallback.resolution.level, CompatibilityLevel::Compatible);
             fs::remove_file(game.join("_DLSS5_Backup/manifest.json")).unwrap();
+          }
         }
         fs::remove_dir_all(root).unwrap();
     }

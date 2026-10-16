@@ -33,3 +33,5 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 - 主仓库与 Native 子仓库分别检查 diff；仅在用户要求提交时，先提交 Native 源码，再提交主仓库及子模块指针。不运行主应用发布包构建脚本。
 
 只将已证实、可复用的经验留在本 skill；单次 PID、个人游戏路径、哈希和测试输出放在诊断报告或忽略的构建目录。
+
+- 扩展 DLSS5 游戏时先区分无原生输入、DX11 原生输入与 DX12 原生输入，再按真实 `gamePreset` 和 EXE 联合选择 Feeder / DX11 Bridge / 原生 consumer。Feeder 必须配齐运动矢量 FX、公共 include 及明确的 technique 顺序；不能把 GIMI FSR2 Bridge 套到其他游戏。下载时校验归档及提取项，ReShade 安装程序仅读取固定哈希对应的内嵌 ZIP，绝不执行。共用一个热注入 Host 与启用贡献组合器，状态检查失败也必须保留重新下载入口。离线实组件提取、接口共存、游戏内成功 NR 帧分开验收。

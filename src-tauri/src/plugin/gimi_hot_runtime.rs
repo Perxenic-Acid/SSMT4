@@ -112,7 +112,7 @@ fn profile_files(profile: &str) -> Result<(String, Vec<(String, String)>), Strin
     Ok((directory, files))
 }
 
-fn canonical_path(path: &Path) -> Result<PathBuf, std::io::Error> {
+pub(super) fn canonical_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     let canonical = path.canonicalize()?;
     // canonicalize 在 Windows 返回 \\?\ 路径；第三方 INI/路径拼接可能含正斜杠，
     // 不满足 verbatim 路径规则。身份校验后以普通绝对路径传给组件。
@@ -128,7 +128,7 @@ fn canonical_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(canonical)
 }
 
-fn checked_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub(super) fn checked_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let canonical = canonical_path(&root.join(relative))
         .map_err(|error| format!("热注入组件缺失 {relative}：{error}"))?;
     if !canonical.starts_with(root) || !canonical.is_file() {
@@ -137,7 +137,7 @@ fn checked_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn verify(path: &Path, expected: &str) -> Result<(), String> {
+pub(super) fn verify(path: &Path, expected: &str) -> Result<(), String> {
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let length = file.metadata().map_err(|error| error.to_string())?.len();
     if length == 0 || length > 256 * 1024 * 1024 {
@@ -174,7 +174,7 @@ fn validate(installation: &HotRuntimeInstallation) -> Result<(PathBuf, String), 
     Ok((root, addon))
 }
 
-fn read_text(path: &Path) -> Result<String, String> {
+pub(super) fn read_text(path: &Path) -> Result<String, String> {
     if fs::metadata(path).map_err(|error| error.to_string())?.len() > 4 * 1024 * 1024 {
         return Err(format!("配置文件过大：{}", path.display()));
     }
@@ -183,7 +183,7 @@ fn read_text(path: &Path) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
-fn rebase_search_paths(text: &mut String, base: &Path) {
+pub(super) fn rebase_search_paths(text: &mut String, base: &Path) {
     for key in ["EffectSearchPaths", "TextureSearchPaths"] {
         let value = text.lines().find_map(|line| {
             line.trim()
@@ -217,78 +217,10 @@ fn prepare_at(
     let bridge = bridge::stage(registry, &root)?;
     let reshade = root.join("state/reshade-runtime");
     fs::create_dir_all(&reshade).map_err(|error| error.to_string())?;
-    // FX 贡献跟随 Shade Bridge 的按游戏启用状态，DLSS5 独立启用不加载其效果。
-    let mut base = String::new();
-    let mut preset = String::new();
-    let mut addons = vec!["nr-before-sr.zh-CN.addon64".to_string()];
-    if let Some(plugin) = registry
-        .find(HOYOSHADE_PLUGIN_ID)
-        .filter(|plugin| plugin.enabled)
-    {
-        let dependency = plugin
-            .external_dependencies
-            .get(HOYOSHADE_DEPENDENCY_ID)
-            .filter(|dependency| {
-                dependency.status == super::registry::ExternalDependencyStatus::Ready
-            })
-            .and_then(|dependency| dependency.path.as_ref())
-            .ok_or("Shade Bridge 的资源目录尚未就绪")?;
-        let dependency = canonical_path(dependency).map_err(|error| error.to_string())?;
-        base = read_text(&checked_path(&dependency, "ReShade.ini")?)?;
-        rebase_search_paths(&mut base, &dependency);
-        let source_preset = dependency.join("Presets/Mod OFF.ini");
-        if source_preset.is_file() {
-            preset = read_text(&source_preset)?;
-        }
-        let sources = dependency.join("reshade-shaders/Addons");
-        if sources.is_dir() {
-            for entry in fs::read_dir(&sources).map_err(|error| error.to_string())? {
-                let path = entry.map_err(|error| error.to_string())?.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let name = path
-                    .file_name()
-                    .ok_or("Shade Add-on 文件名无效")?
-                    .to_string_lossy()
-                    .into_owned();
-                if !name.to_ascii_lowercase().ends_with(".addon64") {
-                    continue;
-                }
-                if addons.iter().any(|other| other.eq_ignore_ascii_case(&name)) {
-                    return Err(format!("Add-on 资源所有权冲突：{name}"));
-                }
-                let canonical = canonical_path(&path).map_err(|error| error.to_string())?;
-                if !canonical.starts_with(&dependency) {
-                    return Err("Shade Add-on 越出声明的资源目录".into());
-                }
-                fs::copy(canonical, root.join(&addon).join(&name))
-                    .map_err(|error| error.to_string())?;
-                addons.push(name);
-            }
-        }
-    }
-    // 启用组合改变时清除上次贡献的 Add-on，不能让未启用的插件继续加载。
-    for entry in fs::read_dir(root.join(&addon)).map_err(|error| error.to_string())? {
-        let path = entry.map_err(|error| error.to_string())?.path();
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if name.to_ascii_lowercase().ends_with(".addon64")
-            && !addons
-                .iter()
-                .any(|active| active.eq_ignore_ascii_case(&name))
-        {
-            fs::remove_file(path).map_err(|error| error.to_string())?;
-        }
-    }
-    // 只强制启用本路线所需的 NR；Shade 自己禁用的 Add-on 必须继续保持禁用。
-    let mut composed = managed_reshade::compose(
-        &base,
-        "",
-        &preset,
-        "",
-        &["nr-before-sr.zh-CN.addon64".into()],
-    )
-    .map_err(|error| error.to_string())?;
+    let mut composed = super::hot_reshade::compose(
+        registry, &root.join(&addon),
+        &["nr-before-sr.zh-CN.addon64".into()], "", "",
+    )?;
     for (section, key, value) in [
         (
             "ADDON",
@@ -458,7 +390,7 @@ fn import_at(
     Ok(installation)
 }
 
-fn ensure_stopped(executable: &Path) -> Result<(), String> {
+pub(super) fn ensure_stopped(executable: &Path) -> Result<(), String> {
     let mut system = sysinfo::System::new();
     system.refresh_processes_specifics(
         sysinfo::ProcessRefreshKind::new().with_exe(sysinfo::UpdateKind::Always),
@@ -473,7 +405,7 @@ fn ensure_stopped(executable: &Path) -> Result<(), String> {
             .as_ref()
             == Some(&canonical)
     }) {
-        return Err("请关闭原神后再准备热注入组件".into());
+        return Err("请关闭游戏后再准备热注入组件".into());
     }
     Ok(())
 }

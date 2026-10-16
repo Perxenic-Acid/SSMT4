@@ -8,6 +8,8 @@ pub mod dlss5;
 pub mod external_manager;
 pub mod graphics_stack;
 pub mod gimi_hot_runtime;
+pub mod dlss5_hot_runtime;
+mod hot_reshade;
 pub mod hoyoshade;
 pub mod launch_barrier;
 pub mod launch_coordinator;
