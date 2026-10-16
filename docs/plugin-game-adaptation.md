@@ -24,6 +24,10 @@
 
 插件市场 → 选择游戏 → 已启用的 DLSS5 → 功能设置 → 选择显卡 → 自动下载并配置。原神继续使用原有组件包；其他三款游戏使用 `dlss5_hot_assets.json` 固定的 ReShade 6.8.0、NR consumer 6.5.3、Bridge 1.4.12、Feeder 1.19.0 和配套 snippet。新增组件存放在 `PluginAssets/ssmt.dlss5.integration/hot/`，启动前合并启用的 Shade Bridge 贡献，只注入一个 Host。
 
+已有 RHI / ReShade 安装需先通过原管理器恢复。准备时检查游戏目录的 `dxgi.dll` / `d3d11.dll` 和 `ReShade.ini` 中的 `INSTALL.BasePath`，发现冲突只跳过本次 DLSS5 并提示，不覆盖原文件。ReShade 6.8.0 的游戏目录 BasePath 优先于环境变量，单设 `RESHADE_BASE_PATH_OVERRIDE` 无法隔离旧安装。运行后在自有组件目录查看 `ReShade.log`，Feeder 路线还可查看 `dlss5-feed.log`；只有成功加载日志不能认定 NR 已执行。
+
+手动等待或通过外部官方启动器创建进程时无法继承这条热注入计划，因此本次仅跳过 DLSS5，并继续原启动方式。Shell 直接指向同一个游戏 EXE 时仍可由 Run.exe 挂起创建并继承环境；计划与 PluginHost、额外 DLL 顺序一起传递。相关启动队列回归保存在 `scripts/tests/test-efmi-launch.mjs`。
+
 已核验所有下载包及实际提取文件。六组路线 / 显卡组合均通过真实组件解压、完整性与配置检查。另用现有 Runtime Context 夹具验证 Feeder + consumer、DX11 Bridge + consumer 的热加载及 WARP Context 调用，两项退出码均为 0，ReShade 日志确认对应 Add-on 加载。该夹具没有游戏帧和 DLSS 请求，不能证明运动矢量质量、DX12 游戏兼容或 NR 已生效。
 
 真实组件检查默认忽略，需要显式指定本地核验包目录后执行：

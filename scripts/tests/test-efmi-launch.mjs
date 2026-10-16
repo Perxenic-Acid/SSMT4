@@ -17,7 +17,7 @@ function load(relative, mocks) {
   return exports;
 }
 
-function harness(config, hostConfig = null) {
+function harness(config, hostConfig = null, hotRuntime = null) {
   let ini = '[Loader]\nloader = XXMI Launcher.exe\nlaunch = C:/old.exe\nlaunch_args = old\nmodule = d3d11.dll\n';
   const calls = [];
   const messages = [];
@@ -48,7 +48,7 @@ function harness(config, hostConfig = null) {
       calls.push({ command, args });
       if (command === 'prepare_plugin_host_config') return hostConfig;
       if (command === 'prepare_hoyoshade_launch') return null;
-      if (command === 'prepare_gimi_hot_runtime') return null;
+      if (command === 'prepare_dlss5_hot_runtime') return typeof hotRuntime === 'function' ? hotRuntime() : hotRuntime;
       if (command === 'launch_programs') return;
       assert.fail(`Unexpected IPC: ${command}`);
     } },
@@ -146,4 +146,47 @@ test('EFMI manual wait requires an explicit executable path', async () => {
   assert.equal(await h.preflight('EFMI', {}, false), null);
   assert.equal(h.messages[0].kind, 'warning');
   assert.equal(h.calls.length, 0);
+});
+
+const hotPlan = {
+  dlls: ['C:/SSMT/Owned/ReShade64.dll'], runtimeDirectory: 'C:/SSMT/Owned',
+  environment: { RESHADE_BASE_PATH_OVERRIDE: 'C:/SSMT/Owned', RESHADE_DISABLE_GRAPHICS_HOOK: null },
+};
+
+test('各游戏热注入计划合并进单次挂起启动，保留 PluginHost，不再启动第二套 Shade 注入器', async () => {
+  for (const [preset, name] of [['SRMI', 'StarRail'], ['WWMI', 'Client-Win64-Shipping'], ['ZZMI', 'ZenlessZoneZero'], ['ZZMIDX12', 'ZenlessZoneZero']]) {
+    const target = `C:/Game/${name}.exe`;
+    const h = harness({ ...base, gamePreset: preset, targetExePath: target, useShell: true, launcherExePath: target }, 'C:/Plugins/host.json', hotPlan);
+    await h.launch.launch(preset, { gameLaunchMode: 'always-normal' }, () => {});
+    const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+    assert.equal(programs.filter(program => program.path.endsWith('/Run.exe')).length, 1);
+    assert.ok(!programs.some(program => program.path === target));
+    assert.match(programs[0].args, /--preload-runtime/);
+    assert.match(programs[0].args, /--set-env "RESHADE_BASE_PATH_OVERRIDE=C:\/SSMT\/Owned"/);
+    assert.match(programs[0].args, /--unset-env RESHADE_DISABLE_GRAPHICS_HOOK/);
+    assert.match(programs[0].args, /--plugin-host-config/);
+    assert.match(h.ini(), /inject_dlls = C:\/SSMT\/Owned\/ReShade64.dll/);
+    assert.ok(!h.calls.some(call => call.command === 'prepare_hoyoshade_launch'));
+    assert.ok(!h.messages.some(message => message.kind === 'warning'));
+  }
+});
+
+test('手动等待或外部启动器无法继承热注入环境时只跳过 DLSS5，保留原启动方式', async () => {
+  for (const launchTargetProgram of [false, true]) {
+    const launcher = 'C:/Official/Launcher.exe';
+    const h = harness({ ...base, gamePreset: 'SRMI', targetExePath: 'C:/Game/StarRail.exe', useShell: true, launchTargetProgram, launcherExePath: launcher }, null, hotPlan);
+    await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
+    const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+    assert.doesNotMatch(programs[0].args || '', /--preload-runtime|--set-env/);
+    assert.equal(programs.some(program => program.path === launcher), launchTargetProgram);
+    assert.ok(h.messages.some(message => message.kind === 'warning'));
+  }
+});
+
+test('热注入组件准备失败仍提交普通启动队列并传递插件跳过状态', async () => {
+  const h = harness({ ...base, gamePreset: 'SRMI', targetExePath: 'C:/Game/StarRail.exe' }, null, () => { throw new Error('组件损坏'); });
+  await h.launch.launch('SRMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.ok(h.calls.some(call => call.command === 'launch_programs'));
+  assert.equal(h.calls.find(call => call.command === 'prepare_hoyoshade_launch').args.skipDlss5, true);
+  assert.ok(h.messages.some(message => message.kind === 'warning'));
 });

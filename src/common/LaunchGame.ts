@@ -640,20 +640,29 @@ export class LaunchGame {
                 }
             }
             if (hotRuntime) {
+                let unavailable = "";
                 if (!launchTargetProgram) {
-                    throw new Error(t("launchGame.messages.gimiHotManualLaunchUnsupported"));
-                }
-                if (useShell) {
+                    unavailable = t("launchGame.messages.gimiHotManualLaunchUnsupported");
+                } else if (useShell) {
                     const [launcherPath, targetPath] = await Promise.all([join(launcherExePath), join(targetExe)]);
                     const comparablePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").toLowerCase();
                     if (comparablePath(launcherPath) !== comparablePath(targetPath)) {
-                        throw new Error(t("launchGame.messages.gimiHotExternalLauncherUnsupported", {
+                        unavailable = t("launchGame.messages.gimiHotExternalLauncherUnsupported", {
                             launcher: launcherExePath, target: targetExe,
-                        }));
+                        });
+                    } else {
+                        // Shell 指向同一个游戏时由 Run.exe 创建，以显式继承热注入环境。
+                        useShell = false;
                     }
-                    // Shell 可以直接指向游戏。仅本次改由 Run.exe 创建目标，
-                    // 以便注入前设置环境；INI 与队列必须一起切换，避免遗漏或重复启动。
-                    useShell = false;
+                }
+                if (unavailable) {
+                    hotRuntime = null;
+                    skipDlss5 = true;
+                    ElMessage.warning({
+                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "DLSS5", error: unavailable }),
+                        showClose: true,
+                        duration: 12000,
+                    });
                 }
             }
             let hoyoshade: PluginLaunchProgram | null = null;

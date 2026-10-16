@@ -497,6 +497,35 @@ fn prepare_at(
     })
 }
 
+fn ensure_no_external_host(executable: &Path) -> Result<(), String> {
+    let game = executable.parent().ok_or("游戏目录无效")?;
+    for name in ["dxgi.dll", "d3d11.dll"] {
+        if game.join(name).exists() {
+            return Err(format!("游戏目录存在图形代理 {name}，无法确认单一 ReShade Host。请确认来源并通过原管理器恢复 RHI / ReShade 安装后再使用 SSMT 热注入；SSMT 不会覆盖原文件"));
+        }
+    }
+    // ReShade 先读取游戏目录的 INSTALL.BasePath，再读取环境变量；旧配置也会劫走自有 Host。
+    let ini = game.join("ReShade.ini");
+    if ini.is_file() {
+        let text = gimi_hot_runtime::read_text(&ini)?;
+        let mut install = false;
+        for line in text.lines().map(str::trim) {
+            if line.starts_with('[') && line.ends_with(']') {
+                install = line[1..line.len() - 1]
+                    .trim()
+                    .eq_ignore_ascii_case("INSTALL");
+            } else if install {
+                if let Some((key, value)) = line.split_once('=') {
+                    if key.trim().eq_ignore_ascii_case("BasePath") && !value.trim().is_empty() {
+                        return Err("游戏目录的 ReShade.ini 指向另一套 BasePath，请通过原管理器恢复该配置后再使用 SSMT 热注入；SSMT 不会修改原配置".into());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn prepare_dlss5_hot_runtime(
     game_name: String,
@@ -524,6 +553,7 @@ pub fn prepare_dlss5_hot_runtime(
     ) {
         return Err("请先在 DLSS5 设置中恢复旧的 Swapper 安装，再配置 SSMT 热注入组件".into());
     }
+    ensure_no_external_host(executable)?;
     let installation =
         load(&game_name)?.ok_or("DLSS5 组件尚未配置，请到插件市场的功能设置中自动下载并配置")?;
     require_owned(&installation)?;
@@ -536,6 +566,44 @@ pub fn prepare_dlss5_hot_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreign_proxy_and_base_path_cannot_redirect_or_duplicate_the_managed_host() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-foreign-host-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir(&root).unwrap();
+        let exe = root.join("StarRail.exe");
+        assert!(ensure_no_external_host(&exe).is_ok());
+        for name in ["dxgi.dll", "d3d11.dll"] {
+            fs::write(root.join(name), b"foreign owner").unwrap();
+            assert!(ensure_no_external_host(&exe).unwrap_err().contains(name));
+            assert_eq!(fs::read(root.join(name)).unwrap(), b"foreign owner");
+            fs::remove_file(root.join(name)).unwrap();
+        }
+        let foreign = "\u{feff}[install]\nBasePath=D:/RHI/Owned\n";
+        fs::write(root.join("ReShade.ini"), foreign).unwrap();
+        assert!(ensure_no_external_host(&exe)
+            .unwrap_err()
+            .contains("BasePath"));
+        assert_eq!(
+            fs::read_to_string(root.join("ReShade.ini")).unwrap(),
+            foreign
+        );
+        fs::write(
+            root.join("ReShade.ini"),
+            "[GENERAL]\nPresetPath=MyPreset.ini\n",
+        )
+        .unwrap();
+        assert!(ensure_no_external_host(&exe).is_ok());
+        let canonical = root.canonicalize().unwrap();
+        assert_eq!(
+            canonical.parent(),
+            Some(std::env::temp_dir().canonicalize().unwrap().as_path())
+        );
+        fs::remove_dir_all(canonical).unwrap();
+    }
 
     #[test]
     fn routes_require_both_actual_preset_and_target() {

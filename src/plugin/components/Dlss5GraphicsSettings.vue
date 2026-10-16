@@ -295,7 +295,7 @@ onUnmounted(() => {
       <p>{{ graphicsSelectedRoute === 'ssmt-feeder'
         ? label('崩铁使用 Feeder 与 Lumenite 运动矢量效果补齐输入，无需游戏原生 DLSS。', 'Star Rail uses Feeder and Lumenite motion vectors without native DLSS.')
         : label('请在游戏内开启 DLSS；DX11 / DX12 必须与当前游戏预设一致。', 'Enable DLSS in game and match the DX11 / DX12 game preset.') }}</p>
-      <p>{{ label('请先关闭游戏，再自动下载。组件位于 SSMT 自有目录，通过 SSMT 直接启动时热注入；若已有 Swapper 安装，请先恢复。', 'Close the game before setup. Components live in SSMT storage and are hot-injected on direct launch. Restore any previous Swapper installation first.') }}</p>
+      <p>{{ label('请先关闭游戏，再自动下载。组件位于 SSMT 自有目录，通过 SSMT 直接启动时热注入；若已有 Swapper 或 RHI / ReShade 安装，请先通过原管理器恢复，避免重复加载 Host。', 'Close the game before setup. Components live in SSMT storage and are hot-injected on direct launch. Restore any previous Swapper or RHI / ReShade installation through its manager to avoid duplicate hosts.') }}</p>
       <p>{{ label('组件按固定版本、大小及哈希校验，来自 ReShade、Feeder、DX11 Bridge、LumeniteFX 和 RHI 组件库。配置完成后仍需游戏内确认 NR 生效。', 'Pinned components are verified by size and hash, from ReShade, Feeder, DX11 Bridge, LumeniteFX and the RHI component repository. Verify NR rendering in game after setup.') }}</p>
       <code v-if="hotRuntime">{{ hotRuntime.root }}</code>
     </div>

@@ -1,6 +1,5 @@
 use super::{
     dlss5::DLSS5_PLUGIN_ID,
-    hoyoshade::{HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID},
     managed_reshade,
     registry::PluginRegistry,
     settings::PluginSettingsStore,
@@ -468,6 +467,7 @@ pub fn prepare_gimi_hot_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::hoyoshade::{HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
 
     #[test]
     fn optiscaler_templates_select_dx11_input_and_keep_user_options() {
