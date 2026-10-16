@@ -1,3 +1,6 @@
+#[path = "dlss5_hot_catalog.rs"]
+pub mod catalog;
+
 use super::{
     dlss5::{Dlss5State, DLSS5_PLUGIN_ID},
     gimi_hot_runtime::{
@@ -28,16 +31,18 @@ pub struct Installation {
     profile: String,
     route: String,
     revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    baseline: Option<Manifest>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
     revision: String,
     assets: Vec<Asset>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Asset {
     url: String,
@@ -50,7 +55,7 @@ struct Asset {
     files: Vec<AssetFile>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AssetFile {
     entry: String,
@@ -181,11 +186,17 @@ fn selected<'a>(
         })
         .collect::<Vec<_>>();
     let mut names = HashSet::new();
+    if manifest.assets.len() > 64 || manifest.revision.is_empty() || assets.is_empty() { return Err("DLSS5 组件清单为空或过大".into()); }
     for asset in &assets {
+        let url = reqwest::Url::parse(&asset.url).map_err(|e| e.to_string())?;
+        if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
+            || asset.size == 0 || asset.size > 1024 * 1024 * 1024 || asset.files.is_empty() || asset.files.len() > 256
+            || asset.sha256.len() != 64 || !asset.sha256.bytes().all(|c| c.is_ascii_hexdigit()) { return Err("DLSS5 下载声明无效".into()); }
         for file in &asset.files {
             if !safe_relative(&file.path)
                 || file.size == 0
                 || file.size > 256 * 1024 * 1024
+                || file.sha256.len() != 64 || !file.sha256.bytes().all(|c| c.is_ascii_hexdigit())
                 || !names.insert(file.path.to_ascii_lowercase())
             {
                 return Err("DLSS5 组件清单含无效或重复目标".into());
@@ -196,7 +207,8 @@ fn selected<'a>(
 }
 
 fn safe_relative(name: &str) -> bool {
-    !name.is_empty()
+    super::validate_package_relative_path(name).is_ok()
+        && !name.is_empty()
         && !name.contains(['\\', ':'])
         && Path::new(name)
             .components()
@@ -244,9 +256,9 @@ fn load(game_name: &str) -> Result<Option<Installation>, String> {
         .get(DLSS5_PLUGIN_ID, &setting_key(game_name))
         .map_err(|error| error.to_string())?
         .map(|value| {
-            serde_json::from_value(value).map_err(|error| format!("DLSS5 组件设置无效：{error}"))
+            if value.is_null() { Ok(None) } else { serde_json::from_value(value).map(Some).map_err(|error| format!("DLSS5 组件设置无效：{error}")) }
         })
-        .transpose()
+        .transpose().map(Option::flatten)
 }
 
 pub(super) fn log_path(game_name: &str) -> Result<Option<PathBuf>, String> {
@@ -267,11 +279,12 @@ fn require_owned(installation: &Installation) -> Result<(), String> {
 }
 
 fn validate(installation: &Installation, manifest: &Manifest) -> Result<PathBuf, String> {
+    let manifest = installation.baseline.as_ref().unwrap_or(manifest);
     if installation.revision != manifest.revision {
         return Err("DLSS5 组件版本已改变，请重新配置".into());
     }
     let root = canonical_path(&installation.root).map_err(|error| error.to_string())?;
-    for asset in selected(&manifest, &installation.route, &installation.profile)? {
+    for asset in selected(manifest, &installation.route, &installation.profile)? {
         for file in &asset.files {
             let path = checked_path(&root, &file.path)?;
             if fs::metadata(&path)
@@ -456,22 +469,14 @@ pub async fn download_dlss5_hot_runtime(
         profile,
         route: route.clone(),
         revision: manifest.revision.clone(),
+        baseline: Some(manifest.clone()),
     };
     validate(&installation, &manifest)?;
     let (current_route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
     if current_route != route {
         return Err("下载期间游戏预设已改变，请重新配置".into());
     }
-    PluginSettingsStore::from_default_location()
-        .map_err(|error| error.to_string())?
-        .set_many(
-            DLSS5_PLUGIN_ID,
-            [
-                (setting_key(&game_name), serde_json::to_value(&installation).map_err(|error| error.to_string())?),
-                (active_route_key(&game_name), serde_json::Value::from(format!("ssmt-{route}"))),
-            ],
-        )
-        .map_err(|error| error.to_string())?;
+    catalog::record_installation(&game_name, &installation)?;
     pending.1 = true;
     Ok(installation)
 }
@@ -618,6 +623,7 @@ pub fn prepare_dlss5_hot_runtime(
     if !enabled(&registry) {
         return Ok(None);
     }
+    let _lock = INSTALL_LOCK.try_lock().map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
     let (route, _) = route_for_registry(&registry, &game_scope_preset(&game_name), executable)?;
     if gimi_hot_runtime::applies(executable) && gimi_route(&game_name)? == "gimi-hot" {
         return gimi_hot_runtime::prepare_gimi_hot_runtime(game_name, game_executable);
@@ -796,6 +802,7 @@ mod tests {
                     route: route.into(),
                     profile: profile.into(),
                     revision: manifest.revision.clone(),
+                    baseline: None,
                 };
                 let plan = prepare_at(&registry, &installation).unwrap();
                 assert_eq!(plan.dlls.len(), if route == "feeder" { 2 } else { 1 });

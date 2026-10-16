@@ -12,6 +12,9 @@ const { t, locale } = useI18n();
 const label = (zh: string, en: string) => String(locale.value).startsWith('zh') ? zh : en;
 const hotRuntime = ref<{ root: string; profile: string } | null>(null);
 const hotRuntimes = ref<Record<string, { root: string; profile: string }>>({});
+interface HotHistoryEntry { root: string; profile: string; route: string; revision: string; current: boolean; usable: boolean; reason?: string | null }
+const hotHistory = ref<HotHistoryEntry[]>([]);
+const historySelection = ref('');
 const hotProfile = ref('rtx50');
 const downloadProgress = ref<{ phase: string; downloadedBytes: number; totalBytes: number } | null>(null);
 const isGimi = () => /(?:^|[\\/])(?:YuanShen|GenshinImpact)\.exe$/i.test(props.targetExePath.trim());
@@ -72,6 +75,8 @@ const refreshGraphicsState = async () => {
   graphicsRouteScan.value = null;
   hotRuntime.value = null;
   hotRuntimes.value = {};
+  hotHistory.value = [];
+  historySelection.value = '';
   graphicsStateLoading.value = false;
   if (!target) return;
   graphicsStateLoading.value = true;
@@ -116,6 +121,15 @@ const refreshGraphicsState = async () => {
         if (!routes.routes.includes(graphicsSelectedRoute.value)) graphicsSelectedRoute.value = routes.installedRoute && routes.routes.includes(routes.installedRoute) ? routes.installedRoute : routes.routes[0] || '';
         if (isGimi()) hotRuntime.value = hotRuntimes.value[graphicsSelectedRoute.value] || null;
         if (hotRuntime.value) hotProfile.value = hotRuntime.value.profile;
+      }
+    } catch (error) {
+      if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
+    }
+    try {
+      const history = await invoke<HotHistoryEntry[]>('dlss5_hot_runtime_history', { gameName: props.gameName });
+      if (requestId === graphicsRequestId) {
+        hotHistory.value = history;
+        historySelection.value = history.find(item => item.current)?.root || history[0]?.root || '';
       }
     } catch (error) {
       if (requestId === graphicsRequestId) graphicsStatusError.value = String(error);
@@ -196,10 +210,33 @@ const restoreDlss5Route = async () => {
   }
 };
 
+const manageHotHistory = async (remove = false) => {
+  if (graphicsActionBusy.value || !historySelection.value) return;
+  const gameName = props.gameName, gameExecutable = props.targetExePath.trim(), root = historySelection.value;
+  if (!gameExecutable) return;
+  graphicsActionBusy.value = true;
+  try {
+    if (remove) {
+      try {
+        await ElMessageBox.confirm(label(`清理这套热组件及其配置、预设和日志？\n${root}\n游戏目录和下载缓存将保留。`, `Remove this hot installation, including its settings, presets and logs?\n${root}\nGame files and download cache are retained.`), label('清理热组件', 'Remove hot components'), { type: 'warning' });
+      } catch { return; }
+    }
+    if (props.gameName !== gameName || props.targetExePath.trim() !== gameExecutable) return;
+    await invoke(remove ? 'remove_dlss5_hot_runtime' : 'select_dlss5_hot_runtime', { gameName, gameExecutable, root });
+    ElMessage.success(remove ? label('热组件已清理', 'Hot components removed') : label('已选择这套组件，下次启动生效', 'Selected components apply on the next launch'));
+    if (props.gameName === gameName && props.targetExePath.trim() === gameExecutable) await refreshGraphicsState();
+  } catch (error) {
+    if (props.gameName === gameName) graphicsStatusError.value = String(error);
+    ElMessage.error(String(error));
+  } finally { graphicsActionBusy.value = false; }
+};
+
 watch(() => [props.gameName, props.targetExePath, graphicsApiOverride.value], () => {
   ++graphicsRequestId;
   hotRuntime.value = null;
   hotRuntimes.value = {};
+  hotHistory.value = [];
+  historySelection.value = '';
   dlss5State.value = null;
   dlss5LastRun.value = null;
   availableGraphicsRoutes.value = [];
@@ -290,6 +327,18 @@ onUnmounted(() => {
         <span>{{ (downloadProgress.downloadedBytes / 1048576).toFixed(1) }} / {{ (downloadProgress.totalBytes / 1048576).toFixed(1) }} MiB</span>
       </div>
       <el-progress :percentage="Math.min(100, Math.floor(downloadProgress.downloadedBytes * 100 / Math.max(1, downloadProgress.totalBytes)))" />
+    </div>
+    <div v-if="hotHistory.length" class="graphics-startup">
+      <h4>{{ label('Feeder / 原生 DLSS 热组件历史', 'Feeder / native DLSS installation history') }}</h4>
+      <p>{{ label('关闭游戏后可重新选择已校验的历史组件，或清理指定实例的自有副本。FSR2 Bridge 的组件由其独立路线管理。', 'Close the game to select a verified previous installation or remove an owned copy. FSR2 bridge components use their separate route.') }}</p>
+      <div class="graphics-actions">
+        <el-select v-model="historySelection" :disabled="graphicsActionBusy" :aria-label="label('热组件历史', 'Hot installation history')">
+          <el-option v-for="item in hotHistory" :key="item.root" :value="item.root"
+            :label="`${item.current ? '● ' : ''}${item.profile} · ${item.revision} · ${item.root.split(/[\\/]/).pop()}${item.usable ? '' : label('（需修复）', ' (needs repair)')}`" />
+        </el-select>
+        <el-button :disabled="graphicsActionBusy || !hotHistory.some(item => item.root === historySelection && item.usable)" @click="manageHotHistory()">{{ label('使用所选组件', 'Use selected components') }}</el-button>
+        <el-button :disabled="graphicsActionBusy || !historySelection" @click="manageHotHistory(true)">{{ label('清理所选组件', 'Remove selected components') }}</el-button>
+      </div>
     </div>
     <template v-if="graphicsSelectedRoute === 'gimi-hot'">
       <p class="graphics-hint">{{ label('首次下载约 302 MiB。请先关闭游戏；下载失败保留原组件，普通游戏启动仍可使用。', 'First download: about 302 MiB. Close the game before setup. Failed downloads preserve existing components and normal game launch remains available.') }}</p>

@@ -198,7 +198,7 @@ function graphics(t, options = {}) {
   const state = { root: 'C:/Assets/previous', profile: 'rtx50' };
   let pickerCount = 0;
   const s = component(t, '../../src/plugin/components/Dlss5GraphicsSettings.vue', [
-    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError', 'graphicsStateLoading', 'graphicsSelectedRoute',
+    'refreshGraphicsState', 'installSelectedDlss5Route', 'hotRuntime', 'hotProfile', 'downloadProgress', 'graphicsActionBusy', 'graphicsStatusError', 'graphicsStateLoading', 'graphicsSelectedRoute', 'hotHistory', 'historySelection', 'manageHotHistory',
   ], {
     '@tauri-apps/api/core': { Channel: class {}, invoke: async (command, args) => {
       calls.push({ command, args });
@@ -210,15 +210,36 @@ function graphics(t, options = {}) {
       if (command === 'inspect_dlss5_route_options') return { routes: options.routes ?? [options.route ?? 'gimi-hot'], installedRoute: options.installedRoute };
       if (command === 'download_gimi_hot_runtime' || command === 'download_dlss5_hot_runtime') return job.promise;
       if (command === 'import_gimi_hot_runtime') return {};
+      if (command === 'dlss5_hot_runtime_history') return options.history ?? [];
+      if (command === 'select_dlss5_hot_runtime' || command === 'remove_dlss5_hot_runtime') return options.manage ? options.manage(command, args) : null;
       throw new Error(`Unexpected command ${command}`);
     } },
     '@tauri-apps/plugin-dialog': { open: async () => { pickerCount++; return options.directory ?? 'D:/Offline'; } },
     '@tauri-apps/plugin-opener': { openUrl() {} },
-    'element-plus': { ElMessage: { error: message => messages.push(message), success: message => messages.push(message) }, ElMessageBox: {} },
+    'element-plus': { ElMessage: { error: message => messages.push(message), success: message => messages.push(message) }, ElMessageBox: { confirm: options.confirm ?? (async () => {}) } },
     'vue-i18n': i18n,
   }, props);
   return { s, props, calls, messages, job, pickerCount: () => pickerCount };
 }
+
+test('历史组件切换绑定当前实例，清理需明确确认，取消和切换游戏不会提交清理', async t => {
+  const history = [{ root: 'C:/Owned/previous', profile: 'rtx30', revision: 'v1', route: 'native-bridge', usable: true, current: false }];
+  const confirmation = deferred();
+  const { s, props, calls } = graphics(t, { gameName: 'WWMI', targetExePath: 'C:/Game/Client-Win64-Shipping.exe', history, confirm: () => confirmation.promise });
+  await s.refreshGraphicsState();
+  await s.manageHotHistory();
+  const selected = calls.find(call => call.command === 'select_dlss5_hot_runtime');
+  assert.equal(selected.args.root, history[0].root);
+  assert.equal(selected.args.gameName, 'WWMI');
+  const pending = s.manageHotHistory(true);
+  assert.ok(!calls.some(call => call.command === 'remove_dlss5_hot_runtime'));
+  props.gameName = 'Another Instance'; await vue.nextTick();
+  confirmation.resolve(); await pending;
+  assert.ok(!calls.some(call => call.command === 'remove_dlss5_hot_runtime'));
+  const cancelled = graphics(t, { history, confirm: async () => { throw 'cancel'; } });
+  await cancelled.s.refreshGraphicsState(); await cancelled.s.manageHotHistory(true);
+  assert.ok(!cancelled.calls.some(call => call.command === 'remove_dlss5_hot_runtime'));
+});
 
 test('automatic setup runs only on click, reports progress, and captures the selected profile', async t => {
   const { s, calls, job, pickerCount } = graphics(t);
