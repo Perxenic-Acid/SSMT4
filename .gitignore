@@ -77,5 +77,7 @@ BlenderPlugin/
 
 .tmp-*/
 .tmp-*
+# 临时崩溃采集结果（不提交）
+/scripts/diagnostics/SSMT-AppCrash-*
 # docs/graphics-stack-rhi-integration.md
 docs/SSMT4-鸣潮修复-20261002.zip

@@ -61,27 +61,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --test plugin_marketplace_startu
 “Windows 日志 → 应用程序”记录应用版本、故障模块和异常代码。`0xc000001d` 表示
 非法指令，与 CPU 基线问题吻合；其他异常必须继续按对应模块调查，不能一律归因 CPU。
 
-事件 1005 的文件访问模板可能只有空文件名、错误值 `00000000` 和磁盘类型 `0`，
-这些字段不能代替异常代码，也不能据此判定磁盘故障或 CPU 不兼容。
-[Microsoft 的应用崩溃排查说明](https://learn.microsoft.com/en-us/troubleshoot/windows-server/performance/troubleshoot-application-service-crashing-behavior)
-列出了事件 1000 中的模块、异常代码和偏移字段。收集同一时间的 1000、1001 与现有
-WER 报告，再按实际异常调查；没有匹配记录时保留证据缺口。
-
-可将 `scripts/diagnostics/Collect-SSMTAppCrash.ps1` 单独转交测试者，在发生闪退的电脑上执行：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Collect-SSMTAppCrash.ps1
-```
-
-默认读取最近 72 小时的 SSMT 相关应用事件、现有 WER 文本报告、CPU / Windows 版本、
-应用与随包插件的文件版本及 SHA256，在桌面生成唯一命名的目录和同名 ZIP。
-安装路径优先取事件 1000，缺失时使用默认安装目录；自定义目录可加
-`-AppPath 'D:\SSMT\ssmt4.exe'`，时间范围可用 `-Hours` 调整。
-脚本不启动应用、不加载 DLL、不改变 WER 或系统配置。权限不足时将原因记入
-`summary.json` 并继续采集，其限制和缺失信息同样保留，空结果不代表没有发生崩溃。
-仅匹配应用名的报告会被收录，不因其他程序加载了 SSMT 模块而收集它的报告。
-Windows PowerShell 5.1 与新版 PowerShell 均可运行；离线解析回归为
-`scripts/tests/test-app-crash-collector.ps1`。
+事件 1005 的空文件名和错误值 `00000000` 不能代替异常代码，也不能据此判定磁盘或
+CPU 故障。采集结果为空时先检查查询是否成功；Windows PowerShell 5.1 的日期过滤
+可能受自定义区域格式影响，应使用明确的 UTC XPath 查询。
 
 ## 滚动边界
 
