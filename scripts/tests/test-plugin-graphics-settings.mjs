@@ -86,7 +86,7 @@ function marketplace(t, options = {}) {
     'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
     'catalog', 'catalogError', 'allEntries', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
     'selectedDependencies', 'dependencyActionsEnabled', 'openDependencyDownload', 'openDependencySettings', 'optionalDependency',
-    'openDependencyDirectory',
+    'openDependencyDirectory', 'installOfficial',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
     '@tauri-apps/plugin-opener': { openUrl: options.openUrl ?? (() => { throw new Error('Unexpected external download'); }), openPath: options.openPath },
@@ -124,6 +124,50 @@ test('首次进入市场没有虚拟内置插件，目录失败仍可展示开�
   assert.equal(s.refreshing.value, false);
   assert.equal(s.selectedId.value, 'ssmt.dlss5.integration');
   assert.equal(calls.length, 3, '发现目录不会配置、下载或扫描未安装插件的专有资源');
+});
+
+test('Native Release 多版本目录只展示每个插件最新版，显式安装后保持停用', async t => {
+  const versions = [
+    ['ssmt.dlss5.integration', '0.2.1'], ['ssmt.hoyoshade.bridge', '0.1.1'],
+    ['ssmt.dlss5.integration', '0.2.2'], ['ssmt.player-tweaks', '0.1.0'],
+    ['ssmt.hoyoshade.bridge', '0.1.0'], ['ssmt.poser.genshin-probe', '0.1.0'],
+    ['ssmt.dlss5.integration', '0.2.0'],
+  ];
+  const entries = versions.map(([id, version]) => ({
+    id, version, name: id, author: 'SSMT', description: id, supportedGames: ['GIMI'],
+    permissions: [], externalDependencies: [],
+  }));
+  const calls = [], installed = [];
+  const s = marketplace(t, { invoke: async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'official_plugin_catalog') return entries;
+    if (command === 'local_plugin_packages') return [];
+    if (command === 'plugin_registry_snapshot_for_game') return [...installed];
+    if (command === 'install_official_plugin') {
+      const entry = entries.find(entry => entry.id === args.id && entry.version === args.version);
+      assert.ok(entry, '安装请求必须对应用户选择的目录版本');
+      installed.push({ ...dlssPlugin(false), manifest: {
+        ...dlssPlugin(false).manifest, ...entry, compatibility: { games: entry.supportedGames },
+      } });
+      return installed.at(-1);
+    }
+    throw new Error(`Unexpected release IPC: ${command}`);
+  } });
+  await s.refreshAll();
+  const latest = Array.from(s.allEntries.value);
+  assert.deepEqual(latest.map(entry => [entry.id, entry.version]), [
+    ['ssmt.dlss5.integration', '0.2.2'], ['ssmt.hoyoshade.bridge', '0.1.1'],
+    ['ssmt.player-tweaks', '0.1.0'], ['ssmt.poser.genshin-probe', '0.1.0'],
+  ]);
+  assert.ok(latest.every(entry => entry.official && !entry.localArchive));
+  assert.equal(calls.length, 3, '浏览目录不会隐式安装、启用或扫描插件组件');
+  for (const entry of latest) await s.installOfficial(entry);
+  await vue.nextTick();
+  assert.equal(installed.length, 4);
+  assert.ok(installed.every(plugin => plugin.official && !plugin.enabled));
+  assert.deepEqual(calls.slice(3).map(call => call.command), latest.flatMap(() => [
+    'install_official_plugin', 'plugin_registry_snapshot_for_game',
+  ]), '安装后只刷新注册表，不启用插件或部署外部依赖');
 });
 
 test('marketplace exposes DLSS5 settings only for the selected enabled game and discards stale target reads', async t => {

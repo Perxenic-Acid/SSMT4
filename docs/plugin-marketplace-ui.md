@@ -54,6 +54,36 @@ Native Release 需要同时提供目录和相应包资产；`publish: false` 的
 包和 DLL 即使仍在磁盘上也不会被带入。注册表回归覆盖孤立启用标记、首次安装默认
 停用及已有包升级保留选择。开发包验收还须实际打包并安装，不能只检查清单源码。
 
+## Native Release 对接
+
+客户端读取 Native 仓库最新公开 Release 的 `ssmt-plugin-catalog.json`，插件包与目录资产
+必须属于同一标签，名称、下载 URL、大小及 GitHub 返回的 SHA-256 摘要必须一致。
+目录先按原始字节验证，再解析内容；包下载后继续执行完整哈希、清单与安装路径检查。
+有多个版本时市场按插件 ID 展示最新版；安装需要显式点击，首次安装默认停用，
+外部 DLSS5 / ReShade 组件仍由相应插件自己的按需获取流程负责。
+
+[v0.1.6](https://github.com/Perxenic-Acid/SSMT-Native/releases/tag/v0.1.6) 有 7 个版本；
+当前市场展示 DLSS5 0.2.2、HoYoShade Bridge 0.1.1、Player Tweaks 0.1.0、Poser 0.1.0。
+该版打包器把 Poser 未声明的外部依赖写成 `[null]`，曾导致整个官方目录解析失败。
+客户端只在官方目录中将这一空依赖表示兼容为 `[]`，损坏的实际依赖对象仍拒绝，
+包内清单和第三方目录的校验不变。Native 打包器已修正缺省可选数组的输出。
+
+已用实际 v0.1.6 云端资产完成全部 7 个包的下载、哈希、临时目录安装及注册表重读。
+正式发布后可复用以下集成验证；默认测试不联网，显式执行时使用独立临时注册表，
+不读取用户配置、不启用插件，也不加载 DLL 或创建图形设备：
+
+```powershell
+$env:SSMT_NATIVE_RELEASE_TEST_TAG = 'v0.1.6'
+try {
+    cargo test --manifest-path src-tauri/Cargo.toml --lib plugin::official_release::tests::published_release_downloads_and_installs_every_package_without_enabling_plugins -- --ignored --exact --nocapture
+} finally {
+    Remove-Item Env:SSMT_NATIVE_RELEASE_TEST_TAG
+}
+```
+
+该验证覆盖每个发布版本，包含先安装新版再安装旧版、安装结果对应请求版本、
+来源标记持久化及所有游戏预设在未启用时没有运行时贡献。它不代替各游戏实机验收。
+
 ## 跨电脑启动验证
 
 跨电脑发布禁止使用 `target-cpu=native`。这会把构建机的 SHA、AVX 等可选指令当作最低

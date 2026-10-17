@@ -65,7 +65,10 @@
 - Player Tweaks 0.1.0 声明各游戏功能、已注册后端和包内 DLL；原神只选择专用 Hook，崩铁只执行客户端设置。两者均要求实际安装并启用插件，旧版内置快照、功能声明与应用资源 DLL 回退已移除；遗留启用标记不能代替安装。
 - 市场从本体校验后的 `settingsComponent` 挂载已有可信组件；未知键或未注册的所有者不会获得其他插件的组件。停用时不挂载会读取插件状态的图形设置。
 
-上述版本均暂缓正式发布。源码与已有 Native 产物可经现有本地打包管线生成测试包；发布仍须走 Native Release 来源和目录校验。JSON 契约没有改变 Native ABI，静态 Rust / Vue provider 也仍然需要随本体更新。
+上述迁移版本已通过 [Native v0.1.6](https://github.com/Perxenic-Acid/SSMT-Native/releases/tag/v0.1.6)
+发布。该 Release 包含 4 类插件的 7 个版本，市场默认展示每类最新版本，按用户选择独立下载，
+不要求下载整个 Native ZIP。发布和安装校验通过不代表游戏内效果已验收；静态 Rust / Vue
+provider 仍需要随本体更新，JSON 契约没有改变 Native ABI。
 
 正式应用安装器仅携带核心资源，不附带官方插件包或占位清单。市场从 Native Release
 目录取得可用版本，验证同一 Release 的资产名称、大小及 SHA-256 后按需安装。
