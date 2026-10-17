@@ -14,7 +14,7 @@ source += '\nglobalThis.api={refreshAll,installLocal,installFromFile,installRevi
 
 const calls = []
 const local = {
-  archivePath: 'C:\\SSMT\\resources\\PluginPackages\\ssmt.poser.genshin-probe-0.1.0.ssmtpkg',
+  archivePath: 'C:\\Repo\\build\\plugin-packages\\ssmt.poser.genshin-probe-0.1.0.ssmtpkg',
   inspection: { manifest: { id: 'ssmt.poser.genshin-probe', name: 'Poser', author: 'SSMT', version: '0.1.0', permissions: ['native.inject'], externalDependencies: [], compatibility: { games: ['GIMI'] } }, sha256: 'a'.repeat(64), fileCount: 3, unpackedSize: 123 },
 }
 let dialogFile = 'C:\\Downloads\\third-party.ssmtpkg'
@@ -23,7 +23,7 @@ const context = vm.createContext({
   ref: value => ({ value }),
   computed: get => ({ get value() { return get() } }),
   watch() {}, onMounted() {}, defineAsyncComponent() {},
-  useRouter: () => ({ push() {} }), useI18n: () => ({ t: key => key }),
+  useRoute: () => ({ query: {} }), useI18n: () => ({ t: key => key }),
   AppStateManager: { gamesList: [], appSettings: { CurrentGameName: 'Default' } },
   ElMessage: { success() {}, error() {} },
   openDialog: async () => dialogFile,

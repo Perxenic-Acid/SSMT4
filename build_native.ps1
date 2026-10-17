@@ -68,6 +68,7 @@ Invoke-Checked "cargo" $cargoArgs
 Invoke-Checked "cmake" @(
     "-S", $NativeDir,
     "-B", $BuildDir,
+    "-DSSMT_BUILD_PLAYER_TWEAKS=ON",
     "-DSSMT_BUILD_POSER_PROBE=$(if ($BuildPoserProbe) { 'ON' } else { 'OFF' })",
     "-DSSMT_BUILD_GIMI_BRIDGE=$(if ($BuildGimiBridge) { 'ON' } else { 'OFF' })",
     "-DSSMT_POSER_ARTIFACT_DIR=$DistDir"
@@ -102,7 +103,6 @@ Copy-Item `
 
 $Artifacts = @(
     "Run.exe",
-    "SSMT-Player-Tweaks.dll",
     "SSMT-PluginHost.dll"
 )
 
@@ -127,10 +127,10 @@ foreach ($Name in $Artifacts) {
         -Force
 }
 
-# 可选插件只部署为可发现的安装包，由市场管理安装和启用，不直接注入游戏。
+# 开发包放在构建目录，不能被应用资源通配符带入正式安装器。
 & (Join-Path $NativeDir 'tools\stage-local-plugins.ps1') `
     -NativeArtifactDirectory $DistDir `
-    -OutputDirectory (Join-Path $ResourceDir 'PluginPackages') `
+    -OutputDirectory (Join-Path $RepoRoot 'build/plugin-packages') `
     -ExcludePluginId @(
         if (-not $BuildPoserProbe) { 'ssmt.poser.genshin-probe' }
         if (-not $BuildGimiBridge) { 'ssmt.dlss5.integration' }

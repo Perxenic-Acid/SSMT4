@@ -12,17 +12,12 @@ struct Policy { schema_version: u32, games: Vec<Game> }
 #[serde(deny_unknown_fields)]
 struct Game { preset: String, backend: String, features: Vec<String>, #[serde(default)] dll: Option<String> }
 
-fn policy(plugin: Option<&InstalledPlugin>) -> Result<Policy, String> {
-    let text = match plugin {
-        Some(plugin) => {
-            let config = plugin.manifest.contributions.host_extensions.iter()
-                .find(|item| item.provider == "ssmt.player-tweaks").and_then(|item| item.config.as_deref())
-                .ok_or("Player Tweaks 缺少功能声明")?;
-            let root = canonical_path(&plugin.package_root).map_err(|e| e.to_string())?;
-            read_text(&checked_path(&root, config)?)?
-        }
-        None => include_str!("player_tweaks_legacy_policy.json").to_string(),
-    };
+fn policy(plugin: &InstalledPlugin) -> Result<Policy, String> {
+    let config = plugin.manifest.contributions.host_extensions.iter()
+        .find(|item| item.provider == "ssmt.player-tweaks").and_then(|item| item.config.as_deref())
+        .ok_or("Player Tweaks 缺少功能声明")?;
+    let root = canonical_path(&plugin.package_root).map_err(|e| e.to_string())?;
+    let text = read_text(&checked_path(&root, config)?)?;
     let policy: Policy = serde_json::from_str(&text).map_err(|e| format!("Player Tweaks 声明无效：{e}"))?;
     let mut presets = std::collections::HashSet::new();
     if policy.schema_version != 1 || policy.games.is_empty() { return Err("不支持的 Player Tweaks 声明".into()); }
@@ -41,7 +36,7 @@ fn policy(plugin: Option<&InstalledPlugin>) -> Result<Policy, String> {
     Ok(policy)
 }
 
-pub(super) fn features(plugin: Option<&InstalledPlugin>, preset: &str) -> Result<Vec<String>, String> {
+pub(super) fn features(plugin: &InstalledPlugin, preset: &str) -> Result<Vec<String>, String> {
     Ok(policy(plugin)?.games.into_iter().find(|game| game.preset.eq_ignore_ascii_case(preset.trim()))
         .map(|game| game.features).unwrap_or_default())
 }
@@ -55,24 +50,17 @@ pub fn prepare_player_tweaks_launch(game_name: String, game_preset: String) -> R
     if !preset.eq_ignore_ascii_case(&game_preset) { return Err("Player Tweaks 游戏预设已改变".into()); }
     let Some(registry) = super::commands::installed_plugin_registry()? else { return Ok(None); };
     let scoped = registry.for_game(&game_name);
-    let installed = scoped.find(ID);
-    let enabled = installed.map_or_else(|| registry.game_enabled(&game_name, ID), |plugin| plugin.enabled);
-    if !enabled { return Ok(None); }
+    let Some(installed) = scoped.find(ID).filter(|plugin| plugin.enabled) else { return Ok(None); };
     let Some(game) = policy(installed)?.games.into_iter().find(|game| game.preset.eq_ignore_ascii_case(&preset)) else { return Ok(None); };
     if game.backend == "star-rail-settings" {
         super::star_rail_tweaks::prepare_star_rail_player_tweaks(game_name)?;
         return Ok(None);
     }
-    let dll = if let Some(plugin) = installed {
-        let root = canonical_path(&plugin.package_root).map_err(|e| e.to_string())?;
-        let relative = game.dll.ok_or("Player Tweaks DLL 未声明")?;
-        let path = checked_path(&root, &relative)?;
-        let hash = read_text(&checked_path(&root, &format!("{relative}.sha256"))?)?;
-        verify(&path, hash.trim())?;
-        path
-    } else {
-        crate::config::path_manager::PathManager::ssmt_resources_folder().join("SSMT-Player-Tweaks.dll")
-    };
+    let root = canonical_path(&installed.package_root).map_err(|e| e.to_string())?;
+    let relative = game.dll.ok_or("Player Tweaks DLL 未声明")?;
+    let dll = checked_path(&root, &relative)?;
+    let hash = read_text(&checked_path(&root, &format!("{relative}.sha256"))?)?;
+    verify(&dll, hash.trim())?;
     if !dll.is_file() { return Err("Player Tweaks DLL 不可用".into()); }
     Ok(Some(LaunchAssets { dll }))
 }
@@ -81,12 +69,20 @@ pub fn prepare_player_tweaks_launch(game_name: String, game_preset: String) -> R
 mod tests {
     use super::*;
     #[test]
-    fn legacy_and_package_declarations_keep_game_specific_features() {
-        assert_eq!(features(None, "srmi").unwrap(), ["fps-120"]);
-        assert!(features(None, "WWMI").unwrap().is_empty());
-        let text = include_str!("../../../native/official-plugin-packages/ssmt.player-tweaks/0.1.0/host/features.json");
-        let declared: Policy = serde_json::from_str(text).unwrap();
-        assert_eq!(declared.games[0].backend, "gimi-hook");
-        assert!(declared.games[1].dll.is_none());
+    fn installed_package_owns_game_features_and_broken_policy_does_not_fall_back() {
+        let root = std::env::temp_dir().join(format!("ssmt-player-policy-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        std::fs::create_dir_all(root.join("host")).unwrap();
+        let mut plugin = InstalledPlugin {
+            manifest: super::super::PluginManifest::from_json_str(include_str!("../../../native/official-plugin-packages/ssmt.player-tweaks/0.1.0/ssmt-plugin.json")).unwrap(),
+            package_root: root.clone(), enabled: true, external_dependencies: Default::default(), official: false,
+        };
+        assert!(features(&plugin, "GIMI").is_err(), "不能回退到随应用内置的功能声明");
+        std::fs::write(root.join("host/features.json"), include_str!("../../../native/official-plugin-packages/ssmt.player-tweaks/0.1.0/host/features.json")).unwrap();
+        assert_eq!(features(&plugin, "GIMI").unwrap(), ["camera", "fps", "fast-team"]);
+        assert_eq!(features(&plugin, "srmi").unwrap(), ["fps-120"]);
+        for preset in ["WWMI", "ZZMI", "EFMI", "ZZMIDX12"] { assert!(features(&plugin, preset).unwrap().is_empty()); }
+        plugin.manifest.contributions.host_extensions.clear();
+        assert!(features(&plugin, "GIMI").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -52,7 +52,6 @@ interface PluginManifest {
 interface InstalledPlugin {
   manifest: PluginManifest
   enabled: boolean
-  bundled?: boolean
   lifecycleStatus: 'installed' | 'enabled' | 'disabled' | 'update_available' | 'broken' | 'incompatible' | 'external_dependency_missing'
   externalDependencies: Record<string, DependencyState>
   official: boolean
@@ -69,7 +68,6 @@ interface CatalogEntry {
   supportedGames: string[]
   permissions: string[]
   externalDependencies: ExternalDependency[]
-  bundled?: boolean
   official?: boolean
   localArchive?: string
 }
@@ -140,8 +138,6 @@ const installedById = computed(() => {
   return byId
 })
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
-const hasSettings = (plugin: InstalledPlugin | undefined, component: string) =>
-  plugin?.manifest.contributions?.hostExtensions?.some(extension => extension.settingsComponent === component) ?? false
 const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
 // 已安装版本可能与目录中的待更新版本不同，操作必须使用实际安装的依赖声明。
 const selectedDependencies = computed(() => selectedPlugin.value?.manifest.externalDependencies ?? selectedEntry.value?.externalDependencies ?? [])
@@ -195,15 +191,12 @@ const allEntries = computed<CatalogEntry[]>(() => {
     entries.push({
       id: plugin.manifest.id,
       name: plugin.manifest.name,
-      description: plugin.bundled && hasSettings(plugin, 'ssmt.player-tweaks.settings')
-        ? t('pluginMarketplace.playerTweaksDescription')
-        : plugin.manifest.description || t('pluginMarketplace.installedPackage'),
+      description: plugin.manifest.description || t('pluginMarketplace.installedPackage'),
       author: plugin.manifest.author,
       version: plugin.manifest.version,
       supportedGames: plugin.manifest.compatibility?.games ?? [],
       permissions: plugin.manifest.permissions,
       externalDependencies: plugin.manifest.externalDependencies,
-      bundled: plugin.bundled,
     })
   }
   return entries
@@ -224,13 +217,10 @@ const rowLifecycleFor = (entry: CatalogEntry) => {
 }
 const sourceLabelFor = (entry: CatalogEntry) => entry.localArchive
   ? t('pluginMarketplace.localBuild')
-  : entry.bundled
-  ? t('pluginMarketplace.bundled')
   : installedById.value.has(entry.id)
     ? t(installedById.value.get(entry.id)?.official ? 'pluginMarketplace.official' : 'pluginMarketplace.thirdParty')
     : t(entry.official ? 'pluginMarketplace.official' : 'pluginMarketplace.thirdParty')
 const sourceKindFor = (entry: CatalogEntry) => entry.localArchive ? 'local'
-  : entry.bundled ? 'bundled'
   : (installedById.value.get(entry.id)?.official ?? entry.official) ? 'official' : 'thirdParty'
 const monogramFor = (entry: CatalogEntry) => {
   const name = entry.name.replace(/^SSMT\s+/i, '').trim()
@@ -581,7 +571,7 @@ onMounted(async () => {
               <span class="plugin-row-description">{{ entry.description }}</span>
               <span class="plugin-row-footer">
                 <span class="source-badge" :class="'source-' + sourceKindFor(entry)">{{ t('pluginMarketplace.sourceBadges.' + sourceKindFor(entry)) }}</span>
-                <span class="plugin-row-version" v-if="!entry.bundled">v{{ entry.version }}</span>
+                <span class="plugin-row-version">v{{ entry.version }}</span>
                 <span v-if="rowLifecycleFor(entry)" class="row-state"
                   :class="{ enabled: rowLifecycleFor(entry) === 'enabled', issue: ['broken', 'incompatible', 'external_dependency_missing'].includes(rowLifecycleFor(entry) ?? '') }">
                   {{ t('pluginMarketplace.lifecycle.' + rowLifecycleFor(entry)) }}
@@ -609,7 +599,7 @@ onMounted(async () => {
             <div class="detail-byline">
               <span>{{ selectedEntry.author }}</span>
               <span class="source-badge" :class="'source-' + sourceKindFor(selectedEntry)">{{ t('pluginMarketplace.sourceBadges.' + sourceKindFor(selectedEntry)) }}</span>
-              <span v-if="!selectedEntry.bundled">v{{ selectedPlugin?.manifest.version ?? selectedEntry.version }}</span>
+              <span>v{{ selectedPlugin?.manifest.version ?? selectedEntry.version }}</span>
             </div>
           </div>
           <span v-if="selectedPlugin" class="detail-state" :class="{ 'is-enabled': selectedPlugin.enabled }">
@@ -765,7 +755,7 @@ onMounted(async () => {
               <h3>{{ t('pluginMarketplace.metadata') }}</h3>
               <dl>
                 <dt>ID</dt><dd>{{ selectedEntry.id }}</dd>
-                <dt>{{ t('pluginMarketplace.version') }}</dt><dd>{{ selectedEntry.bundled ? t('pluginMarketplace.bundled') : (selectedPlugin?.manifest.version ?? selectedEntry.version) }}</dd>
+                <dt>{{ t('pluginMarketplace.version') }}</dt><dd>{{ selectedPlugin?.manifest.version ?? selectedEntry.version }}</dd>
                 <dt>{{ t('pluginMarketplace.author') }}</dt><dd>{{ selectedEntry.author }}</dd>
                 <dt>{{ t('pluginMarketplace.source') }}</dt><dd>{{ sourceLabelFor(selectedEntry) }}</dd>
                 <dt>{{ t('pluginMarketplace.currentGame') }}</dt><dd>{{ selectedPlugin?.appScoped ? t('pluginMarketplace.appScope') : (selectedGameName || '—') }}</dd>

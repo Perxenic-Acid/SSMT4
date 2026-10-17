@@ -148,7 +148,7 @@ mod tests {
         assert_eq!(policy.select("WWMI", std::path::Path::new("Client-Win64-Shipping.exe")).unwrap().required_launch_args, ["-dx11"]);
         assert!(policy.assets(false).unwrap().contains("sha256"));
         let player = registry.find("ssmt.player-tweaks").unwrap();
-        assert_eq!(super::super::player_tweaks::features(Some(player), "SRMI").unwrap(), ["fps-120"]);
+        assert_eq!(super::super::player_tweaks::features(player, "SRMI").unwrap(), ["fps-120"]);
         let dll = player.package_root.join("runtime/SSMT-Player-Tweaks.dll");
         let hash = fs::read_to_string(dll.with_extension("dll.sha256")).unwrap();
         super::super::gimi_hot_runtime::verify(&dll, hash.trim()).unwrap();

@@ -100,7 +100,7 @@ function marketplace(t, options = {}) {
   return { ...settings, appSettings };
 }
 
-test('首次进入市场先显示内置插件，官方目录失败后仍接收随包目录且不触发插件资源扫描', async t => {
+test('首次进入市场没有虚拟内置插件，目录失败仍可展示开发包且不扫描插件资源', async t => {
   const registry = deferred(), official = deferred(), local = deferred();
   const calls = [];
   const s = marketplace(t, { invoke: command => {
@@ -111,21 +111,18 @@ test('首次进入市场先显示内置插件，官方目录失败后仍接收�
     throw new Error(`Unexpected startup IPC: ${command}`);
   } });
   const refresh = s.refreshAll();
-  const player = { ...dlssPlugin(false), bundled: true, manifest: { ...dlssPlugin(false).manifest,
-    id: 'ssmt.player-tweaks', name: 'Player Tweaks', contributions: {},
-  } };
-  registry.resolve([player]);
+  registry.resolve([]);
   await setImmediate();
-  assert.deepEqual(Array.from(s.allEntries.value, entry => entry.id), ['ssmt.player-tweaks']);
+  assert.deepEqual(Array.from(s.allEntries.value, entry => entry.id), []);
   assert.equal(s.refreshing.value, true);
   official.reject(new Error('官方目录离线'));
   const manifest = { ...dlssPlugin(false).manifest, contributions: {}, compatibility: { games: ['GIMI'] } };
-  local.resolve([{ archivePath: 'C:/App/resources/PluginPackages/example.ssmtpkg', inspection: { manifest } }]);
+  local.resolve([{ archivePath: 'C:/Repo/build/plugin-packages/example.ssmtpkg', inspection: { manifest } }]);
   await refresh;
-  assert.deepEqual(Array.from(s.allEntries.value, entry => entry.id).sort(), ['ssmt.dlss5.integration', 'ssmt.player-tweaks']);
+  assert.deepEqual(Array.from(s.allEntries.value, entry => entry.id), ['ssmt.dlss5.integration']);
   assert.match(s.catalogError.value, /官方目录离线/);
   assert.equal(s.refreshing.value, false);
-  assert.equal(s.selectedId.value, 'ssmt.player-tweaks');
+  assert.equal(s.selectedId.value, 'ssmt.dlss5.integration');
   assert.equal(calls.length, 3, '发现目录不会配置、下载或扫描未安装插件的专有资源');
 });
 

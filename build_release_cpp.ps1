@@ -12,8 +12,7 @@ $SourceDir = Join-Path $RepoRoot "native"
 $BuildDir = Join-Path $RepoRoot "build\native-release"
 $DistDir = Join-Path $SourceDir "dist\Release"
 $NativeArtifacts = @(
-    (Join-Path $DistDir "Run.exe"),
-    (Join-Path $DistDir "SSMT-Player-Tweaks.dll")
+    (Join-Path $DistDir "Run.exe")
 )
 
 if (-not (Test-Path -LiteralPath (Join-Path $SourceDir "CMakeLists.txt"))) {
@@ -38,6 +37,7 @@ if ($Clean -and (Test-Path $BuildDir)) {
 }
 
 $configureArgs = @("-S", $SourceDir, "-B", $BuildDir)
+$configureArgs += @("-DSSMT_BUILD_PLAYER_TWEAKS=OFF", "-DSSMT_BUILD_GIMI_BRIDGE=OFF", "-DSSMT_BUILD_POSER_PROBE=OFF")
 
 if ($Generator) {
     $configureArgs += @("-G", $Generator)

@@ -7,6 +7,26 @@ use std::process::Command;
 mod windows_cpu;
 
 #[test]
+fn app_resources_exclude_development_packages_and_player_tweaks() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    let patterns = config["bundle"]["resources"].as_array().unwrap().iter()
+        .map(|pattern| root.join(pattern.as_str().unwrap()).to_string_lossy().replace('\\', "/"))
+        .collect::<Vec<_>>();
+    // 使用打包器相同的枚举器，旧资源目录与遗留 DLL 即使仍在磁盘上也不能被带入安装器。
+    let files = tauri::utils::resources::ResourcePaths::new(&patterns, true)
+        .map(|path| path.unwrap()).collect::<Vec<_>>();
+    for name in ["Run.exe", "SSMT-PluginHost.dll", "d3d11.dll"] {
+        assert!(files.iter().any(|file| file.file_name().is_some_and(|actual| actual == name)));
+    }
+    for file in files {
+        assert!(!file.components().any(|part| part.as_os_str() == "PluginPackages" || part.as_os_str() == "Plugins"), "{}", file.display());
+        assert_ne!(file.file_name().unwrap(), "SSMT-Player-Tweaks.dll");
+        assert!(!file.extension().is_some_and(|ext| ext == "ssmtpkg" || ext == "log"), "{}", file.display());
+    }
+}
+
+#[test]
 fn discovers_compressed_packages_on_small_stack() {
     const PROBE: &str = "SSMT_MARKETPLACE_STACK_PROBE";
     if let Some(directory) = std::env::var_os(PROBE) {

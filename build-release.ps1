@@ -78,10 +78,6 @@ $nativeArtifacts = @(
     @{
         Source = Join-Path $nativeDistDir "Run.exe"
         Target = Join-Path $resourcesDir "Run.exe"
-    },
-    @{
-        Source = Join-Path $nativeDistDir "SSMT-Player-Tweaks.dll"
-        Target = Join-Path $resourcesDir "SSMT-Player-Tweaks.dll"
     }
 )
 

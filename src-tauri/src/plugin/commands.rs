@@ -11,7 +11,7 @@ use super::official_release;
 use super::marketplace::MarketplaceEntry;
 use super::registry::{game_scope_preset, ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
 use super::settings::PluginSettingsStore;
-use super::{PluginCompatibility, PluginContributions, PluginManifest, PluginPermission};
+use super::PluginManifest;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -571,80 +571,20 @@ pub struct InstalledPluginSnapshot {
     pub enabled: bool,
     pub lifecycle_status: PluginLifecycleStatus,
     pub external_dependencies: BTreeMap<String, ExternalDependencyState>,
-    pub bundled: bool,
     pub official: bool,
     pub app_scoped: bool,
     pub features: Vec<String>,
 }
 
 const PLAYER_TWEAKS_ID: &str = "ssmt.player-tweaks";
-const PLAYER_TWEAKS_FILE: &str = "SSMT-Player-Tweaks.dll";
-
-fn player_tweaks_available() -> bool {
-    crate::config::path_manager::PathManager::ssmt_resources_folder()
-        .join(PLAYER_TWEAKS_FILE)
-        .is_file()
-}
-
-fn player_tweaks_features(preset: &str) -> Vec<String> {
-    super::player_tweaks::features(None, preset).unwrap_or_default()
-}
-
-fn bundled_player_tweaks_snapshot(
-    registry: &PluginRegistry,
-    game_name: &str,
-) -> Option<InstalledPluginSnapshot> {
-    let preset = game_scope_preset(game_name);
-    if !preset.eq_ignore_ascii_case("SRMI") && !player_tweaks_available() {
-        return None;
-    }
-    let features = player_tweaks_features(&preset);
-    let compatible = !features.is_empty();
-    let enabled = compatible && registry.game_enabled(game_name, PLAYER_TWEAKS_ID);
-    Some(InstalledPluginSnapshot {
-        manifest: PluginManifest {
-            schema_version: 1,
-            id: PLAYER_TWEAKS_ID.to_string(),
-            name: "SSMT Player Tweaks".to_string(),
-            version: "0.0.0".to_string(),
-            author: "SSMT".to_string(),
-            compatibility: PluginCompatibility {
-                ssmt: ">=4.x".to_string(),
-                platforms: vec!["windows-x64".to_string()],
-                games: vec!["GIMI".to_string(), "SRMI".to_string()],
-            },
-            contributions: PluginContributions {
-                host_extensions: vec![super::host_extensions::HostExtensionContribution {
-                    id: "settings".into(), provider: "ssmt.player-tweaks".into(), priority: 0,
-                    config: None, settings_component: Some("ssmt.player-tweaks.settings".into()),
-                }],
-                ..PluginContributions::default()
-            },
-            external_dependencies: Vec::new(),
-            permissions: if preset.eq_ignore_ascii_case("SRMI") {
-                vec![PluginPermission::FilesystemRead, PluginPermission::FilesystemWrite]
-            } else { vec![PluginPermission::NativeInject] },
-        },
-        enabled,
-        lifecycle_status: if compatible {
-            if enabled { PluginLifecycleStatus::Enabled } else { PluginLifecycleStatus::Disabled }
-        } else {
-            PluginLifecycleStatus::Incompatible
-        },
-        external_dependencies: BTreeMap::new(),
-        bundled: true,
-        official: true,
-        app_scoped: false,
-        features,
-    })
-}
 
 fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<InstalledPluginSnapshot> {
     let preset = game_scope_preset(game_name);
-    let mut plugins = snapshot(&registry.for_game_preset(game_name, &preset));
-    for plugin in &mut plugins {
+    let scoped = registry.for_game_preset(game_name, &preset);
+    let mut plugins = snapshot(&scoped);
+    for (plugin, installed) in plugins.iter_mut().zip(scoped.installed()) {
         if plugin.manifest.id == PLAYER_TWEAKS_ID {
-            match super::player_tweaks::features(registry.find(PLAYER_TWEAKS_ID), &preset) {
+            match super::player_tweaks::features(installed, &preset) {
                 Ok(features) => plugin.features = features,
                 Err(_) => { plugin.enabled = false; plugin.lifecycle_status = PluginLifecycleStatus::Broken; }
             }
@@ -653,9 +593,6 @@ fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<Installe
             plugin.enabled = false;
             plugin.lifecycle_status = PluginLifecycleStatus::Incompatible;
         }
-    }
-    if let Some(bundled) = (registry.find(PLAYER_TWEAKS_ID).is_none()).then(|| bundled_player_tweaks_snapshot(registry, game_name)).flatten() {
-        plugins.push(bundled);
     }
     plugins
 }
@@ -691,7 +628,6 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
             enabled: plugin.enabled,
             lifecycle_status: lifecycle_status(plugin),
             external_dependencies: plugin.external_dependencies.clone(),
-            bundled: false,
             official: plugin.official,
             app_scoped: plugin.manifest.is_app_scoped(),
             features: Vec::new(),
@@ -836,27 +772,14 @@ pub fn set_plugin_enabled_for_game(
             Dlss5State::Managed(_) | Dlss5State::NotManaged => {}
         }
     }
-    if id == PLAYER_TWEAKS_ID && registry.find(&id).is_none() {
-        let preset = game_scope_preset(&game_name);
-        if enabled && player_tweaks_features(&preset).is_empty() {
-            return Err("Player Tweaks 当前支持 GIMI 和 SRMI".to_string());
-        }
-        if enabled && preset.eq_ignore_ascii_case("GIMI") && !player_tweaks_available() {
-            return Err("bundled Player Tweaks DLL is unavailable".to_string());
-        }
-        if !enabled && preset.eq_ignore_ascii_case("SRMI") {
-            super::star_rail_tweaks::release_for_game(&game_name)?;
-        }
-        registry.set_bundled_game_enabled(&game_name, &id, enabled)
+    if id == PLAYER_TWEAKS_ID && !enabled && registry.find(&id).is_some()
+        && game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI") {
+        super::star_rail_tweaks::release_for_game(&game_name)?;
+    }
+    if registry.find(&id).is_some_and(|plugin| plugin.manifest.is_app_scoped()) {
+        registry.set_enabled(&id, enabled)
     } else {
-        if id == PLAYER_TWEAKS_ID && !enabled && game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI") {
-            super::star_rail_tweaks::release_for_game(&game_name)?;
-        }
-        if registry.find(&id).is_some_and(|plugin| plugin.manifest.is_app_scoped()) {
-            registry.set_enabled(&id, enabled)
-        } else {
-            registry.set_game_enabled(&game_name, &id, enabled)
-        }
+        registry.set_game_enabled(&game_name, &id, enabled)
     }
     .map_err(|error| error.to_string())?;
     if cleanup_dlss5 {
@@ -864,18 +787,6 @@ pub fn set_plugin_enabled_for_game(
             .map_err(|error| error.to_string())?;
     }
     Ok(snapshot_for_game(&registry, &game_name))
-}
-
-#[tauri::command]
-pub fn bundled_player_tweaks_enabled_for_game(game_name: String, game_preset: String) -> bool {
-    let preset = game_scope_preset(&game_name);
-    if !preset.eq_ignore_ascii_case(&game_preset) || player_tweaks_features(&preset).is_empty()
-        || (preset.eq_ignore_ascii_case("GIMI") && !player_tweaks_available()) {
-        return false;
-    }
-    PluginRegistry::from_default_location()
-        .map(|registry| registry.game_enabled(&game_name, PLAYER_TWEAKS_ID))
-        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -1049,10 +960,12 @@ pub fn inspect_plugin_package(archive_path: String) -> Result<PackageInspection,
 
 #[tauri::command]
 pub async fn local_plugin_packages() -> Result<Vec<super::local_packages::LocalPluginPackage>, String> {
+    let Some(directory) = super::local_packages::development_directory(cfg!(debug_assertions)) else {
+        return Ok(Vec::new());
+    };
     // 包检查会解压并计算压缩包哈希，不能占用 WebView 的交互线程。
-    tauri::async_runtime::spawn_blocking(|| {
-        super::local_packages::discover(&crate::config::path_manager::PathManager::ssmt_resources_folder().join("PluginPackages"))
-    }).await.map_err(|error| format!("读取随包插件目录失败：{error}"))?
+    tauri::async_runtime::spawn_blocking(move || super::local_packages::discover(&directory))
+        .await.map_err(|error| format!("读取开发插件目录失败：{error}"))?
 }
 
 #[tauri::command]
@@ -1063,9 +976,11 @@ pub fn install_local_plugin(
     disclaimer_accepted: bool,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
     if !disclaimer_accepted { return Err("local plugin disclaimer must be accepted".into()); }
+    let directory = super::local_packages::development_directory(cfg!(debug_assertions))
+        .ok_or("本地构建包仅限开发模式；请从官方目录或第三方包入口安装插件")?;
     // 本地构建保留 ID 以复用已有贡献，但安装来源仍未验证；不能借此安装任意路径的 ssmt.* 包。
     let package = super::local_packages::reviewed(
-        &crate::config::path_manager::PathManager::ssmt_resources_folder().join("PluginPackages"),
+        &directory,
         &id, &reviewed_sha256,
     )?;
     if !package.inspection.manifest.compatibility.supports(&app.package_info().version.to_string(), super::SUPPORTED_PLATFORM, None) {
@@ -1283,7 +1198,6 @@ mod tests {
             ids.push(manifest.id);
         }
         assert!(ids.len() >= 3);
-        ids.push(super::PLAYER_TWEAKS_ID.into());
         let mut registry = PluginRegistry::new(root.join("plugins")).unwrap();
         let mut combinations = vec![Vec::new(), ids.clone()];
         for (index, id) in ids.iter().enumerate() {
@@ -1298,11 +1212,6 @@ mod tests {
           fs::write(&executable, b"fixture").unwrap();
           for combination in &combinations {
             for id in &ids {
-                if id == super::PLAYER_TWEAKS_ID {
-                    registry.set_bundled_game_enabled(preset, id,
-                        !super::player_tweaks_features(preset).is_empty() && combination.contains(id)).unwrap();
-                    continue;
-                }
                 let compatible = registry.find(id).unwrap().manifest.compatibility.supports_game(preset);
                 registry
                     .set_game_enabled(preset, id, compatible && combination.contains(id))
@@ -1337,10 +1246,13 @@ mod tests {
     }
 
     #[test]
-    fn player_tweaks_exposes_only_implemented_features_for_each_game() {
-        assert_eq!(super::player_tweaks_features("GIMI"), ["camera", "fps", "fast-team"]);
-        assert_eq!(super::player_tweaks_features("srmi"), ["fps-120"]);
-        for preset in ["WWMI", "ZZMI", "EFMI", "ZZMIDX12"] { assert!(super::player_tweaks_features(preset).is_empty()); }
+    fn empty_installation_has_no_synthetic_player_tweaks_entry() {
+        let root = std::env::temp_dir().join(format!("ssmt-empty-market-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let registry = PluginRegistry::new(&root).unwrap();
+        for preset in ["GIMI", "SRMI", "WWMI", "ZZMI", "EFMI"] {
+            assert!(super::snapshot_for_game(&registry, preset).is_empty());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

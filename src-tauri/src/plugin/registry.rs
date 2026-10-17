@@ -337,7 +337,7 @@ impl PluginRegistry {
 
     pub fn game_enabled(&self, game_name: &str, id: &str) -> bool {
         self.configured_game_enabled(game_name, id)
-            && self.find(id).map_or(true, |plugin| plugin.manifest.is_app_scoped()
+            && self.find(id).is_some_and(|plugin| plugin.manifest.is_app_scoped()
                 || plugin.manifest.compatibility.supports_game(&game_scope_preset(game_name)))
     }
 
@@ -401,20 +401,6 @@ impl PluginRegistry {
         let plugin = self.find(id).ok_or_else(|| PluginRegistryError::PluginNotFound(id.to_string()))?;
         if enabled && !plugin.manifest.compatibility.supports_game(&game_scope_preset(&game_name)) {
             return Err(PluginRegistryError::State(format!("插件 {} 不支持当前游戏 {}", plugin.manifest.name, game_name)));
-        }
-        self.write_game_enabled(&game_name, id, enabled)
-    }
-
-    // 内置 DLL 不属于可安装包；调用方确认资源与游戏兼容后才可写入选择。
-    pub fn set_bundled_game_enabled(
-        &mut self,
-        game_name: &str,
-        id: &str,
-        enabled: bool,
-    ) -> Result<(), PluginRegistryError> {
-        let game_name = game_name.trim().to_lowercase();
-        if game_name.is_empty() {
-            return Err(PluginRegistryError::State("game name is required".to_string()));
         }
         self.write_game_enabled(&game_name, id, enabled)
     }
@@ -543,6 +529,20 @@ impl PluginRegistry {
         if let Err(error) = copy_package_tree(source, &temporary) {
             let _ = fs::remove_dir_all(&temporary);
             return Err(error);
+        }
+        if self.find(&manifest.id).is_none() {
+            // 首次实际安装不继承旧内置条目或已卸载包的启用与来源；保留依赖路径供重新校验。
+            let mut state = self.state.clone();
+            for selections in state.game_plugins.values_mut() { selections.remove(&manifest.id); }
+            let prefix = format!("{}@", manifest.id);
+            for (key, settings) in &mut state.plugins {
+                if key.starts_with(&prefix) { settings.enabled = false; settings.official = false; }
+            }
+            if let Err(error) = write_state(&self.state_path, &state) {
+                let _ = fs::remove_dir_all(&temporary);
+                return Err(error.into());
+            }
+            self.state = state;
         }
         if let Err(error) = fs::rename(&temporary, &destination) {
             let _ = fs::remove_dir_all(&temporary);
@@ -911,7 +911,9 @@ mod tests {
             registry.install_directory_package(&source).unwrap();
         }
         registry.set_game_enabled("SRMI", "ssmt.beta", true).unwrap();
-        registry.set_bundled_game_enabled("GIMI", "ssmt.player-tweaks", true).unwrap();
+        // 旧版遗留的启用标记不能让未安装插件重新获得执行资格。
+        registry.write_game_enabled("gimi", "ssmt.player-tweaks", true).unwrap();
+        assert!(registry.set_game_enabled("GIMI", "ssmt.player-tweaks", true).is_err());
         for mask in 0..(1 << ids.len()) {
             for (index, id) in ids.iter().enumerate() {
                 registry
@@ -937,10 +939,38 @@ mod tests {
         let config_for = |game| registry.for_game(game).generate_plugin_host_config().plugins;
         assert_eq!(config_for("GIMI"), ids.iter().map(|id| format!("{id}/1.0.0/native/example.dll")).collect::<Vec<_>>());
         assert_eq!(config_for("SRMI"), vec!["ssmt.beta/1.0.0/native/example.dll"]);
-        assert!(registry.game_enabled("GIMI", "ssmt.player-tweaks"));
+        assert!(!registry.game_enabled("GIMI", "ssmt.player-tweaks"));
         assert!(!registry.game_enabled("SRMI", "ssmt.player-tweaks"));
         assert!(config_for("WWMI").is_empty());
         assert!(config_for("").is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_real_install_ignores_orphan_enablement_but_upgrade_preserves_installed_selection() {
+        let root = temp_root("orphan-selection");
+        let id = "ssmt.player-tweaks";
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        let other = fixture_package(&root.join("other"), "thirdparty.other", "1.0.0");
+        registry.install_directory_package(&other).unwrap();
+        registry.set_game_enabled("GIMI", "thirdparty.other", true).unwrap();
+        registry.state.plugins.insert(package_key(id, "1.0.0"), PluginSettings {
+            enabled: true, official: true, ..PluginSettings::default()
+        });
+        registry.write_game_enabled("gimi", id, true).unwrap();
+        registry.write_game_enabled("srmi", id, true).unwrap();
+        let source = fixture_package(&root.join("first"), id, "1.0.0");
+        let installed = registry.install_directory_package(&source).unwrap();
+        assert!(!installed.enabled && !installed.official);
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        assert!(!registry.game_enabled("GIMI", id));
+        assert!(!registry.game_enabled("SRMI", id));
+        assert!(registry.game_enabled("GIMI", "thirdparty.other"));
+        registry.set_game_enabled("GIMI", id, true).unwrap();
+        let upgrade = fixture_package(&root.join("upgrade"), id, "1.1.0");
+        registry.install_directory_package(&upgrade).unwrap();
+        assert!(registry.for_game("GIMI").find(id).unwrap().enabled);
+        assert!(!registry.for_game("SRMI").find(id).unwrap().enabled);
         fs::remove_dir_all(root).unwrap();
     }
 

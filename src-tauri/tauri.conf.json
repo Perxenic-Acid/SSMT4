@@ -45,7 +45,19 @@
             "icons/icon.icns",
             "icons/icon.ico"
         ],
-        "resources": ["resources/**/*"]
+        "resources": [
+            "resources/7za.exe",
+            "resources/d3d11.dll",
+            "resources/Run.exe",
+            "resources/SSMT-PluginHost.dll",
+            "resources/texconv.exe",
+            "resources/upx.exe",
+            "resources/wuwa_settings.exe",
+            "resources/DefultTextures/**/*",
+            "resources/DX12/**/*",
+            "resources/Games/**/*",
+            "resources/GameType/**/*"
+        ]
     },
     "plugins": {
         "updater": {

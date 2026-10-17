@@ -10,6 +10,11 @@ pub struct LocalPluginPackage {
     pub inspection: PackageInspection,
 }
 
+/// 开发包不属于应用资源，Release 也不读取旧安装遗留的 PluginPackages。
+pub(crate) fn development_directory(debug_build: bool) -> Option<PathBuf> {
+    debug_build.then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build/plugin-packages"))
+}
+
 /// 只发现构建脚本放好的安装包；发现不安装、不启用，也不把本地作者声明视为官方来源。
 pub fn discover(directory: &Path) -> Result<Vec<LocalPluginPackage>, String> {
     let entries = match fs::read_dir(directory) {
@@ -52,6 +57,13 @@ pub fn reviewed(directory: &Path, id: &str, sha256: &str) -> Result<LocalPluginP
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn development_packages_are_never_available_to_release_discovery() {
+        assert!(development_directory(false).is_none());
+        assert_eq!(development_directory(true).unwrap(),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build/plugin-packages"));
+    }
 
     fn package(directory: &Path, id: &str, version: &str) {
         let path = directory.join(format!("{id}-{version}.ssmtpkg"));

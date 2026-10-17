@@ -1,6 +1,6 @@
 use super::{
     gimi_hot_runtime::ensure_stopped,
-    registry::{game_scope_preset, PluginRegistry},
+    registry::game_scope_preset,
     settings::PluginSettingsStore,
 };
 use crate::config::path_manager::PathManager;
@@ -297,10 +297,14 @@ pub fn prepare_star_rail_player_tweaks(game_name: String) -> Result<bool, String
     if !game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI") {
         return Ok(false);
     }
-    let Ok(registry) = PluginRegistry::from_default_location() else {
+    let Some(registry) = super::commands::installed_plugin_registry()? else {
         return Ok(false);
     };
     if !registry.game_enabled(&game_name, PLUGIN_ID) {
+        return Ok(false);
+    }
+    let plugin = registry.find(PLUGIN_ID).ok_or("Player Tweaks 未安装")?;
+    if !super::player_tweaks::features(plugin, "SRMI")?.iter().any(|feature| feature == "fps-120") {
         return Ok(false);
     }
     let _lock = STATE_LOCK.lock().map_err(|_| "崩铁 FPS 设置锁不可用")?;

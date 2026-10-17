@@ -151,7 +151,6 @@ pub fn run() {
             plugin::commands::plugin_ui_routes,
             plugin::commands::plugin_capabilities,
             plugin::commands::set_plugin_enabled_for_game,
-            plugin::commands::bundled_player_tweaks_enabled_for_game,
             plugin::player_tweaks::prepare_player_tweaks_launch,
             plugin::star_rail_tweaks::prepare_star_rail_player_tweaks,
             plugin::commands::set_plugin_external_dependency_path,
