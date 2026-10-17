@@ -484,19 +484,20 @@ impl GIMINewExtractor {
 
                 crate::extract_log!("CategoryBufFileName: {}", category_buf_file_name);
                 let category_buf_file_path =
-                    self.fa.log.get_deduped_filepath(&category_buf_file_name);
+                    match self.fa.log.resolve_dump_filepath(&category_buf_file_name) {
+                        Ok(path) => path.to_string_lossy().into_owned(),
+                        Err(error) => {
+                            crate::extract_log!("Category {} 读取失败: {}", category_name, error);
+                            all_file_exists = false;
+                            break;
+                        }
+                    };
                 crate::extract_log!(
                     "Category: {} File: {}",
                     category_name,
                     category_buf_file_path
                 );
 
-                if category_buf_file_path.is_empty() || !Path::new(&category_buf_file_path).exists()
-                {
-                    crate::extract_log!("对应Buffer文件未找到,此数据类型无效。");
-                    all_file_exists = false;
-                    break;
-                }
                 let category_buf_txt_file_path = self
                     .fa
                     .log
@@ -759,5 +760,118 @@ impl GIMINewExtractor {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GPU_TYPE: &str = "GPU_P12_N12_TA16_C4_T8_BW16_BI16_";
+
+    fn fixture_extractor(folder: &Path) -> GIMINewExtractor {
+        let types = [GPU_TYPE, "CPU_P12_N12_TA16_C4_T8_"]
+            .into_iter()
+            .map(|name| {
+                D3D11GameType::from_json_file(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("resources/GameType/GIMI")
+                        .join(format!("{name}.json")),
+                )
+                .unwrap()
+            })
+            .collect();
+        GIMINewExtractor {
+            fa: FrameAnalysis::new(folder.to_str().unwrap()).unwrap(),
+            workspace_path: String::new(),
+            drawib_config: DrawIBConfig {
+                path: String::new(),
+                entries: Vec::new(),
+            },
+            specify_drawib_extract: false,
+            d3d11_gametype_lv2: D3D11GameTypeLv2 {
+                ordered_gpu_cpu_d3d11_gametype_list: types,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn assert_gpu_match(extractor: &GIMINewExtractor) {
+        for index in ["000073", "000138"] {
+            let matched = extractor
+                .get_possible_gametype_list_unity_vs("848c5980", "000002", &[index.into()])
+                .unwrap();
+            assert_eq!(matched.len(), 1);
+            assert_eq!(matched[0].game_type_name, GPU_TYPE);
+            assert!(matched[0].gpu_pre_skinning);
+        }
+    }
+
+    #[test]
+    fn missing_pointlist_log_mapping_keeps_gpu_type() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-gimi-mapping-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("deduped")).unwrap();
+        fs::write(root.join("log.txt"), "analyse_options: 0140073d\n").unwrap();
+        // 只构造布局和文件链接，不携带游戏数据；三个 Category 都有 316 个顶点。
+        for (name, hash, size) in [
+            (
+                "000002-vb0=54c32104-vs=653c63ba4a73ca8b.buf",
+                "54c32104",
+                316 * 40,
+            ),
+            (
+                "000002-vb1=61224bdf-vs=653c63ba4a73ca8b.buf",
+                "61224bdf",
+                316 * 32,
+            ),
+            ("000073-vb1=9f15c59d-vs=test.buf", "9f15c59d", 316 * 12),
+            ("000138-vb1=9f15c59d-vs=test.buf", "9f15c59d", 316 * 12),
+        ] {
+            let target = root.join("deduped").join(format!("{hash}.buf"));
+            fs::write(&target, vec![0u8; size]).unwrap();
+            fs::hard_link(target, root.join(name)).unwrap();
+        }
+        let extractor = fixture_extractor(&root);
+        assert!(extractor.fa.log.filename_deduped_filename_map.is_empty());
+        assert_gpu_match(&extractor);
+
+        // 即使 Hash 文件仍在，丢失真实链接也不能伪造一次成功匹配。
+        fs::remove_file(root.join("000002-vb0=54c32104-vs=653c63ba4a73ca8b.buf")).unwrap();
+        let extractor = fixture_extractor(&root);
+        assert!(extractor
+            .get_possible_gametype_list_unity_vs("848c5980", "000002", &["000073".into()])
+            .unwrap()
+            .is_empty());
+        assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "需要显式提供外部转储目录；只读取，不修改转储或工作空间"]
+    fn existing_848c5980_dump_matches_gpu_type() {
+        let folder =
+            std::env::var_os("SSMT_GIMI_MAPPING_SAMPLE").expect("请设置 SSMT_GIMI_MAPPING_SAMPLE");
+        let extractor = fixture_extractor(Path::new(&folder));
+        let position = extractor
+            .fa
+            .log
+            .resolve_dump_filepath("000002-vb0=54c32104-vs=653c63ba4a73ca8b.buf")
+            .unwrap();
+        assert_eq!(fs::metadata(position).unwrap().len(), 316 * 40);
+        assert_eq!(
+            extractor
+                .fa
+                .log
+                .get_deduped_filename("000002-vb0=54c32104-vs=653c63ba4a73ca8b.buf"),
+            "54c32104.buf"
+        );
+        assert_gpu_match(&extractor);
     }
 }

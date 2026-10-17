@@ -109,22 +109,75 @@ impl FrameAnalysisSingleLog {
         out
     }
 
-    /// 按原始文件名查询去重后的文件名；不存在则返回空字符串。
+    /// 优先使用日志文件名；缺少映射时从真实文件或链接目标取得名称。
     pub fn get_deduped_filename(&self, frame_analysis_filename: &str) -> String {
-        self.filename_deduped_filename_map
+        if let Some(filename) = self
+            .filename_deduped_filename_map
             .get(frame_analysis_filename)
-            .cloned()
+        {
+            return filename.clone();
+        }
+        // 贴图同步等调用方也需要文件名，不能路径恢复成功却返回空名称。
+        self.resolve_dump_filepath(frame_analysis_filename)
+            .ok()
+            .and_then(|path| fs::canonicalize(path).ok())
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
             .unwrap_or_default()
     }
 
-    //获取deduped文件路径
-    pub fn get_deduped_filepath(&self, frame_analysis_filename: &str) -> String {
-        let deduped_filename = self.get_deduped_filename(frame_analysis_filename);
-        if deduped_filename.is_empty() {
-            return String::new();
+    /// 日志是索引而非文件存在的唯一证据；原始转储可能是有效的符号链接或硬链接。
+    pub fn resolve_dump_filepath(&self, frame_analysis_filename: &str) -> Result<PathBuf, String> {
+        let name = Path::new(frame_analysis_filename);
+        if frame_analysis_filename.is_empty()
+            || name.components().count() != 1
+            || !matches!(
+                name.components().next(),
+                Some(std::path::Component::Normal(_))
+            )
+        {
+            return Err(format!(
+                "原始 Dump 文件名无效或未找到: {frame_analysis_filename}"
+            ));
         }
-        let path = Path::new(&self.dir).join("deduped").join(deduped_filename);
-        path.to_string_lossy().to_string()
+        let deduped_filename = self
+            .filename_deduped_filename_map
+            .get(frame_analysis_filename)
+            .cloned()
+            .unwrap_or_default();
+        let mapped = Path::new(&self.dir).join("deduped").join(&deduped_filename);
+        if !deduped_filename.is_empty() && mapped.is_file() {
+            return Ok(mapped);
+        }
+        let original = Path::new(&self.dir).join(name);
+        if original.is_file() {
+            crate::extract_log!(
+                "日志映射缺失或目标不可读，使用原始 Dump 文件（自动跟随文件系统链接）: {}",
+                original.display()
+            );
+            return Ok(original);
+        }
+        if deduped_filename.is_empty() {
+            Err(format!(
+                "日志映射缺失，原始 Dump 文件也不存在或链接失效: {}",
+                original.display()
+            ))
+        } else {
+            Err(format!(
+                "日志映射的 deduped 文件不存在或不可读: {}；原始 Dump 也不可读: {}",
+                mapped.display(),
+                original.display()
+            ))
+        }
+    }
+
+    // 保留旧接口；需要具体失败原因的调用点使用 resolve_dump_filepath。
+    pub fn get_deduped_filepath(&self, frame_analysis_filename: &str) -> String {
+        self.resolve_dump_filepath(frame_analysis_filename)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 
     ///通过DrawIB在日志文件中查找最后一个匹配的DrawCall索引，并返回对应的PointList索引。
@@ -590,5 +643,67 @@ impl FrameAnalysisSingleLog {
                 .ok()?,
         ));
         Some((start_index, index_count))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_dump_uses_real_files_and_links_without_guessing_hashes() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-dump-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("deduped")).unwrap();
+        let name = "000002-vb0=54c32104-vs=653c63ba4a73ca8b.buf";
+        let target = root.join("deduped/54c32104.buf");
+        fs::write(&target, [1, 2, 3]).unwrap();
+        let mut log = FrameAnalysisSingleLog::empty(root.to_str().unwrap());
+
+        // Hash 同名文件存在并不足以证明属于这个 Draw，不能据此静默恢复。
+        assert!(log
+            .resolve_dump_filepath(name)
+            .unwrap_err()
+            .contains("日志映射缺失"));
+        fs::hard_link(&target, root.join(name)).unwrap();
+        assert_eq!(log.get_deduped_filename(name), name);
+        assert_eq!(
+            fs::read(log.resolve_dump_filepath(name).unwrap()).unwrap(),
+            [1, 2, 3]
+        );
+
+        log.filename_deduped_filename_map
+            .insert(name.into(), "missing.buf".into());
+        assert_eq!(log.resolve_dump_filepath(name).unwrap(), root.join(name));
+        fs::remove_file(root.join(name)).unwrap();
+        assert!(log
+            .resolve_dump_filepath(name)
+            .unwrap_err()
+            .contains("deduped 文件不存在"));
+
+        log.filename_deduped_filename_map
+            .insert(name.into(), "54c32104.buf".into());
+        fs::write(root.join(name), [9]).unwrap();
+        assert_eq!(log.resolve_dump_filepath(name).unwrap(), target);
+        assert_eq!(
+            fs::read(log.resolve_dump_filepath(name).unwrap()).unwrap(),
+            [1, 2, 3]
+        );
+        assert_eq!(log.get_deduped_filename(name), "54c32104.buf");
+        for invalid in ["", "../54c32104.buf", "deduped/54c32104.buf"] {
+            assert!(log
+                .resolve_dump_filepath(invalid)
+                .unwrap_err()
+                .contains("文件名无效"));
+        }
+        // 只删除测试自身在临时目录中创建的目录。
+        assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
+        fs::remove_dir_all(root).unwrap();
     }
 }
