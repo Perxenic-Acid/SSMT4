@@ -158,6 +158,32 @@ test('marketplace exposes DLSS5 settings only for the selected enabled game and 
   assert.equal(s.graphicsConfigLoading.value, false);
 });
 
+test('刷新相同插件快照与目录时保留 DLSS 设置，避免清空目标并重新挂载', async t => {
+  let reads = 0;
+  const s = marketplace(t, { loadGameConfig: async () => {
+    reads += 1;
+    return { targetExePath: 'C:/Game/YuanShen.exe' };
+  } });
+  s.installed.value = [dlssPlugin(true)];
+  s.installedGameName.value = 'GIMI';
+  await setImmediate();
+  assert.equal(reads, 1);
+  const targets = [];
+  const stop = vue.watch(s.graphicsTargetExe, target => targets.push(target));
+  t.after(stop);
+  for (let index = 0; index < 3; index += 1) {
+    s.installed.value = [dlssPlugin(true)];
+    s.catalog.value = [{ ...dlssPlugin(true).manifest, supportedGames: ['GIMI'], official: true }];
+    await setImmediate();
+  }
+  assert.equal(reads, 1, '相同游戏、插件版本及启用状态无需重新加载配置');
+  assert.deepEqual(targets, [], '保持当前组件挂载所需的目标路径');
+  assert.equal(s.graphicsTargetExe.value, 'C:/Game/YuanShen.exe');
+  s.installed.value = [{ ...dlssPlugin(true), manifest: { ...dlssPlugin(true).manifest, version: '0.2.0' } }];
+  await setImmediate();
+  assert.equal(reads, 2, '实际更新已安装版本仍会重新检查设置');
+});
+
 test('不兼容插件不能启用，旧启用状态仍可关闭，更新提示不覆盖不兼容提示', async t => {
   const calls = [];
   const s = marketplace(t, { invoke: async (command, args) => { calls.push({ command, args }); return []; } });

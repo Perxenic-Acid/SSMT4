@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 import { FolderOpened, Refresh, Search, Setting, Document, Delete, Box, InfoFilled } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
-import { AppStateManager } from '../../store/AppStateManager'
+import { AppStateManager, BGType } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
 
 const PlayerTweaksCameraSettings = defineAsyncComponent(
@@ -500,7 +500,14 @@ const dependencyStatusLabel = (status: DependencyStatus) => t(`pluginMarketplace
 const dependencyStatusClass = (status: DependencyStatus) => `is-${status}`
 
 let initialized = false
-watch(() => [selectedGameName.value, installedGameName.value, selectedPlugin.value?.manifest.id, selectedPlugin.value?.enabled], async () => {
+// 目录和快照会替换对象；按实际身份与状态监听，避免相同内容触发设置组件卸载和重扫。
+watch([
+  selectedGameName, installedGameName,
+  () => selectedPlugin.value?.manifest.id,
+  () => selectedPlugin.value?.manifest.version,
+  () => selectedPlugin.value?.enabled,
+  () => selectedSettings.value.includes('ssmt.dlss5.settings'),
+], async () => {
   const requestId = ++graphicsConfigRequestId
   const gameName = selectedGameName.value
   graphicsTargetExe.value = ''
@@ -532,7 +539,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="plugin-marketplace">
+  <main class="plugin-marketplace" :class="{ 'is-video-background': AppStateManager.appSettings.bgType === BGType.Video }">
     <details v-if="catalogError || localCatalogError" class="catalog-notice">
       <summary><InfoFilled aria-hidden="true" /><span>{{ t('pluginMarketplace.catalogUnavailable') }}</span><span class="notice-details">{{ t('pluginMarketplace.showDetails') }}</span></summary>
       <p v-if="catalogError">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</p>
@@ -848,6 +855,16 @@ onMounted(async () => {
   box-shadow: var(--t-page-panel-shadow);
   backdrop-filter: var(--t-page-panel-blur);
   -webkit-backdrop-filter: var(--t-page-panel-blur);
+}
+/* 与工作台采用相同处理：视频下不叠加动态模糊层，避免 WebView2 持续闪烁和文字丢失。 */
+.plugin-marketplace.is-video-background,
+.plugin-marketplace.is-video-background :deep(*) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.is-video-background .marketplace-sidebar,
+.is-video-background .plugin-detail {
+  background: linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), .05), transparent), rgba(8, 12, 19, .94);
 }
 /* 内容少时保持自然高度，超出本列可用高度后只收缩并滚动列表。 */
 .marketplace-sidebar { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
