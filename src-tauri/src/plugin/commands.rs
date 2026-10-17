@@ -1048,8 +1048,11 @@ pub fn inspect_plugin_package(archive_path: String) -> Result<PackageInspection,
 }
 
 #[tauri::command]
-pub fn local_plugin_packages() -> Result<Vec<super::local_packages::LocalPluginPackage>, String> {
-    super::local_packages::discover(&crate::config::path_manager::PathManager::ssmt_resources_folder().join("PluginPackages"))
+pub async fn local_plugin_packages() -> Result<Vec<super::local_packages::LocalPluginPackage>, String> {
+    // 包检查会解压并计算压缩包哈希，不能占用 WebView 的交互线程。
+    tauri::async_runtime::spawn_blocking(|| {
+        super::local_packages::discover(&crate::config::path_manager::PathManager::ssmt_resources_folder().join("PluginPackages"))
+    }).await.map_err(|error| format!("读取随包插件目录失败：{error}"))?
 }
 
 #[tauri::command]

@@ -1,7 +1,8 @@
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
 rustflags = [
-    "-C", "target-cpu=native",
+    # 安装包会在其他 CPU 上运行；保留哈希等依赖的运行时指令集检测。
+    "-C", "target-cpu=x86-64",
     "-C", "split-debuginfo=packed"
 ]
 

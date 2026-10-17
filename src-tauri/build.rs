@@ -1,6 +1,14 @@
 use std::{env, fs, path::PathBuf};
 
+#[path = "build_support/windows_cpu.rs"]
+mod windows_cpu;
+
 fn main() {
+    windows_cpu::validate_release_features(
+        &env::var("TARGET").unwrap_or_default(),
+        &env::var("PROFILE").unwrap_or_default(),
+        &env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default(),
+    ).unwrap_or_else(|error| panic!("{error}"));
     build_directxtex_bridge();
     configure_windows_delay_load();
     copy_windivert_runtime_files();

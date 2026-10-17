@@ -84,7 +84,7 @@ function marketplace(t, options = {}) {
   const appSettings = vue.reactive({ CurrentGameName: 'GIMI' });
   const settings = component(t, '../../src/views/PluginMarketplace/PluginMarketplace.vue', [
     'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
-    'catalog', 'catalogError', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
+    'catalog', 'catalogError', 'allEntries', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
     'selectedDependencies', 'dependencyActionsEnabled', 'openDependencyDownload', 'openDependencySettings', 'optionalDependency',
     'openDependencyDirectory',
   ], {
@@ -99,6 +99,35 @@ function marketplace(t, options = {}) {
   });
   return { ...settings, appSettings };
 }
+
+test('首次进入市场先显示内置插件，官方目录失败后仍接收随包目录且不触发插件资源扫描', async t => {
+  const registry = deferred(), official = deferred(), local = deferred();
+  const calls = [];
+  const s = marketplace(t, { invoke: command => {
+    calls.push(command);
+    if (command === 'plugin_registry_snapshot_for_game') return registry.promise;
+    if (command === 'official_plugin_catalog') return official.promise;
+    if (command === 'local_plugin_packages') return local.promise;
+    throw new Error(`Unexpected startup IPC: ${command}`);
+  } });
+  const refresh = s.refreshAll();
+  const player = { ...dlssPlugin(false), bundled: true, manifest: { ...dlssPlugin(false).manifest,
+    id: 'ssmt.player-tweaks', name: 'Player Tweaks', contributions: {},
+  } };
+  registry.resolve([player]);
+  await setImmediate();
+  assert.deepEqual(Array.from(s.allEntries.value, entry => entry.id), ['ssmt.player-tweaks']);
+  assert.equal(s.refreshing.value, true);
+  official.reject(new Error('官方目录离线'));
+  const manifest = { ...dlssPlugin(false).manifest, contributions: {}, compatibility: { games: ['GIMI'] } };
+  local.resolve([{ archivePath: 'C:/App/resources/PluginPackages/example.ssmtpkg', inspection: { manifest } }]);
+  await refresh;
+  assert.deepEqual(Array.from(s.allEntries.value, entry => entry.id).sort(), ['ssmt.dlss5.integration', 'ssmt.player-tweaks']);
+  assert.match(s.catalogError.value, /官方目录离线/);
+  assert.equal(s.refreshing.value, false);
+  assert.equal(s.selectedId.value, 'ssmt.player-tweaks');
+  assert.equal(calls.length, 3, '发现目录不会配置、下载或扫描未安装插件的专有资源');
+});
 
 test('marketplace exposes DLSS5 settings only for the selected enabled game and discards stale target reads', async t => {
   const first = deferred(), second = deferred();
