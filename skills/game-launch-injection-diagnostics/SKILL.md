@@ -43,7 +43,7 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 
 只将已证实、可复用的经验留在本 skill；单次 PID、个人游戏路径、哈希和测试输出放在诊断报告或忽略的构建目录。
 
-- 热键和重载有响应但 Mod 不生效时，检查 ReShade 升级 Device / Context 接口后是否丢失 Runtime 包装。用真实替换命令及回读结果测试 Device1–5、Context1–4、IUnknown、DeviceChild 和延迟取得 Context；DLL 存在与私有 IID 单独通过都不足。新版接口尾部局部转发，继承 Draw / 绑定保留 Runtime，沿用平台接口门禁。ReShade 不代理 WARP，软件用例通过不能宣称真实 Feeder 组合已验收。
+- 热键和重载有响应但 Mod 不生效时，检查 ReShade 升级 Device / Context 接口后是否丢失 Runtime 包装。用真实替换命令及回读结果测试 Device1–5、Context1–4、IUnknown、DeviceChild 和延迟取得 Context；DLL 存在与私有 IID 单独通过都不足。新版接口继承的 Draw / 绑定保留 Runtime，沿用平台接口门禁；CreateTexture2D1 / 3D1 也须共用旧入口的哈希、创建覆盖、Hunting 与释放跟踪，实际创建保留新版 TextureLayout，不能把所有新增尾部方法一概直通。以真实 DDS 替换和像素回读覆盖新旧 2D / 3D、匹配反例及释放后重建；清屏替换通过不能证明贴图替换通过。ReShade 不代理 WARP，软件用例通过不能宣称真实 Feeder 组合已验收。
 - DLL 的“控制台”通常应接入实际日志文件；来源由已采用的启用插件计划贡献，启动前建立基线，跟随游戏 PID 而非短命注入器。允许源日志轮转，不保留文件锁，错误与停止状态只影响该来源。默认阶段摘要与输出详情分开，迟到来源不得自动展开或抢选；只读来源拒绝输入，回显继续镜像到缓存日志。
 
 - 控制台通道失败不能直接归因为注入失败。先查缓存 `Logs/*-launch-console-*.log` 的 PID、stdout/stderr 与退出码；命令已提交后确认超时，不回滚已启动目标或重复启动。Windows 接收本机连接后显式清除非阻塞标志，用真实延迟读取覆盖 Winsock 10035；握手后清除实际读取句柄及其克隆的超时，覆盖长时间无输出与等待输入。UAC 与 stdio 在同级权限 helper 内衔接。回显日志与界面限流分开，关闭浮窗不杀进程。见 [启动控制台](../../docs/launch-console.md)。
