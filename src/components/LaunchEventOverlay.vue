@@ -1,97 +1,124 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import type { UnlistenFn } from '@tauri-apps/api/event'
-import { subscribeLaunchEvents, type LaunchEvent } from '../plugin/launchEventBus'
+import { computed, nextTick, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { LaunchMonitor } from '../store/LaunchMonitor';
+import { openPath } from '@tauri-apps/plugin-opener';
 
-const props = defineProps<{ visible: boolean }>()
-const { t } = useI18n()
-const detailsOpen = ref(false)
-const currentEvent = ref<LaunchEvent | null>(null)
-const events = ref<LaunchEvent[]>([])
-let unlisten: UnlistenFn | null = null
-
-const progressByEvent: Record<string, number> = {
-  launch_started: 8,
-  target_created: 28,
-  inject_begin: 42,
-  inject_complete: 58,
-  plugin_host_begin: 68,
-  plugin_host_ready: 78,
-  plugin_host_disabled: 78,
-  before_resume: 88,
-  target_resumed: 94,
-  runtime_detected: 98,
-  runtime_verification_unavailable: 98,
-  launch_complete: 100,
-}
-
-const progress = computed(() => currentEvent.value ? progressByEvent[currentEvent.value.event] ?? 12 : 0)
-const stageLabel = computed(() => currentEvent.value?.event
-  ? t(`launchUi.events.${currentEvent.value.event}`, currentEvent.value.event)
-  : t('launchUi.events.launch_started'))
-const error = computed(() => currentEvent.value?.event === 'launch_error' ? currentEvent.value : null)
-
-const reset = () => {
-  currentEvent.value = null
-  events.value = []
-  detailsOpen.value = false
-}
-
-const handleEvent = (event: LaunchEvent) => {
-  currentEvent.value = event
-  events.value = [...events.value.slice(-39), event]
-}
-
-watch(() => props.visible, (visible) => {
-  if (visible) reset()
-})
-
-onMounted(async () => {
-  unlisten = await subscribeLaunchEvents(handleEvent)
-})
-
-onUnmounted(() => {
-  unlisten?.()
-})
+const { t } = useI18n();
+const state = LaunchMonitor.state;
+const detailsOpen = ref(false);
+const input = ref('');
+const sending = ref(false);
+const inputError = ref('');
+const log = ref<HTMLElement>();
+const followOutput = ref(true);
+const selected = computed(() => state.sessions.find(item => item.id === state.selectedId));
+const activeCount = computed(() => state.sessions.filter(item => item.running).length);
+const stageLabel = computed(() => state.currentEvent?.event === 'launch_error' ? t('launchUi.failed') : state.currentEvent?.event
+  ? t(`launchUi.events.${state.currentEvent.event}`, state.currentEvent.event)
+  : state.launching ? t('launchUi.events.launch_started') : t('launchUi.console.title'));
+const error = computed(() => state.currentEvent?.event === 'launch_error' ? state.currentEvent : null);
+const scrollToEnd = async () => {
+  await nextTick();
+  if (log.value) log.value.scrollTop = log.value.scrollHeight;
+};
+watch(() => selected.value?.output, () => { if (followOutput.value) void scrollToEnd(); });
+watch(() => state.selectedId, () => { inputError.value = ''; followOutput.value = true; void scrollToEnd(); });
+watch(() => state.collapsed, collapsed => { if (!collapsed && followOutput.value) void scrollToEnd(); });
+const onScroll = () => {
+  if (log.value) followOutput.value = log.value.scrollHeight - log.value.scrollTop - log.value.clientHeight < 36;
+};
+const send = async () => {
+  if (sending.value || !selected.value?.running) return;
+  sending.value = true;
+  inputError.value = '';
+  try { await LaunchMonitor.send(input.value); input.value = ''; }
+  catch (error) { inputError.value = String(error); }
+  finally { sending.value = false; }
+};
+const copy = async () => {
+  try { await navigator.clipboard.writeText(selected.value?.output || ''); }
+  catch (error) { inputError.value = String(error); }
+};
+const openLog = async () => {
+  if (!selected.value?.logPath) return;
+  try { await openPath(selected.value.logPath); }
+  catch (error) { inputError.value = String(error); }
+};
 </script>
 
 <template>
-  <Transition name="launch-ui-fade">
-    <section v-if="visible" class="launch-ui-overlay" role="status" aria-live="polite">
-      <div class="launch-ui-panel">
-        <div class="launch-ui-kicker">SSMT LAUNCH</div>
-        <h2>{{ t('launchUi.title') }}</h2>
-        <p class="launch-ui-stage">{{ error ? t('launchUi.failed') : stageLabel }}</p>
-        <div class="launch-ui-progress" aria-hidden="true"><span :style="{ width: `${progress}%` }"></span></div>
-        <div class="launch-ui-progress-meta"><span>{{ progress }}%</span><span v-if="currentEvent?.pid">PID {{ currentEvent.pid }}</span></div>
-        <div v-if="error" class="launch-ui-error">
-          <strong>{{ error.code || t('launchUi.failed') }}</strong>
-          <span>{{ error.message || t('launchUi.unknownError') }}</span>
+  <aside v-if="state.visible || state.sessions.length" class="launch-monitor" :class="{ compact: !state.visible || state.collapsed }">
+    <button v-if="!state.visible || state.collapsed" type="button" class="monitor-reopen" @click="state.visible = true; state.collapsed = false">
+      <span aria-hidden="true">&gt;_</span> {{ t('launchUi.console.title') }}
+      <span v-if="activeCount" class="monitor-count">{{ activeCount }}</span>
+    </button>
+    <section v-else class="monitor-panel" :aria-label="t('launchUi.console.title')">
+      <header class="monitor-header">
+        <div><strong>{{ t('launchUi.console.title') }}</strong><span class="monitor-stage" role="status">{{ stageLabel }}</span></div>
+        <div class="monitor-actions">
+          <button type="button" :title="t('launchUi.console.minimize')" :aria-label="t('launchUi.console.minimize')" @click="state.collapsed = true">−</button>
+          <button type="button" :title="t('launchUi.console.hide')" :aria-label="t('launchUi.console.hide')" @click="state.visible = false">×</button>
         </div>
-        <button type="button" class="launch-ui-details" @click="detailsOpen = !detailsOpen">
-          {{ detailsOpen ? t('launchUi.hideDetails') : t('launchUi.showDetails') }}
-        </button>
-        <pre v-if="detailsOpen" class="launch-ui-log">{{ events.map(item => JSON.stringify(item)).join('\n') || t('launchUi.waiting') }}</pre>
+      </header>
+      <div v-if="error" class="monitor-error">{{ error.code }} · {{ error.message || t('launchUi.unknownError') }}</div>
+      <div v-if="state.sessions.length" class="monitor-toolbar">
+        <select v-model="state.selectedId" :aria-label="t('launchUi.console.program')">
+          <option v-for="session in state.sessions" :key="session.id" :value="session.id">
+            {{ session.program }} · {{ session.pid }} · {{ session.running ? t('launchUi.console.running') : t('launchUi.console.exited', { code: session.code ?? '?' }) }}
+          </option>
+        </select>
+        <button type="button" @click="copy">{{ t('launchUi.console.copy') }}</button>
+        <button v-if="selected?.logPath" type="button" @click="openLog">{{ t('launchUi.console.log') }}</button>
+        <button type="button" @click="selected && (selected.output = '', selected.truncated = false)">{{ t('launchUi.console.clear') }}</button>
       </div>
+      <div v-if="selected" ref="log" class="monitor-log glass-scrollbar" tabindex="0" @scroll="onScroll">
+        <span v-if="selected.truncated" class="monitor-muted">{{ t('launchUi.console.truncated') }}&#10;</span>
+        <span>{{ selected.output || t('launchUi.waiting') }}</span>
+      </div>
+      <p v-else class="monitor-waiting">{{ t('launchUi.waiting') }}</p>
+      <p v-if="selected?.error || inputError" class="monitor-error">{{ inputError || selected?.error }}</p>
+      <form v-if="selected" class="monitor-input" @submit.prevent="send">
+        <span aria-hidden="true">&gt;</span>
+        <input v-model="input" :disabled="!selected.running || sending" :placeholder="t('launchUi.console.input')" :aria-label="t('launchUi.console.input')" autocomplete="off" spellcheck="false" maxlength="4000" />
+        <button type="submit" :disabled="!selected.running || sending">{{ t('launchUi.console.send') }}</button>
+      </form>
+      <footer>
+        <button type="button" @click="detailsOpen = !detailsOpen">{{ detailsOpen ? t('launchUi.hideDetails') : t('launchUi.showDetails') }}</button>
+        <span>{{ t('launchUi.console.hideHint') }}</span>
+      </footer>
+      <pre v-if="detailsOpen" class="monitor-events glass-scrollbar">{{ state.events.map(item => JSON.stringify(item)).join('\n') || t('launchUi.waiting') }}</pre>
     </section>
-  </Transition>
+  </aside>
 </template>
 
 <style scoped>
-.launch-ui-overlay { position: absolute; inset: 0; z-index: 12; display: grid; place-items: center; padding: 24px; background: rgba(3, 6, 12, .48); backdrop-filter: blur(8px); }
-.launch-ui-panel { width: min(440px, calc(100vw - 48px)); padding: 28px; border: 1px solid rgba(255,255,255,.16); border-radius: 14px; background: rgba(10, 16, 23, .88); box-shadow: 0 24px 70px rgba(0,0,0,.35); }
-.launch-ui-kicker { color: #75d6bb; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
-.launch-ui-panel h2 { margin: 8px 0 10px; font-size: 23px; }
-.launch-ui-stage { min-height: 20px; margin: 0 0 18px; color: rgba(235,242,240,.68); font-size: 13px; }
-.launch-ui-progress { height: 6px; overflow: hidden; border-radius: 5px; background: rgba(255,255,255,.1); }
-.launch-ui-progress span { display: block; height: 100%; border-radius: inherit; background: #75d6bb; transition: width .28s ease; }
-.launch-ui-progress-meta { display: flex; justify-content: space-between; margin-top: 7px; color: rgba(235,242,240,.45); font-size: 11px; }
-.launch-ui-error { display: grid; gap: 5px; margin-top: 16px; padding: 10px 12px; border-left: 3px solid #ff8f82; background: rgba(255,120,105,.1); color: #ffb4a9; font-size: 12px; line-height: 1.45; }
-.launch-ui-error strong { color: #ff9b8e; }
-.launch-ui-details { margin-top: 18px; padding: 0; border: 0; background: transparent; color: rgba(235,242,240,.62); font: inherit; font-size: 12px; cursor: pointer; }
-.launch-ui-details:hover { color: #fff; }
-.launch-ui-log { max-height: 170px; overflow: auto; margin: 12px 0 0; padding: 10px; border-radius: 7px; background: rgba(0,0,0,.3); color: rgba(235,242,240,.58); font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.launch-ui-fade-enter-active, .launch-ui-fade-leave-active { transition: opacity .18s ease; }
-.launch-ui-fade-enter-from, .launch-ui-fade-leave-to { opacity: 0; }
+.launch-monitor { position: absolute; top: 52px; right: 20px; bottom: 20px; z-index: 100; display: flex; align-items: flex-end; width: min(680px, calc(100% - 40px)); pointer-events: none; color: var(--theme-text, #eee); }
+.launch-monitor.compact { top: auto; width: auto; }
+.monitor-panel { display: flex; flex-direction: column; width: 100%; max-height: 100%; overflow: hidden; pointer-events: auto; border: var(--t-material-border); border-radius: 14px; background: var(--t-surface-solid, #111827); box-shadow: var(--t-material-shadow); }
+.monitor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; }
+.monitor-header > div:first-child { min-width: 0; display: grid; gap: 4px; }
+.monitor-header strong { font-size: 14px; }
+.monitor-stage { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; opacity: .65; }
+.monitor-actions { display: flex; }
+button { cursor: pointer; border: 1px solid rgba(255,255,255,.13); border-radius: 7px; padding: 5px 10px; background: rgba(255,255,255,.05); color: inherit; font: inherit; font-size: 12px; }
+button:hover { background: rgba(255,255,255,.12); }
+button:disabled { cursor: default; opacity: .4; }
+.monitor-actions button { background: transparent; border: 0; font-size: 20px; }
+.monitor-toolbar { display: flex; gap: 8px; padding: 0 14px 10px; }
+.monitor-toolbar select { min-width: 0; flex: 1; padding: 5px 8px; background: var(--t-surface-solid, #111827); color: inherit; border: 1px solid rgba(255,255,255,.15); border-radius: 7px; }
+.monitor-log { height: 260px; min-height: 80px; overflow: auto; padding: 12px 16px; background: rgba(0,0,0,.3); font: 12px/1.6 Consolas, ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.monitor-muted { opacity: .5; }
+.monitor-waiting { padding: 0 16px; opacity: .6; font-size: 12px; }
+.monitor-input { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
+.monitor-input > span { color: var(--theme-accent); }
+.monitor-input input { min-width: 0; flex: 1; padding: 6px; background: transparent; border: 0; color: inherit; outline: none; font: 12px Consolas, monospace; }
+.monitor-input:focus-within { box-shadow: inset 0 -1px var(--theme-accent); }
+footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 0 14px 12px; font-size: 10px; }
+footer > span { opacity: .5; }
+footer button { border: 0; padding-left: 0; background: transparent; }
+.monitor-events { flex-shrink: 1; max-height: 120px; min-height: 0; overflow: auto; margin: 0; padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.1); font: 10px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.monitor-error { flex-shrink: 0; margin: 0; padding: 8px 16px; color: #ffb4a9; background: rgba(255,120,105,.1); font-size: 12px; overflow-wrap: anywhere; }
+.monitor-reopen { display: flex; align-items: center; gap: 10px; padding: 10px 14px; pointer-events: auto; background: var(--t-surface-solid, #111827); box-shadow: var(--t-material-shadow); border-radius: 24px; }
+.monitor-count { padding: 1px 6px; border-radius: 10px; background: rgba(var(--theme-surface-tint-rgb), .2); color: var(--theme-accent); }
 </style>

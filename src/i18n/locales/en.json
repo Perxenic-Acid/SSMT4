@@ -405,6 +405,12 @@
     "messages": {"loadFailed": "Failed to load plugin registry: {error}", "catalogFailed": "Could not load the Native Release catalog: {error}. You can still install third-party packages from a local file.", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "dependencySaved": "Dependency folder saved.", "dependencySaveFailed": "Failed to set dependency folder: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}", "logFailed": "Failed to access plugin log: {error}", "logCleared": "Plugin log cleared.", "localCatalogFailed": "Could not read locally built plugins: {error}", "localUnavailable": "Local package is no longer available. Refresh the marketplace."}
   },
   "launchUi": {
+    "console": {
+      "title": "Launch console", "program": "Console program", "running": "Running", "exited": "Exited ({code})", "log": "Open log",
+      "minimize": "Minimize", "hide": "Hide", "copy": "Copy", "clear": "Clear", "send": "Send",
+      "input": "Type text and press Enter to send", "hideHint": "Hiding keeps programs running",
+      "truncated": "Earlier or excessive output was omitted"
+    },
     "title": "Launching game",
     "failed": "Launch failed",
     "unknownError": "The launcher reported an unknown error.",

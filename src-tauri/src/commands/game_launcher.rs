@@ -623,7 +623,7 @@ pub async fn execute_external_program(
 }
 
 #[tauri::command]
-pub async fn launch_programs(programs: Vec<ProgramToLaunch>) -> Result<(), String> {
+pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunch>) -> Result<(), String> {
     for prog in programs {
         let wait_only = prog.wait_only.unwrap_or(false);
         let args_str = prog.args.as_deref().unwrap_or_default();
@@ -688,60 +688,71 @@ pub async fn launch_programs(programs: Vec<ProgramToLaunch>) -> Result<(), Strin
                 return Err(msg);
             }
 
-            let escaped_path = prog.path.replace('\'', "''");
-            let escaped_work_dir = work_dir_str.replace('\'', "''");
+            let capture = super::launch_console::is_console_program(&program_path);
+            if capture {
+                let request = super::launch_console::ConsoleRequest {
+                    path: prog.path.clone(), args: args_str.to_string(), work_dir: work_dir_str.clone(),
+                };
+                let handle = app.clone();
+                let elevated = prog.run_as_administrator.unwrap_or(false);
+                tauri::async_runtime::spawn_blocking(move || super::launch_console::launch(handle, request, elevated))
+                    .await.map_err(|error| error.to_string())??;
+            } else {
+                let escaped_path = prog.path.replace('\'', "''");
+                let escaped_work_dir = work_dir_str.replace('\'', "''");
 
-            // Use Powershell Start-Process to handle UAC elevation automatically.
-            let mut ps_script = format!(
-                "try {{ Start-Process -FilePath '{}' -WorkingDirectory '{}'{}",
-                escaped_path,
-                escaped_work_dir,
-                if prog.run_as_administrator.unwrap_or(false) {
-                    " -Verb RunAs"
-                } else {
-                    ""
-                }
-            );
-
-            if let Some(args) = &prog.args {
-                if !args.is_empty() {
-                    let escaped_args = args.replace('\'', "''");
-                    ps_script.push_str(&format!(" -ArgumentList '{}'", escaped_args));
-                }
-            }
-            ps_script.push_str(
-                "; if (-not $?) { exit 1 } } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
-            );
-
-            println!(
-                "[GameLauncher] Launching target via shell: {}",
-                program_summary
-            );
-
-            let output = std::process::Command::new("powershell")
-                .args(&["-NoProfile", "-Command", &ps_script])
-                .output()
-                .map_err(|e| {
-                    let msg = format!(
-                        "Failed to launch shell command. {}. os_error={}",
-                        program_summary, e
-                    );
-                    eprintln!("[GameLauncher] {}", msg);
-                    msg
-                })?;
-
-            if !output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let err_msg = String::from_utf8_lossy(&output.stderr);
-                let detailed_error = format!(
-                    "Failed to launch shell command. {}. exit_code={:?}. stdout='{}'. stderr='{}'",
-                    program_summary,
-                    output.status.code(),
-                    stdout,
-                    err_msg.trim()
+                // Use Powershell Start-Process to handle UAC elevation automatically.
+                let mut ps_script = format!(
+                    "try {{ Start-Process -FilePath '{}' -WorkingDirectory '{}'{}",
+                    escaped_path,
+                    escaped_work_dir,
+                    if prog.run_as_administrator.unwrap_or(false) {
+                        " -Verb RunAs"
+                    } else {
+                        ""
+                    }
                 );
-                eprintln!("[GameLauncher] {}", detailed_error);
-                return Err(detailed_error);
+
+                if let Some(args) = &prog.args {
+                    if !args.is_empty() {
+                        let escaped_args = args.replace('\'', "''");
+                        ps_script.push_str(&format!(" -ArgumentList '{}'", escaped_args));
+                    }
+                }
+                ps_script.push_str(
+                    "; if (-not $?) { exit 1 } } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+                );
+
+                println!(
+                    "[GameLauncher] Launching target via shell: {}",
+                    program_summary
+                );
+
+                let output = std::process::Command::new("powershell")
+                    .args(&["-NoProfile", "-Command", &ps_script])
+                    .output()
+                    .map_err(|e| {
+                        let msg = format!(
+                            "Failed to launch shell command. {}. os_error={}",
+                            program_summary, e
+                        );
+                        eprintln!("[GameLauncher] {}", msg);
+                        msg
+                    })?;
+
+                if !output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let err_msg = String::from_utf8_lossy(&output.stderr);
+                    let detailed_error = format!(
+                        "Failed to launch shell command. {}. exit_code={:?}. stdout='{}'. stderr='{}'",
+                        program_summary,
+                        output.status.code(),
+                        stdout,
+                        err_msg.trim()
+                    );
+                    eprintln!("[GameLauncher] {}", detailed_error);
+                    return Err(detailed_error);
+                }
             }
 
             if let Some(delay_ms) = prog.post_launch_delay_ms.filter(|delay| *delay > 0) {

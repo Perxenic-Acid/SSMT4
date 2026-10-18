@@ -5,6 +5,8 @@ import { AppStateManager, BGType } from "./store/AppStateManager";
 import { normalizeAppUiScale, SSMT_LOCALE_OPTIONS, type PageVisibilitySettings } from "./store/AppSettings";
 import TitleBar from "./components/TitleBar.vue";
 import BackgroundVideo from './components/BackgroundVideo.vue';
+import LaunchEventOverlay from './components/LaunchEventOverlay.vue';
+import { LaunchMonitor } from './store/LaunchMonitor';
 import { useI18n } from 'vue-i18n';
 import { GlobalConfig } from './store/GlobalConfig';
 import { ResourceManager } from './store/ResourceManager';
@@ -246,10 +248,12 @@ const preventContextMenu = (event: Event) => {
 
 onMounted(() => {
   document.addEventListener('contextmenu', preventContextMenu);
+  void LaunchMonitor.connect().catch(error => console.warn('[LaunchMonitor]', error));
 });
 
 onUnmounted(() => {
   document.removeEventListener('contextmenu', preventContextMenu);
+  LaunchMonitor.dispose();
 });
 
 /* bgStyle removed, handled in template */
@@ -456,6 +460,7 @@ onUnmounted(() => {
           </main>
         </div>
       </div>
+      <LaunchEventOverlay />
     </div>
   </el-config-provider>
 

@@ -757,7 +757,7 @@ export class LaunchGame {
             }
 
             if (useRunInjector) {
-                const injectorArgs: string[] = [];
+                const injectorArgs: string[] = ['--machine-readable'];
                 if (hotRuntime) {
                     injectorArgs.push("--preload-runtime");
                     for (const [name, value] of Object.entries(hotRuntime.environment)) {

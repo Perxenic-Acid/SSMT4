@@ -199,6 +199,7 @@ pub fn run() {
             commands::game_launcher::configure_wwmi_launch_settings,
             commands::game_launcher::execute_external_program,
             commands::game_launcher::launch_programs,
+            commands::launch_console::write_launch_console,
             commands::game_launcher::file_md5,
             commands::file_locks::query_file_locks,
             commands::file_locks::terminate_file_lock_owners,

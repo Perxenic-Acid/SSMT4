@@ -404,6 +404,12 @@
     "messages": {"loadFailed": "读取插件注册表失败：{error}", "catalogFailed": "无法读取 Native Release 插件目录：{error}。仍可从本地文件安装第三方插件。", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "dependencySaved": "依赖目录已保存。", "dependencySaveFailed": "设置依赖目录失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}", "logFailed": "访问插件日志失败：{error}", "logCleared": "插件日志已清空。", "localCatalogFailed": "读取本地构建插件失败：{error}", "localUnavailable": "本地插件包已不存在，请刷新市场。"}
   },
   "launchUi": {
+    "console": {
+      "title": "启动控制台", "program": "控制台程序", "running": "运行中", "exited": "已退出 ({code})", "log": "打开日志",
+      "minimize": "收起", "hide": "隐藏", "copy": "复制", "clear": "清空", "send": "发送",
+      "input": "输入文本并回车发送", "hideHint": "隐藏窗口不会结束程序",
+      "truncated": "较早或过量的输出已省略"
+    },
     "title": "正在启动游戏",
     "failed": "启动失败",
     "unknownError": "启动器报告了未知错误。",

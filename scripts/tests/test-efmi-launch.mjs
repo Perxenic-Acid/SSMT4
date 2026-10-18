@@ -129,7 +129,7 @@ test('other games retain suspended launch mode and their arguments', async () =>
   const h = harness({ ...base, gamePreset: 'GIMI' });
   await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
   const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
-  assert.equal(programs[0].args, undefined);
+  assert.equal(programs[0].args, '--machine-readable');
   assert.match(h.ini(), /launch = C:\/Game\/Endfield.exe/);
   assert.match(h.ini(), /launch_args = -force-d3d11/);
   assert.equal(programs[1].waitOnly, true);

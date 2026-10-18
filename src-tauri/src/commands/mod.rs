@@ -7,6 +7,7 @@ pub mod extract_textures;
 pub mod file_locks;
 pub mod game_discovery;
 pub mod game_launcher;
+pub mod launch_console;
 pub mod gimi_settings;
 pub mod mod_library;
 pub mod mod_manager;
