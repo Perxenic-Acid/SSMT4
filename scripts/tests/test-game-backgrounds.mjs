@@ -85,7 +85,7 @@ async function resources(t, options = {}) {
     './GamePreset': {},
   }).ResourceManager;
   const update = type => manager.updateGameBackground('WWMI', 'WWMI', type || 'Video', config.lastBackgroundUrl);
-  return { config, requests, signatures, dir, update };
+  return { config, requests, signatures, dir, update, manager };
 }
 
 test('鸣潮动态和静态各占一个列表项，共用海报且不保存临时签名', async t => {
@@ -222,4 +222,88 @@ test('没有可用海报时播放失败使用内置静态背景', t => {
   h.fallbackBackgroundVideo(h.appSettings.bgVideo);
   assert.equal(h.appSettings.bgType, 'Image');
   assert.equal(h.appSettings.bgImage, '/Background.png');
+});
+
+test('自定义导入保留官网条目和正在播放的源文件，立即选择新条目', async t => {
+  const h = await resources(t);
+  await h.update();
+  const original = structuredClone(h.config.backgroundEntries);
+  const source = original[1].videoPath;
+  await h.manager.setGameBackground('WWMI', source, 'Video');
+  assert.equal(h.config.backgroundEntries.length, 3);
+  assert.equal(h.config.selectedBackgroundId, 'custom-video');
+  assert.equal(h.config.backgroundUpdateMode, 'manual');
+  assert.ok((await fs.stat(source)).size > 0);
+  const imported = h.config.backgroundEntries[2];
+  assert.notEqual(imported.videoPath, source);
+  assert.deepEqual(await fs.readFile(imported.videoPath), await fs.readFile(source));
+  assert.equal(imported.imagePath, original[0].imagePath);
+  await h.manager.setGameBackground('WWMI', imported.videoPath, 'Video');
+  assert.ok((await fs.stat(imported.videoPath)).size > 0, '重新选择当前文件不能先删除源文件');
+});
+
+function playback({ frames = false, reject = false } = {}) {
+  const { attachBackgroundVideo } = load('../../src/utils/backgroundVideo.ts', {});
+  const doc = new EventTarget();
+  doc.hidden = false;
+  const video = new EventTarget();
+  Object.assign(video, {
+    paused: true, currentTime: 0, loads: 0, source: 'video.mp4',
+    play() { this.paused = false; return reject ? Promise.reject(new Error('codec')) : Promise.resolve(); },
+    pause() { this.paused = true; },
+    load() { this.loads++; }, removeAttribute() { this.source = ''; },
+  });
+  if (frames) Object.assign(video, {
+    requestVideoFrameCallback(fn) { this.onFrame = fn; return 1; },
+    cancelVideoFrameCallback() { this.onFrame = undefined; },
+  });
+  let now = 0, tick, failures = 0;
+  const stop = attachBackgroundVideo(video, doc, () => failures++, {
+    now: () => now, setInterval: fn => { tick = fn; return 1; }, clearInterval: () => { tick = undefined; },
+  });
+  return { video, doc, stop, failed: () => failures,
+    advance(ms) { now += ms; tick?.(); },
+    event(name) { video.dispatchEvent(new Event(name)); },
+    hide(value) { doc.hidden = value; doc.dispatchEvent(new Event('visibilitychange')); },
+  };
+}
+
+test('无首帧和播放后停帧均有界回退，释放 src 与解码器', () => {
+  const loading = playback();
+  loading.advance(15_000);
+  assert.equal(loading.failed(), 1);
+  assert.equal(loading.video.source, '');
+  assert.equal(loading.video.loads, 1);
+  loading.event('error');
+  assert.equal(loading.failed(), 1);
+  const stalled = playback({ frames: true });
+  stalled.event('playing');
+  stalled.advance(9000);
+  stalled.video.currentTime = 12;
+  stalled.advance(1000);
+  assert.equal(stalled.failed(), 1, '时钟前进但解码无新画面同样应回退');
+});
+
+test('正常循环、主动暂停和后台暂停不会被误判，恢复前台不覆盖用户暂停', () => {
+  const h = playback();
+  h.event('playing');
+  for (const time of [1, 2, 0, 1]) { h.video.currentTime = time; h.advance(9000); }
+  assert.equal(h.failed(), 0);
+  h.hide(true); h.advance(60_000); h.hide(false);
+  assert.equal(h.video.paused, false);
+  h.video.pause(); h.hide(true); h.advance(60_000); h.hide(false);
+  assert.equal(h.video.paused, true);
+  assert.equal(h.failed(), 0);
+  h.stop(); h.stop();
+  assert.equal(h.video.loads, 1);
+});
+
+test('无法自动播放时回退；组件销毁后迟到的 Promise 不再修改背景', async () => {
+  const h = playback({ reject: true });
+  await Promise.resolve();
+  assert.equal(h.failed(), 1);
+  const removed = playback({ reject: true });
+  removed.stop();
+  await Promise.resolve();
+  assert.equal(removed.failed(), 0);
 });

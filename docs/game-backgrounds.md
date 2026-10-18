@@ -35,3 +35,14 @@
 验证：`node --test scripts/tests/test-game-backgrounds.mjs`、
 在 `src-tauri` 下执行 `cargo test --lib commands::background::tests`，以及 `bun run build`。
 测试夹具覆盖请求与状态切换；真实 WebView 的解码表现仍以应用实际播放为准。
+## 自定义视频的播放与资源释放
+
+自定义背景保存到独立文件，并写入背景列表与选中项；导入成功后改为手动更新，避免官网刷新覆盖选择。
+复制或配置写入失败时保留旧背景，不先删除源文件；正在播放的文件不会被原位覆盖。
+
+`BackgroundVideo.vue` 使用 `attachBackgroundVideo` 管理播放器：15 秒无首帧、播放后 10 秒无新画面或播放拒绝时释放解码器并回退海报。
+支持视频帧回调的 WebView 按解码画面判断进度，其他环境按播放时间判断；窗口隐藏时暂停，恢复时尊重用户主动暂停。
+切换背景或卸载组件会清除媒体来源并调用 `load()`，迟到的错误不能覆盖新背景。
+
+自动测试覆盖状态与资源生命周期；特定编码、超大视频的实际解码性能仍需在目标 WebView 上验收。
+

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { AppStateManager, BGType } from "./store/AppStateManager";
 import { normalizeAppUiScale, SSMT_LOCALE_OPTIONS, type PageVisibilitySettings } from "./store/AppSettings";
 import TitleBar from "./components/TitleBar.vue";
+import BackgroundVideo from './components/BackgroundVideo.vue';
 import { useI18n } from 'vue-i18n';
 import { GlobalConfig } from './store/GlobalConfig';
 import { ResourceManager } from './store/ResourceManager';
@@ -197,6 +198,9 @@ const globalDimLayerBackground = computed(() => {
 });
 
 const appUiScale = computed(() => normalizeAppUiScale(appSettings.uiScale));
+watch(appUiScale, scale => {
+  document.documentElement.style.setProperty('--app-caption-height', `${32 * scale}px`);
+}, { immediate: true });
 
 const normalizeStoredAppUiScale = (value: number) => {
   const normalizedScale = normalizeAppUiScale(value);
@@ -260,9 +264,9 @@ onUnmounted(() => {
         :style="{ backgroundImage: `url(${appSettings.bgImage})` }"></div>
 
       <!-- Video Background -->
-      <video v-if="appSettings.bgType === BGType.Video && appSettings.bgVideo" :key="appSettings.bgVideo"
-        :src="appSettings.bgVideo" :poster="appSettings.bgImage" autoplay loop muted playsinline class="bg-item"
-        @error="AppStateManager.fallbackBackgroundVideo(($event.currentTarget as HTMLVideoElement).getAttribute('src') || '')"></video>
+      <BackgroundVideo v-if="appSettings.bgType === BGType.Video && appSettings.bgVideo" :key="appSettings.bgVideo"
+        :src="appSettings.bgVideo" :poster="appSettings.bgImage" class="bg-item"
+        @failed="AppStateManager.fallbackBackgroundVideo" />
       <div v-if="appSettings.bgType === BGType.Video && appSettings.bgTheme" :key="appSettings.bgTheme" class="bg-item bg-video-theme"
         :style="{ backgroundImage: `url(${appSettings.bgTheme})` }"></div>
     </transition-group>

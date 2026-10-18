@@ -467,25 +467,36 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         }
 
         const ext = sourcePath.split('.').pop()?.toLowerCase() || '';
-        const targetName = `Background.${ext}`;
+        // 新文件独立命名，不能覆盖正在解码的文件，也不能先删除仍有效的旧背景。
+        const targetName = `Background-Custom-${crypto.randomUUID()}.${ext}`;
         const targetPath = await SSMTFileUtils.JoinPath(dirPath, targetName);
-
-        const candidates = bgType === 'Image'
-            ? BACKGROUND_IMAGE_CANDIDATES
-            : BACKGROUND_VIDEO_CANDIDATES;
-
-        for (const c of candidates) {
-            const p = await SSMTFileUtils.JoinPath(dirPath, c);
-            if (await exists(p)) {
-                await remove(p);
-            }
-        }
-
-        await copyFile(sourcePath, targetPath);
-
         const conf = await loadGameConfig(gameName);
+        const entries = conf.backgroundEntries || [];
+        const id = `custom-${bgType.toLowerCase()}`;
+        const previous = entries.find(entry => entry.id === id);
+        const poster = entries.find(entry => entry.type === 'Image')?.imagePath
+            || await findExistingFileIgnoreCase(dirPath, BACKGROUND_IMAGE_CANDIDATES) || undefined;
+        await copyFile(sourcePath, targetPath);
         conf.backgroundType = bgType;
-        await saveGameConfig(gameName, conf);
+        conf.backgroundUpdateMode = 'manual';
+        conf.backgroundEntries = [
+            ...entries.filter(entry => entry.id !== id),
+            { id, type: bgType, imagePath: bgType === 'Image' ? targetPath : poster,
+                videoPath: bgType === 'Video' ? targetPath : undefined },
+        ];
+        conf.selectedBackgroundId = id;
+        try {
+            await saveGameConfig(gameName, conf);
+        } catch (error) {
+            await remove(targetPath).catch(() => {});
+            throw error;
+        }
+        const previousPath = bgType === 'Video' ? previous?.videoPath : previous?.imagePath;
+        if (previousPath && previousPath !== sourcePath && !conf.backgroundEntries.some(entry =>
+            entry.imagePath === previousPath || entry.videoPath === previousPath || entry.themePath === previousPath)) {
+            const ownedPrefix = await SSMTFileUtils.JoinPath(dirPath, 'Background-Custom-');
+            if (previousPath.startsWith(ownedPrefix)) await remove(previousPath).catch(() => {});
+        }
     }
 
     async function updateGameBackground(gameName: string, gamePreset: string, bgType: 'Image' | 'Video', lastUrl?: string): Promise<{ path: string; url: string; changed: boolean }> {
@@ -648,6 +659,10 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
 
         const preferredCandidates = bgType === 'Video' ? BACKGROUND_VIDEO_CANDIDATES : BACKGROUND_IMAGE_CANDIDATES;
         const fallbackCandidates = bgType === 'Video' ? BACKGROUND_IMAGE_CANDIDATES : BACKGROUND_VIDEO_CANDIDATES;
+        const config = await loadGameConfig(normalizedGameName);
+        const selected = config.backgroundEntries?.find(entry => entry.id === config.selectedBackgroundId && entry.type === bgType);
+        const selectedPath = bgType === 'Video' ? selected?.videoPath : selected?.imagePath;
+        if (selectedPath && await exists(selectedPath)) return selectedPath;
         return (await findExistingFileIgnoreCase(dirPath, preferredCandidates))
             || (await findExistingFileIgnoreCase(dirPath, fallbackCandidates));
     }

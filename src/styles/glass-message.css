@@ -2,7 +2,13 @@
    SSMT4 — Message / Notification / MessageBox Overrides
    ═══════════════════════════════════════════════ */
 
-/* ── Global z-index fix (sit above TitleBar, beat EP inline styles) ── */
+/* 标题栏独立置顶；横幅在其下方显示，保留 Element Plus 自身的堆叠间距。 */
+.el-message:not(.is-bottom),
+.el-notification[style*="top:"] {
+  margin-top: var(--app-caption-height, 32px);
+}
+
+/* ── Global z-index ── */
 .el-message,
 .el-notification,
 .el-message-box__wrapper {
