@@ -130,6 +130,7 @@ test('Native Release 多版本目录只展示每个插件最新版，显式安�
   const versions = [
     ['ssmt.dlss5.integration', '0.2.1'], ['ssmt.hoyoshade.bridge', '0.1.1'],
     ['ssmt.dlss5.integration', '0.2.2'], ['ssmt.player-tweaks', '0.1.0'],
+    ['ssmt.dlss5.integration', '0.2.3'],
     ['ssmt.hoyoshade.bridge', '0.1.0'], ['ssmt.poser.genshin-probe', '0.1.0'],
     ['ssmt.dlss5.integration', '0.2.0'],
   ];
@@ -156,7 +157,7 @@ test('Native Release 多版本目录只展示每个插件最新版，显式安�
   await s.refreshAll();
   const latest = Array.from(s.allEntries.value);
   assert.deepEqual(latest.map(entry => [entry.id, entry.version]), [
-    ['ssmt.dlss5.integration', '0.2.2'], ['ssmt.hoyoshade.bridge', '0.1.1'],
+    ['ssmt.dlss5.integration', '0.2.3'], ['ssmt.hoyoshade.bridge', '0.1.1'],
     ['ssmt.player-tweaks', '0.1.0'], ['ssmt.poser.genshin-probe', '0.1.0'],
   ]);
   assert.ok(latest.every(entry => entry.official && !entry.localArchive));

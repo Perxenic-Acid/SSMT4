@@ -83,15 +83,21 @@ mod tests {
     use super::*;
     #[test]
     fn package_controls_routes_and_rejects_duplicates_and_paths() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../native/official-plugin-packages/ssmt.dlss5.integration/0.2.2");
-        let mut policy: Policy = serde_json::from_str(&std::fs::read_to_string(root.join("host/graphics.json")).unwrap()).unwrap();
-        policy.root = super::super::gimi_hot_runtime::canonical_path(&root).unwrap();
-        policy.validate().unwrap();
-        let route = policy.select("WWMI", Path::new("Client-Win64-Shipping.exe")).unwrap();
-        assert_eq!(route.required_launch_args, ["-dx11"]);
-        assert!(policy.select("SRMI", Path::new("YuanShen.exe")).is_err());
-        assert!(policy.assets(false).unwrap().contains("sha256"));
-        policy.routes[0].executables.push("../outside.exe".into());
-        assert!(policy.validate().is_err());
+        for version in ["0.2.2", "0.2.3"] {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../native/official-plugin-packages/ssmt.dlss5.integration/{version}"
+            ));
+            let mut policy: Policy = serde_json::from_str(
+                &std::fs::read_to_string(root.join("host/graphics.json")).unwrap()
+            ).unwrap();
+            policy.root = super::super::gimi_hot_runtime::canonical_path(&root).unwrap();
+            policy.validate().unwrap();
+            let route = policy.select("WWMI", Path::new("Client-Win64-Shipping.exe")).unwrap();
+            assert_eq!(route.required_launch_args, ["-dx11"]);
+            assert!(policy.select("SRMI", Path::new("YuanShen.exe")).is_err());
+            assert!(policy.assets(false).unwrap().contains("sha256"));
+            policy.routes[0].executables.push("../outside.exe".into());
+            assert!(policy.validate().is_err());
+        }
     }
 }

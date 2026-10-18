@@ -36,7 +36,7 @@ pub(super) fn stage(registry: &PluginRegistry, root: &Path) -> Result<PathBuf, S
     checked_path(&directory, "Dx11FsrBridge.dll")
 }
 
-fn copy_atomically(source: &Path, destination: &Path) -> Result<(), String> {
+pub(super) fn copy_atomically(source: &Path, destination: &Path) -> Result<(), String> {
     let temporary = destination.with_extension(format!(
         "tmp-{}-{}",
         std::process::id(),
@@ -44,7 +44,7 @@ fn copy_atomically(source: &Path, destination: &Path) -> Result<(), String> {
     ));
     let result = fs::copy(source, &temporary)
         .and_then(|_| fs::rename(&temporary, destination))
-        .map_err(|error| format!("Bridge 组件暂存失败：{error}"));
+        .map_err(|error| format!("热注入组件暂存失败 {}：{error}", destination.display()));
     if result.is_err() {
         let _ = fs::remove_file(temporary);
     }

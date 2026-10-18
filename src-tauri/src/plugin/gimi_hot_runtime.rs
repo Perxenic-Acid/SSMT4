@@ -18,6 +18,8 @@ use std::{
 mod bridge;
 #[path = "gimi_hot_download.rs"]
 pub mod download;
+#[path = "gimi_hot_optiscaler.rs"]
+mod optiscaler;
 
 // 这组组件属于 CXP GIMI 集成链；禁止用其 GIMI DLL 覆盖 SSMT Runtime。
 // 固定二进制组来自 cc46971 的 package-manifest.sha256，NR Runtime 按显卡 Profile 配对。
@@ -234,6 +236,7 @@ fn prepare_at(
 ) -> Result<HotRuntimePlan, String> {
     let (root, addon) = validate(installation)?;
     let bridge = bridge::stage(registry, &root)?;
+    let opti = optiscaler::stage(registry, &root, &installation.profile)?;
     let reshade = root.join("state/reshade-runtime");
     fs::create_dir_all(&reshade).map_err(|error| error.to_string())?;
     let mut composed = super::hot_reshade::compose(
@@ -267,15 +270,20 @@ fn prepare_at(
     ] {
         managed_reshade::set_entry(&mut composed.game_ini, section, key, &value);
     }
-    let opti = root.join("components/OptiScaler");
-    let mut ini = read_text(&opti.join("OptiScaler.ini"))?;
+    let ini_path = opti.join("OptiScaler.ini");
+    let mut ini = if ini_path.try_exists().map_err(|error| error.to_string())? {
+        let relative = ini_path.strip_prefix(&root).map_err(|error| error.to_string())?;
+        read_text(&checked_path(&root, &relative.to_string_lossy())?)?
+    } else {
+        read_text(&checked_path(&root, "components/OptiScaler/OptiScaler.ini")?)?
+    };
     configure_optiscaler(&mut ini, &opti);
     composed.extra_files.insert(opti.join("OptiScaler.ini"), ini.into_bytes());
     super::hot_reshade::save_config(&reshade, composed, "", &["nr-before-sr.zh-CN.addon64".into()])?;
     let dlls = vec![
         root.join("components/ReShade/ReShade64.dll"),
         bridge,
-        root.join("components/OptiScaler/OptiScaler.dll"),
+        opti.join("OptiScaler.dll"),
     ];
     let environment = [
         (
@@ -669,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "需要 SSMT_HOT_TEST_SOURCE 指定完整组件包；可选 SSMT_HOT_TEST_SHADE_ROOT 和 SSMT_HOT_FSR2_FIXTURE"]
+    #[ignore = "需要 SSMT_HOT_TEST_SOURCE 指定完整组件包；可选 SSMT_HOT_TEST_SHADE_ROOT、SSMT_HOT_TEST_OPTISCALER 和 SSMT_HOT_FSR2_FIXTURE"]
     fn prepares_real_components_without_game_directory_writes() {
         let source = HotRuntimeInstallation {
             root: std::env::var_os("SSMT_HOT_TEST_SOURCE")
@@ -684,13 +692,31 @@ mod tests {
         ));
         let installation = import_at(&source, temp.join("owned 组件")).unwrap();
         let mut registry = registry_with_bridge(&temp, &real_bridge());
+        let localized = std::env::var_os("SSMT_HOT_TEST_OPTISCALER");
+        if let Some(dll) = &localized {
+            let package = registry.find(DLSS5_PLUGIN_ID).unwrap().package_root.join("optiscaler");
+            fs::create_dir(&package).unwrap();
+            let bytes = fs::read(dll).unwrap();
+            fs::write(package.join("OptiScaler.dll"), &bytes).unwrap();
+            fs::write(package.join("OptiScaler.dll.sha256"), format!("{:x}", Sha256::digest(&bytes))).unwrap();
+        }
         let plan = prepare_at(&registry, &installation).unwrap();
-        let opti_ini = read_text(
-            &installation
-                .root
-                .join("components/OptiScaler/OptiScaler.ini"),
-        )
-        .unwrap();
+        let opti_config = plan.dlls[2].parent().unwrap().join("OptiScaler.ini");
+        let opti_ini = read_text(&opti_config).unwrap();
+        if localized.is_some() {
+            assert!(plan.dlls[2].starts_with(installation.root.join("state/optiscaler")));
+            let original = installation.root.join("components/OptiScaler");
+            assert_eq!(fs::read(original.join("OptiScaler.ini")).unwrap(), before);
+            verify(&original.join("OptiScaler.dll"), COMMON[2].1).unwrap();
+            let dll_directory = plan.dlls[2].parent().unwrap();
+            verify(&dll_directory.join("nvngx_dlss.dll"), COMMON[3].1).unwrap();
+            verify(&dll_directory.join("D3D12_Optiscaler/D3D12Core.dll"), COMMON[4].1).unwrap();
+            let mut saved = opti_ini.clone();
+            managed_reshade::set_entry(&mut saved, "Menu", "Language", "en");
+            fs::write(&opti_config, &saved).unwrap();
+            assert_eq!(prepare_at(&registry, &installation).unwrap().dlls, plan.dlls);
+            assert_eq!(read_text(&opti_config).unwrap(), saved);
+        }
         for line in [
             "UseFsr2Dx11Inputs=true",
             "UseFsr2VulkanInputs=false",
@@ -718,9 +744,7 @@ mod tests {
             .contains("LoadFromDllMain=nr-before-sr.zh-CN.addon64"));
         if let Some(fixture) = std::env::var_os("SSMT_HOT_FSR2_FIXTURE") {
             // 只在显式的实组件回归中执行独立测试进程，不启动游戏。
-            let opti_config = installation
-                .root
-                .join("components/OptiScaler/OptiScaler.ini");
+            assert!(localized.is_none(), "旧崩溃 RVA 仅对应原始组件，不适用于汉化重编译版本");
             let mut diagnostics = read_text(&opti_config).unwrap();
             managed_reshade::set_entry(&mut diagnostics, "Log", "LogToFile", "true");
             managed_reshade::set_entry(&mut diagnostics, "Log", "LogLevel", "2");

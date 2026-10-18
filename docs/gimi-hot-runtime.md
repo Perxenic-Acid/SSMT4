@@ -218,4 +218,44 @@ Runtime `1a8a9e5b` 保留这些接口的包装身份，并统一延迟取得 Con
 
 实机请分别比较普通 Mod、Feeder 单独及 Feeder + HoYoShade：确认同次加载的是新版 SSMT Runtime，角色 / 贴图替换仍生效，再检查 NR 的成功帧与画面。上述 WARP 用例不执行 ReShade 的硬件代理分支，不能替代游戏内共存验收。
 
-Insert 打开的面板属于 OptiScaler。现用组件对应 `Dagherbou/OptiScaler_DLSSNR` 的 `973761621353b99bee3dc7d4bb27b117fef2644f`；中文界面转由独立 fork 维护，后续须固定源码、字体和构建基线，再随经过校验的插件包分发。当前没有替换原始下载 DLL 或声称汉化已经完成。
+## OptiScaler 中文面板（2026-10-18）
+
+Insert 打开的面板属于 OptiScaler。汉化源码位于独立 fork
+`Perxenic-Acid/OptiScaler_DLSSNR`，固定提交
+`05322084236dc505f4ea8df29720c3a213d5f4d3`。它基于现用的
+`973761621353b99bee3dc7d4bb27b117fef2644f`，先迁入 cc46971 集成包的两份 GIMI 补丁，
+再增加中文显示，保留原有热注入与 FSR2 DX11 → DLSS-on-D3D12 契约。
+来源与补丁哈希记录在 fork 的 `docs/ssmt-gimi.md`。
+
+DLSS5 插件 0.2.3 随包提供汉化辅助 DLL、许可证、第三方声明及构建来源。
+Native 工作流从 `tools/sources/optiscaler.json` 检出固定源码，运行 CPU 界面回归并构建；
+正式分发仍通过 Native Release 的插件目录校验完整包大小和 SHA-256。
+发布之前先推送 fork 的固定提交，再推送 Native 和主仓库；本次只做本地提交，未发布 Release。
+
+本地测试先运行 Native 的 `tools/build-optiscaler.ps1 -SourceDirectory <fork目录>`，
+再运行 `tools/stage-local-plugins.ps1`。本次已生成
+`build/plugin-packages/ssmt.dlss5.integration-0.2.3.ssmtpkg`，
+开发模式下可在插件市场安装该本地版本。无需重新下载整套 NR 组件。
+
+只在已安装、已启用 DLSS5 且选择原神 FSR2 Bridge 路线时，SSMT 才校验和暂存汉化组件。
+DLL 与配套 `nvngx_dlss.dll`、`D3D12_Optiscaler/D3D12Core.dll` 位于组件根下的
+`state/optiscaler/<兼容基线>/`，并继续按 ReShade → Bridge → OptiScaler 顺序热注入。
+该目录的 `OptiScaler.ini` 保存玩家面板设置，同一兼容基线升级时保留。
+原始下载 DLL 和 INI 保持完整；旧插件包继续原组件，其他游戏及 Feeder 路线不换 DLL。
+汉化组件损坏时沿用已有可选插件失败横幅，普通 Mod 启动继续。
+
+界面默认跟随 Windows 界面语言，可在“界面语言、主题与颜色”中选择中文或英文，
+再点“保存设置”。INI 对应 `[Menu] Language=auto|zh-cn|en`。
+字体从 Windows Fonts 读取；缺少中文字体时回退英文，不再分发系统字体。
+848 个词条保留 printf 参数及技术名称，中英文控件使用一致的 ID。
+独立回归验证 719 个中文字形、格式参数、控件身份与 ImGui 绘制数据，不创建图形设备。
+
+实组件准备回归可在上述命令的基础上设置
+`SSMT_HOT_TEST_OPTISCALER=<已构建的 OptiScaler.dll>`；
+不要同时设置 `SSMT_HOT_FSR2_FIXTURE`，旧崩溃 RVA 只对应原始 DLL。
+本次离线检查不代替游戏内验收，需由测试者完成：
+
+1. 原神 FSR2 Bridge 路线打开 Insert，检查中文显示、帮助文本和控件操作；
+2. 切换语言、保存设置并重启，确认语言、快捷键与用户选项保留；
+3. 分别检查 DLSS5 单独、与 Shade 共用、关闭插件及回退旧包，确认普通 Mod 仍有效；
+4. 对照同次 Bridge dispatch、Feature 18 成功帧和实际画面，继续验收 NR 与稳定性。
