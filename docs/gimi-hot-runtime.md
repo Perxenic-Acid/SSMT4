@@ -209,3 +209,13 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib downloads_and_prepares_bot
 - 分别测试 DLSS5 单独、DLSS5 + Shade Bridge，以及关闭两者后的普通 Mod 启动。不得使用导入前的旧成功日志作为新结果。
 
 托管 ReShade 配置位于导入目录下的 `state/reshade-runtime`，组件日志位于它们各自的目录；通过设置中显示的导入目录核对时间戳。原神 Mod 的动态角色分辨率问题已由用户确认恢复，记录在[本次问题清单](runtime-and-graphics-fixes-20261015.md)，不以这项验收替代 DLSS5 渲染验收。
+
+## Feeder 与 Runtime 接口共存（2026-10-18）
+
+Feeder 路线启用 ReShade 的图形代理。ReShade 6.8.0 的 [设备接口升级](https://github.com/crosire/reshade/blob/v6.8.0/source/d3d11/d3d11_device.cpp)和 [Context 接口升级](https://github.com/crosire/reshade/blob/v6.8.0/source/d3d11/d3d11_device_context.cpp)会改用 QueryInterface 返回的较新接口。Runtime 原先将 Device2–5、Context2–4、IUnknown / DeviceChild 直接交给底层，存在绘制绕过 Mod、但 F10 和 Hunting 仍有响应的路径。
+
+Runtime `1a8a9e5b` 保留这些接口的包装身份，并统一延迟取得 Context 时的 Mod 资源绑定；新增尾部能力在局部文件转发。修复前软件回归可复现替换清屏无效，修复后实际颜色回读、延迟命令列表及原有 F8 采集共十项通过，见 [Context 回归](../runtime/tests/context-interop/README.md)。构建产物由 `scripts/stage-ssmt-runtime.ps1` 暂存到应用资源，再由既有静默同步更新 Migoto 目录。
+
+实机请分别比较普通 Mod、Feeder 单独及 Feeder + HoYoShade：确认同次加载的是新版 SSMT Runtime，角色 / 贴图替换仍生效，再检查 NR 的成功帧与画面。上述 WARP 用例不执行 ReShade 的硬件代理分支，不能替代游戏内共存验收。
+
+Insert 打开的面板属于 OptiScaler。现用组件对应 `Dagherbou/OptiScaler_DLSSNR` 的 `973761621353b99bee3dc7d4bb27b117fef2644f`；中文界面转由独立 fork 维护，后续须固定源码、字体和构建基线，再随经过校验的插件包分发。当前没有替换原始下载 DLL 或声称汉化已经完成。

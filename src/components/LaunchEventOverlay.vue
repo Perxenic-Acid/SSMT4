@@ -1,43 +1,39 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { ArrowDown, ArrowUp, Close, CopyDocument, Document, Promotion, RefreshRight } from '@element-plus/icons-vue';
 import { LaunchMonitor } from '../store/LaunchMonitor';
 import { openPath } from '@tauri-apps/plugin-opener';
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const state = LaunchMonitor.state;
-const detailsOpen = ref(false);
+const tab = ref<'output' | 'events'>('output');
 const input = ref('');
 const sending = ref(false);
 const inputError = ref('');
 const log = ref<HTMLElement>();
 const followOutput = ref(true);
 const selected = computed(() => state.sessions.find(item => item.id === state.selectedId));
-const activeCount = computed(() => state.sessions.filter(item => item.running).length);
-const stageLabel = computed(() => state.currentEvent?.event === 'launch_error' ? t('launchUi.failed') : state.currentEvent?.event
-  ? t(`launchUi.events.${state.currentEvent.event}`, state.currentEvent.event)
-  : state.launching ? t('launchUi.events.launch_started') : t('launchUi.console.title'));
+const expanded = computed(() => state.visible && !state.collapsed);
+const eventLabel = (name: string) => te(`launchUi.events.${name}`) ? t(`launchUi.events.${name}`) : name;
 const error = computed(() => state.currentEvent?.event === 'launch_error' ? state.currentEvent : null);
-const scrollToEnd = async () => {
-  await nextTick();
-  if (log.value) log.value.scrollTop = log.value.scrollHeight;
-};
-watch(() => selected.value?.output, () => { if (followOutput.value) void scrollToEnd(); });
+const stageLabel = computed(() => error.value ? t('launchUi.failed') : state.currentEvent?.event
+  ? eventLabel(state.currentEvent.event) : state.launching ? t('launchUi.events.launch_started') : t('launchUi.console.history'));
+const busy = computed(() => state.launching && state.currentEvent?.event !== 'launch_complete' && !error.value);
+const scrollToEnd = async () => { await nextTick(); if (log.value) log.value.scrollTop = log.value.scrollHeight; };
+watch(() => selected.value?.output, () => { if (expanded.value && followOutput.value) void scrollToEnd(); });
 watch(() => state.selectedId, () => { inputError.value = ''; followOutput.value = true; void scrollToEnd(); });
-watch(() => state.collapsed, collapsed => { if (!collapsed && followOutput.value) void scrollToEnd(); });
-const onScroll = () => {
-  if (log.value) followOutput.value = log.value.scrollHeight - log.value.scrollTop - log.value.clientHeight < 36;
-};
+watch([expanded, tab], () => { if (followOutput.value) void scrollToEnd(); });
+const onScroll = () => { if (log.value) followOutput.value = log.value.scrollHeight - log.value.scrollTop - log.value.clientHeight < 36; };
 const send = async () => {
-  if (sending.value || !selected.value?.running) return;
-  sending.value = true;
-  inputError.value = '';
+  if (sending.value || !selected.value?.running || selected.value.readOnly) return;
+  sending.value = true; inputError.value = '';
   try { await LaunchMonitor.send(input.value); input.value = ''; }
   catch (error) { inputError.value = String(error); }
   finally { sending.value = false; }
 };
 const copy = async () => {
-  try { await navigator.clipboard.writeText(selected.value?.output || ''); }
+  try { await navigator.clipboard.writeText(tab.value === 'output' ? selected.value?.output || '' : state.events.map(item => JSON.stringify(item)).join('\n')); }
   catch (error) { inputError.value = String(error); }
 };
 const openLog = async () => {
@@ -48,77 +44,97 @@ const openLog = async () => {
 </script>
 
 <template>
-  <aside v-if="state.visible || state.sessions.length" class="launch-monitor" :class="{ compact: !state.visible || state.collapsed }">
-    <button v-if="!state.visible || state.collapsed" type="button" class="monitor-reopen" @click="state.visible = true; state.collapsed = false">
-      <span aria-hidden="true">&gt;_</span> {{ t('launchUi.console.title') }}
-      <span v-if="activeCount" class="monitor-count">{{ activeCount }}</span>
-    </button>
-    <section v-else class="monitor-panel" :aria-label="t('launchUi.console.title')">
+  <aside v-if="state.visible || state.sessions.length" class="launch-monitor" :class="{ expanded }">
+    <section class="monitor-panel" :aria-label="t('launchUi.console.title')">
       <header class="monitor-header">
-        <div><strong>{{ t('launchUi.console.title') }}</strong><span class="monitor-stage" role="status">{{ stageLabel }}</span></div>
-        <div class="monitor-actions">
-          <button type="button" :title="t('launchUi.console.minimize')" :aria-label="t('launchUi.console.minimize')" @click="state.collapsed = true">−</button>
-          <button type="button" :title="t('launchUi.console.hide')" :aria-label="t('launchUi.console.hide')" @click="state.visible = false">×</button>
-        </div>
+        <button class="monitor-summary" type="button" :aria-expanded="expanded" :title="expanded ? t('launchUi.hideDetails') : t('launchUi.showDetails')"
+          @click="state.visible = true; state.collapsed = !state.collapsed">
+          <span class="monitor-status" :class="{ busy, failed: error }" aria-hidden="true" />
+          <span class="monitor-stage" role="status">{{ stageLabel }}</span>
+          <ArrowDown v-if="expanded" class="icon" /><ArrowUp v-else class="icon" />
+        </button>
+        <button v-if="expanded" class="icon-button" type="button" :title="t('launchUi.console.minimize')" :aria-label="t('launchUi.console.minimize')" @click="state.collapsed = true"><Close class="icon" /></button>
       </header>
-      <div v-if="error" class="monitor-error">{{ error.code }} · {{ error.message || t('launchUi.unknownError') }}</div>
-      <div v-if="state.sessions.length" class="monitor-toolbar">
-        <select v-model="state.selectedId" :aria-label="t('launchUi.console.program')">
-          <option v-for="session in state.sessions" :key="session.id" :value="session.id">
-            {{ session.program }} · {{ session.pid }} · {{ session.running ? t('launchUi.console.running') : t('launchUi.console.exited', { code: session.code ?? '?' }) }}
-          </option>
-        </select>
-        <button type="button" @click="copy">{{ t('launchUi.console.copy') }}</button>
-        <button v-if="selected?.logPath" type="button" @click="openLog">{{ t('launchUi.console.log') }}</button>
-        <button type="button" @click="selected && (selected.output = '', selected.truncated = false)">{{ t('launchUi.console.clear') }}</button>
-      </div>
-      <div v-if="selected" ref="log" class="monitor-log glass-scrollbar" tabindex="0" @scroll="onScroll">
-        <span v-if="selected.truncated" class="monitor-muted">{{ t('launchUi.console.truncated') }}&#10;</span>
-        <span>{{ selected.output || t('launchUi.waiting') }}</span>
-      </div>
-      <p v-else class="monitor-waiting">{{ t('launchUi.waiting') }}</p>
-      <p v-if="selected?.error || inputError" class="monitor-error">{{ inputError || selected?.error }}</p>
-      <form v-if="selected" class="monitor-input" @submit.prevent="send">
-        <span aria-hidden="true">&gt;</span>
-        <input v-model="input" :disabled="!selected.running || sending" :placeholder="t('launchUi.console.input')" :aria-label="t('launchUi.console.input')" autocomplete="off" spellcheck="false" maxlength="4000" />
-        <button type="submit" :disabled="!selected.running || sending">{{ t('launchUi.console.send') }}</button>
-      </form>
-      <footer>
-        <button type="button" @click="detailsOpen = !detailsOpen">{{ detailsOpen ? t('launchUi.hideDetails') : t('launchUi.showDetails') }}</button>
-        <span>{{ t('launchUi.console.hideHint') }}</span>
-      </footer>
-      <pre v-if="detailsOpen" class="monitor-events glass-scrollbar">{{ state.events.map(item => JSON.stringify(item)).join('\n') || t('launchUi.waiting') }}</pre>
+      <template v-if="expanded">
+        <nav class="monitor-tabs" :aria-label="t('launchUi.console.title')">
+          <button type="button" :class="{ active: tab === 'output' }" :aria-pressed="tab === 'output'" @click="tab = 'output'">{{ t('launchUi.console.output') }}<span>{{ state.sessions.length }}</span></button>
+          <button type="button" :class="{ active: tab === 'events' }" :aria-pressed="tab === 'events'" @click="tab = 'events'">{{ t('launchUi.console.events') }}</button>
+          <button class="icon-button copy-button" type="button" :title="t('launchUi.console.copy')" :aria-label="t('launchUi.console.copy')" @click="copy"><CopyDocument class="icon" /></button>
+        </nav>
+        <div v-if="error" class="monitor-error">{{ error.code }} · {{ error.message || t('launchUi.unknownError') }}</div>
+        <template v-if="tab === 'output'">
+          <div v-if="state.sessions.length" class="monitor-toolbar">
+            <select v-model="state.selectedId" :aria-label="t('launchUi.console.program')">
+              <option v-for="session in state.sessions" :key="session.id" :value="session.id">{{ session.program }}{{ session.pid ? ` · PID ${session.pid}` : '' }} · {{ session.running ? t(session.readOnly ? 'launchUi.console.following' : 'launchUi.console.running') : t('launchUi.console.stopped') }}</option>
+            </select>
+            <span class="source-kind">{{ t(selected?.readOnly ? 'launchUi.console.readOnly' : 'launchUi.console.interactive') }}</span>
+            <button v-if="selected?.logPath" class="icon-button" type="button" :title="t('launchUi.console.log')" :aria-label="t('launchUi.console.log')" @click="openLog"><Document class="icon" /></button>
+          </div>
+          <div v-if="selected" ref="log" class="monitor-log glass-scrollbar" tabindex="0" :aria-label="t('launchUi.console.output')" @scroll="onScroll"><span v-if="selected.truncated" class="monitor-muted">{{ t('launchUi.console.truncated') }}&#10;</span><span>{{ selected.output || t('launchUi.waiting') }}</span></div>
+          <div v-else class="monitor-empty">{{ t('launchUi.waiting') }}</div>
+          <div v-if="selected?.error || inputError" class="monitor-error">{{ inputError || selected?.error }}</div>
+          <form v-if="selected && !selected.readOnly && selected.running" class="monitor-input" @submit.prevent="send">
+            <span aria-hidden="true">&gt;</span>
+            <input v-model="input" :disabled="sending" :placeholder="t('launchUi.console.input')" :aria-label="t('launchUi.console.input')" autocomplete="off" spellcheck="false" maxlength="4000" />
+            <button class="icon-button" type="submit" :disabled="sending" :title="t('launchUi.console.send')" :aria-label="t('launchUi.console.send')"><Promotion class="icon" /></button>
+          </form>
+          <footer>
+            <span>{{ selected?.readOnly ? t('launchUi.console.logHint') : selected && !selected.running ? t('launchUi.console.exited', { code: selected.code ?? '?' }) : t('launchUi.console.hideHint') }}</span>
+            <button v-if="selected && !followOutput" type="button" @click="followOutput = true; scrollToEnd()"><RefreshRight class="icon" />{{ t('launchUi.console.following') }}</button>
+            <button v-else-if="selected" type="button" @click="selected.output = ''; selected.truncated = false">{{ t('launchUi.console.clear') }}</button>
+          </footer>
+        </template>
+        <ol v-else class="monitor-events glass-scrollbar">
+          <li v-for="(event, index) in state.events" :key="index" :class="{ failed: event.event === 'launch_error' }">
+            <span class="event-number">{{ String(index + 1).padStart(2, '0') }}</span>
+            <div><strong>{{ eventLabel(event.event) }}</strong><p v-if="event.module || event.message || event.code">{{ event.message || event.module || event.code }}</p><small v-if="event.pid">PID {{ event.pid }}</small></div>
+          </li>
+          <li v-if="!state.events.length" class="monitor-muted">{{ t('launchUi.waiting') }}</li>
+        </ol>
+      </template>
     </section>
   </aside>
 </template>
 
 <style scoped>
-.launch-monitor { position: absolute; top: 52px; right: 20px; bottom: 20px; z-index: 100; display: flex; align-items: flex-end; width: min(680px, calc(100% - 40px)); pointer-events: none; color: var(--theme-text, #eee); }
-.launch-monitor.compact { top: auto; width: auto; }
-.monitor-panel { display: flex; flex-direction: column; width: 100%; max-height: 100%; overflow: hidden; pointer-events: auto; border: var(--t-material-border); border-radius: 14px; background: var(--t-surface-solid, #111827); box-shadow: var(--t-material-shadow); }
-.monitor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; }
-.monitor-header > div:first-child { min-width: 0; display: grid; gap: 4px; }
-.monitor-header strong { font-size: 14px; }
-.monitor-stage { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; opacity: .65; }
-.monitor-actions { display: flex; }
-button { cursor: pointer; border: 1px solid rgba(255,255,255,.13); border-radius: 7px; padding: 5px 10px; background: rgba(255,255,255,.05); color: inherit; font: inherit; font-size: 12px; }
-button:hover { background: rgba(255,255,255,.12); }
-button:disabled { cursor: default; opacity: .4; }
-.monitor-actions button { background: transparent; border: 0; font-size: 20px; }
-.monitor-toolbar { display: flex; gap: 8px; padding: 0 14px 10px; }
-.monitor-toolbar select { min-width: 0; flex: 1; padding: 5px 8px; background: var(--t-surface-solid, #111827); color: inherit; border: 1px solid rgba(255,255,255,.15); border-radius: 7px; }
-.monitor-log { height: 260px; min-height: 80px; overflow: auto; padding: 12px 16px; background: rgba(0,0,0,.3); font: 12px/1.6 Consolas, ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.launch-monitor { position: absolute; right: 20px; bottom: 20px; z-index: 100; max-width: calc(100% - 40px); color: var(--theme-text, #eee); pointer-events: none; font-size: 12px; }
+.launch-monitor.expanded { top: 60px; width: 620px; display: flex; align-items: flex-end; }
+.monitor-panel { width: 100%; max-height: 100%; display: flex; flex-direction: column; overflow: hidden; pointer-events: auto; border: var(--t-material-border); border-radius: 16px; background: var(--t-surface-solid, #171822); box-shadow: var(--t-material-shadow); }
+.monitor-header { display: flex; align-items: center; gap: 8px; padding: 4px 8px; flex-shrink: 0; }
+button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 8px; padding: 7px 10px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+button:hover { background: rgba(128,128,128,.13); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: -2px; }
+button:disabled { opacity: .4; cursor: default; }
+.icon { width: 15px; height: 15px; flex-shrink: 0; }
+.icon-button { padding: 7px; }
+.monitor-summary { min-width: 0; flex: 1; justify-content: flex-start; gap: 12px; padding: 10px 8px; }
+.monitor-stage { min-width: 0; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.monitor-status { width: 7px; height: 7px; border-radius: 50%; background: var(--theme-accent, #44bfb3); flex-shrink: 0; }
+.monitor-status.busy { width: 10px; height: 10px; box-sizing: border-box; border: 2px solid rgba(128,128,128,.25); border-top-color: var(--theme-accent); background: transparent; animation: spin 1s linear infinite; }
+.monitor-status.failed { background: #e99865; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .monitor-status.busy { animation: none; } }
+.monitor-tabs { display: flex; align-items: center; gap: 6px; padding: 0 14px 8px; border-bottom: 1px solid rgba(128,128,128,.15); flex-shrink: 0; }
+.monitor-tabs button.active { color: var(--theme-accent); background: rgba(var(--theme-surface-tint-rgb), .14); }
+.monitor-tabs span { font-size: 10px; opacity: .6; }
+.copy-button { margin-left: auto; }
+.monitor-toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; flex-shrink: 0; }
+select { min-width: 0; flex: 1; padding: 7px 8px; background: var(--t-surface-solid, #171822); color: inherit; border: 1px solid rgba(128,128,128,.25); border-radius: 8px; font: inherit; }
+.source-kind { font-size: 10px; opacity: .55; white-space: nowrap; }
+.monitor-log { height: 290px; min-height: 65px; overflow: auto; padding: 12px 16px; background: rgba(0,0,0,.2); font: 12px/1.7 Consolas, ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .monitor-muted { opacity: .5; }
-.monitor-waiting { padding: 0 16px; opacity: .6; font-size: 12px; }
-.monitor-input { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
+.monitor-empty { padding: 40px 16px; text-align: center; opacity: .6; }
+.monitor-input { display: flex; align-items: center; gap: 10px; margin: 8px 14px 0; border: 1px solid rgba(128,128,128,.2); border-radius: 9px; padding: 2px 6px 2px 10px; flex-shrink: 0; }
 .monitor-input > span { color: var(--theme-accent); }
-.monitor-input input { min-width: 0; flex: 1; padding: 6px; background: transparent; border: 0; color: inherit; outline: none; font: 12px Consolas, monospace; }
-.monitor-input:focus-within { box-shadow: inset 0 -1px var(--theme-accent); }
-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 0 14px 12px; font-size: 10px; }
+.monitor-input input { min-width: 0; flex: 1; padding: 7px 0; background: transparent; border: 0; color: inherit; font: 12px Consolas, monospace; }
+footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 14px; font-size: 10px; flex-shrink: 0; }
 footer > span { opacity: .5; }
-footer button { border: 0; padding-left: 0; background: transparent; }
-.monitor-events { flex-shrink: 1; max-height: 120px; min-height: 0; overflow: auto; margin: 0; padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.1); font: 10px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.monitor-error { flex-shrink: 0; margin: 0; padding: 8px 16px; color: #ffb4a9; background: rgba(255,120,105,.1); font-size: 12px; overflow-wrap: anywhere; }
-.monitor-reopen { display: flex; align-items: center; gap: 10px; padding: 10px 14px; pointer-events: auto; background: var(--t-surface-solid, #111827); box-shadow: var(--t-material-shadow); border-radius: 24px; }
-.monitor-count { padding: 1px 6px; border-radius: 10px; background: rgba(var(--theme-surface-tint-rgb), .2); color: var(--theme-accent); }
+.monitor-events { margin: 0; padding: 12px 16px; list-style: none; min-height: 0; height: 350px; overflow: auto; }
+.monitor-events li { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,.12); }
+.event-number { padding-top: 2px; font: 10px Consolas, monospace; opacity: .4; }
+.monitor-events strong { font-size: 12px; font-weight: 500; }
+.monitor-events p { margin: 5px 0 0; opacity: .65; font: 11px/1.6 Consolas, monospace; overflow-wrap: anywhere; }
+.monitor-events small { display: block; margin-top: 4px; opacity: .45; }
+.monitor-error, .monitor-events li.failed { color: #e99865; }
+.monitor-error { flex-shrink: 0; padding: 8px 16px; background: rgba(230,140,80,.08); overflow-wrap: anywhere; }
 </style>

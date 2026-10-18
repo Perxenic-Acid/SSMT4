@@ -32,6 +32,8 @@ pub struct ProgramToLaunch {
     pub wait_only: Option<bool>,
     pub run_as_administrator: Option<bool>,
     pub post_launch_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub log_sources: Vec<super::launch_logs::LaunchLogSource>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -692,6 +694,7 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
             if capture {
                 let request = super::launch_console::ConsoleRequest {
                     path: prog.path.clone(), args: args_str.to_string(), work_dir: work_dir_str.clone(),
+                    log_sources: prog.log_sources.clone(),
                 };
                 let handle = app.clone();
                 let elevated = prog.run_as_administrator.unwrap_or(false);

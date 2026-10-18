@@ -83,6 +83,7 @@ pub struct HotRuntimePlan {
     pub runtime_directory: PathBuf,
     pub required_launch_args: Vec<String>,
     pub excluded_launch_args: Vec<String>,
+    pub log_sources: Vec<crate::commands::launch_logs::LaunchLogSource>,
 }
 
 fn profile_files(profile: &str) -> Result<(String, Vec<(String, String)>), String> {
@@ -302,6 +303,7 @@ fn prepare_at(
     Ok(HotRuntimePlan {
         dlls,
         environment,
+        log_sources: vec![crate::commands::launch_logs::LaunchLogSource { name: "ReShade".into(), path: reshade.join("ReShade.log") }],
         runtime_directory: root,
         required_launch_args: Vec::new(),
         excluded_launch_args: Vec::new(),

@@ -123,6 +123,7 @@ test('disabled plugins add no host argument and no plugin-owned files', async ()
   const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
   assert.equal(programs.length, 1);
   assert.doesNotMatch(programs[0].args, /plugin-host/);
+  assert.equal(programs[0].logSources, undefined);
 });
 
 test('other games retain suspended launch mode and their arguments', async () => {
@@ -168,6 +169,7 @@ test('EFMI manual wait requires an explicit executable path', async () => {
 
 const hotPlan = {
   dlls: ['C:/SSMT/Owned/ReShade64.dll'], runtimeDirectory: 'C:/SSMT/Owned',
+  logSources: [{ name: 'ReShade', path: 'C:/SSMT/Owned/ReShade.log' }],
   environment: { RESHADE_BASE_PATH_OVERRIDE: 'C:/SSMT/Owned', RESHADE_DISABLE_GRAPHICS_HOOK: null },
 };
 
@@ -186,6 +188,7 @@ test('Shade 单独启用或 DLSS5 准备失败时仍与 Runtime 有序预加载�
         assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
         assert.equal(h.calls.some(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss'), false);
         assert.equal(injector.args.includes('--plugin-host-config'), !!hostConfig);
+        assert.deepEqual(injector.logSources, hotPlan.logSources);
         assert.match(h.ini(), /inject_dlls = C:\/SSMT\/Owned\/ReShade64.dll/);
         assert.doesNotMatch(h.ini(), /dll_initialization_delay = 150/);
       }
@@ -255,6 +258,7 @@ test('各游戏热注入计划合并进单次挂起启动，保留 PluginHost，
     assert.equal(programs.filter(program => program.path.endsWith('/Run.exe')).length, 1);
     assert.ok(!programs.some(program => program.path === target));
     assert.match(programs[0].args, /--preload-runtime/);
+    assert.deepEqual(programs[0].logSources, hotPlan.logSources);
     assert.match(programs[0].args, /--set-env "RESHADE_BASE_PATH_OVERRIDE=C:\/SSMT\/Owned"/);
     assert.match(programs[0].args, /--unset-env RESHADE_DISABLE_GRAPHICS_HOOK/);
     assert.match(programs[0].args, /--plugin-host-config/);

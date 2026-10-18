@@ -197,7 +197,7 @@ mod tests {
         }
         let scoped = registry.for_game("WWMI");
         let result = collect(&scoped, true, &["example.b:host".into()], |_, plugin| {
-            Ok(Some(HotRuntimePlan { dlls: vec![plugin.package_root.join("ReShade64.dll")], environment: Default::default(), runtime_directory: plugin.package_root.clone(), required_launch_args: Vec::new(), excluded_launch_args: Vec::new() }))
+            Ok(Some(HotRuntimePlan { dlls: vec![plugin.package_root.join("ReShade64.dll")], environment: Default::default(), runtime_directory: plugin.package_root.clone(), required_launch_args: Vec::new(), excluded_launch_args: Vec::new(), log_sources: Vec::new() }))
         });
         assert_eq!(result.candidate_id.as_deref(), Some("example.c:host"));
         fs::remove_dir_all(root).unwrap();

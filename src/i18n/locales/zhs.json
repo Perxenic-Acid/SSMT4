@@ -405,6 +405,8 @@
   },
   "launchUi": {
     "console": {
+      "history": "启动记录", "output": "程序输出", "events": "启动事件", "following": "跟随输出", "stopped": "已结束",
+      "readOnly": "只读日志", "interactive": "交互控制台", "logHint": "跟随游戏日志；收起不影响采集",
       "title": "启动控制台", "program": "控制台程序", "running": "运行中", "exited": "已退出 ({code})", "log": "打开日志",
       "minimize": "收起", "hide": "隐藏", "copy": "复制", "clear": "清空", "send": "发送",
       "input": "输入文本并回车发送", "hideHint": "隐藏窗口不会结束程序",

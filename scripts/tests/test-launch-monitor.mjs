@@ -97,3 +97,32 @@ test('监听失败不阻断游戏启动，并清理已经成功注册的监听�
   h.finish();
   assert.equal(h.state.launching, false);
 });
+
+test('默认只显示阶段，日志来源不展开浮窗、不抢所选会话，并拒绝输入', async () => {
+  const h = monitor(); await h.begin();
+  assert.equal(h.state.collapsed, true);
+  h.emit('started');
+  h.state.collapsed = false;
+  h.state.visible = false;
+  h.emit('log_started', '', 'reshade');
+  assert.equal(h.state.visible, false);
+  assert.equal(h.state.selectedId, 'a');
+  h.state.selectedId = 'reshade';
+  assert.equal(h.state.sessions[1].readOnly, true);
+  await assert.rejects(() => h.send('input'), /不接受输入/);
+  h.emit('exit', '', 'a');
+  h.emit('stdout', 'game still rendering', 'reshade');
+  assert.equal(h.state.sessions[1].running, true);
+  assert.equal(h.state.sessions[1].output, 'game still rendering');
+  h.emit('error', '具体读取错误', 'reshade');
+  h.emit('exit', '', 'reshade');
+  assert.equal(h.state.sessions[1].error, '具体读取错误');
+  h.finish();
+  await h.begin();
+  h.emit('started', '', 'new-run');
+  h.emit('log_started', 'a', 'old-shade');
+  assert.equal(h.state.sessions.find(item => item.id === 'old-shade').generation, 1);
+  assert.equal(h.state.selectedId, 'new-run');
+  h.emit('log_started', 'missing-parent', 'ignored-shade');
+  assert.equal(h.state.sessions.some(item => item.id === 'ignored-shade'), false);
+});

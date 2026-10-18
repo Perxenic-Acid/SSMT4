@@ -24,6 +24,7 @@ export interface ProgramToLaunch {
     waitTimeoutSecs?: number;
     waitOnly?: boolean;
     runAsAdministrator?: boolean;
+    logSources?: Array<{ name: string; path: string }>;
 }
 
 interface DiscoveredGamePaths {
@@ -45,6 +46,7 @@ interface HotRuntimePlan {
     runtimeDirectory: string;
     requiredLaunchArgs?: string[];
     excludedLaunchArgs?: string[];
+    logSources?: Array<{ name: string; path: string }>;
 }
 
 type GraphicsLaunchDecision =
@@ -780,6 +782,7 @@ export class LaunchGame {
                 // 1. Default flow launches Run.exe first.
                 programs.push({
                     path: await join(migotoDir, "Run.exe"),
+                    logSources: hotRuntime?.logSources,
                     workDir: migotoDir,
                     args: injectorArgs.join(" ") || undefined,
                     // Run.exe 带有 requireAdministrator manifest。SSMT 未提权时，

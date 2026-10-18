@@ -235,6 +235,7 @@ fn prepare_hot_at(
     super::hot_reshade::save_config(&root, composed, "", &[])?;
     Ok(Some(HotRuntimePlan {
         dlls: vec![dll],
+        log_sources: vec![crate::commands::launch_logs::LaunchLogSource { name: "ReShade".into(), path: root.join("ReShade.log") }],
         environment: [
             (
                 "RESHADE_BASE_PATH_OVERRIDE".into(),

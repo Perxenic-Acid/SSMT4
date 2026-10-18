@@ -16,15 +16,15 @@ const MAX_PACKET: usize = 64 * 1024;
 const MAX_INPUT: usize = 4096;
 const MAX_SESSIONS: usize = 16;
 
-struct ConsoleLog {
+pub(super) struct ConsoleLog {
     file: Option<BufWriter<std::fs::File>>,
-    path: PathBuf,
+    pub(super) path: PathBuf,
     written: usize,
     limit: usize,
 }
 
 impl ConsoleLog {
-    fn new(folder: &Path, id: &str) -> std::io::Result<Self> {
+    pub(super) fn new(folder: &Path, id: &str) -> std::io::Result<Self> {
         std::fs::create_dir_all(folder)?;
         let path = folder.join(format!(
             "{}-launch-console-{}.log",
@@ -70,7 +70,7 @@ impl ConsoleLog {
         Ok(())
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    pub(super) fn flush(&mut self) -> std::io::Result<()> {
         self.file
             .as_mut()
             .ok_or_else(|| std::io::Error::other("日志文件不可写"))?
@@ -78,7 +78,7 @@ impl ConsoleLog {
     }
 }
 
-fn log_output(log: &mut Option<ConsoleLog>, kind: &str, text: &str) {
+pub(super) fn log_output(log: &mut Option<ConsoleLog>, kind: &str, text: &str) {
     if let Some(writer) = log.as_mut() {
         if let Err(error) = writer.append(kind, text) {
             eprintln!("[LaunchConsole] 日志写入失败：{error}");
@@ -93,6 +93,8 @@ pub struct ConsoleRequest {
     pub path: String,
     pub args: String,
     pub work_dir: String,
+    #[serde(default)]
+    pub log_sources: Vec<super::launch_logs::LaunchLogSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,7 +125,7 @@ fn sessions() -> &'static Sessions {
     SESSIONS.get_or_init(Mutex::default)
 }
 
-fn nonce() -> String {
+pub(super) fn nonce() -> String {
     let random = std::collections::hash_map::RandomState::new();
     format!("{:016x}{:016x}", random.hash_one(0u8), random.hash_one(1u8))
 }
@@ -365,18 +367,18 @@ pub fn console_helper(port: u16, token: &str) -> Result<(), String> {
     Ok(())
 }
 
-struct StreamText {
+pub(super) struct StreamText {
     pending: Vec<u8>,
     legacy: Option<encoding_rs::Decoder>,
 }
 impl StreamText {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             pending: vec![],
             legacy: None,
         }
     }
-    fn decode(&mut self, bytes: &[u8], eof: bool) -> String {
+    pub(super) fn decode(&mut self, bytes: &[u8], eof: bool) -> String {
         self.pending.extend_from_slice(bytes);
         if let Some(decoder) = self.legacy.as_mut() {
             let mut text = String::with_capacity(self.pending.len() * 3 + 8);
@@ -447,6 +449,10 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = nonce();
     let id = nonce();
+    let mut log_sources: Option<Vec<_>> = Some(
+        request.log_sources.iter().take(4).cloned()
+            .map(super::launch_logs::LogTail::new).collect(),
+    );
     let log_folder = crate::config::path_manager::PathManager::ssmt_cache_root(&app).join("Logs");
     let mut log = match ConsoleLog::new(&log_folder, &id) {
         Ok(log) => Some(log),
@@ -646,6 +652,12 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
                         if let Ok(Some(mut event)) =
                             crate::plugin::launch_event_bus::parse_json_line(&lines[..end])
                         {
+                            if matches!(event.event.as_str(), "target_created" | "target_detected")
+                                && event.pid.is_some_and(|pid| pid > 0) {
+                                if let (Some(pid), Some(sources)) = (event.pid, log_sources.take()) {
+                                    super::launch_logs::follow(event_app.clone(), sources, pid, &session_id);
+                                }
+                            }
                             event
                                 .details
                                 .insert("consoleSessionId".into(), session_id.clone().into());
@@ -872,6 +884,7 @@ mod tests {
                 + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             args: format!("-NoProfile -NonInteractive -EncodedCommand {script}"),
             work_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            log_sources: Vec::new(),
         }
     }
 

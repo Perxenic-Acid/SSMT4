@@ -40,6 +40,9 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 
 只将已证实、可复用的经验留在本 skill；单次 PID、个人游戏路径、哈希和测试输出放在诊断报告或忽略的构建目录。
 
+- 热键和重载有响应但 Mod 不生效时，检查 ReShade 升级 Device / Context 接口后是否丢失 Runtime 包装。用真实替换命令及回读结果测试 Device1–5、Context1–4、IUnknown、DeviceChild 和延迟取得 Context；DLL 存在与私有 IID 单独通过都不足。新版接口尾部局部转发，继承 Draw / 绑定保留 Runtime，沿用平台接口门禁。ReShade 不代理 WARP，软件用例通过不能宣称真实 Feeder 组合已验收。
+- DLL 的“控制台”通常应接入实际日志文件；来源由已采用的启用插件计划贡献，启动前建立基线，跟随游戏 PID 而非短命注入器。允许源日志轮转，不保留文件锁，错误与停止状态只影响该来源。默认阶段摘要与输出详情分开，迟到来源不得自动展开或抢选；只读来源拒绝输入，回显继续镜像到缓存日志。
+
 - 控制台通道失败不能直接归因为注入失败。先查缓存 `Logs/*-launch-console-*.log` 的 PID、stdout/stderr 与退出码；命令已提交后确认超时，不回滚已启动目标或重复启动。Windows 接收本机连接后显式清除非阻塞标志，用真实延迟读取覆盖 Winsock 10035；握手后清除实际读取句柄及其克隆的超时，覆盖长时间无输出与等待输入。UAC 与 stdio 在同级权限 helper 内衔接。回显日志与界面限流分开，关闭浮窗不杀进程。见 [启动控制台](../../docs/launch-console.md)。
 
 - 扩展 DLSS5 游戏时先区分无原生输入、DX11 原生输入与 DX12 原生输入，再按真实 `gamePreset` 和 EXE 联合选择 Feeder / DX11 Bridge / 原生 consumer。Feeder 必须配齐运动矢量 FX、公共 include 及明确的 technique 顺序；不能把 GIMI FSR2 Bridge 套到其他游戏。下载时校验归档及提取项，ReShade 安装程序仅读取固定哈希对应的内嵌 ZIP，绝不执行。共用一个热注入 Host 与启用贡献组合器，状态检查失败也必须保留重新下载入口。离线实组件提取、接口共存、游戏内成功 NR 帧分开验收。

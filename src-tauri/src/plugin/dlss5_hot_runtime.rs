@@ -541,6 +541,7 @@ fn prepare_at(
     dlls.push(root.join("ReShade64.dll"));
     Ok(HotRuntimePlan {
         dlls,
+        log_sources: vec![crate::commands::launch_logs::LaunchLogSource { name: "ReShade".into(), path: root.join("ReShade.log") }],
         environment: [
             (
                 "RESHADE_BASE_PATH_OVERRIDE".into(),

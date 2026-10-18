@@ -406,6 +406,8 @@
   },
   "launchUi": {
     "console": {
+      "history": "Launch history", "output": "Output", "events": "Launch events", "following": "Following", "stopped": "Ended",
+      "readOnly": "Read-only log", "interactive": "Interactive", "logHint": "Following game logs; collection continues when collapsed",
       "title": "Launch console", "program": "Console program", "running": "Running", "exited": "Exited ({code})", "log": "Open log",
       "minimize": "Minimize", "hide": "Hide", "copy": "Copy", "clear": "Clear", "send": "Send",
       "input": "Type text and press Enter to send", "hideHint": "Hiding keeps programs running",
