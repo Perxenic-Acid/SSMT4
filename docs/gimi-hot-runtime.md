@@ -222,7 +222,7 @@ Runtime `1a8a9e5b` 保留这些接口的包装身份，并统一延迟取得 Con
 
 Insert 打开的面板属于 OptiScaler。汉化源码位于独立 fork
 `Perxenic-Acid/OptiScaler_DLSSNR`，固定提交
-`05322084236dc505f4ea8df29720c3a213d5f4d3`。它基于现用的
+`6c6c41c5b3070ce008360e1713d30005c49e7b99`。它基于现用的
 `973761621353b99bee3dc7d4bb27b117fef2644f`，先迁入 cc46971 集成包的两份 GIMI 补丁，
 再增加中文显示，保留原有热注入与 FSR2 DX11 → DLSS-on-D3D12 契约。
 来源与补丁哈希记录在 fork 的 `docs/ssmt-gimi.md`。
@@ -231,6 +231,13 @@ DLSS5 插件 0.2.3 随包提供汉化辅助 DLL、许可证、第三方声明及
 Native 工作流从 `tools/sources/optiscaler.json` 检出固定源码，运行 CPU 界面回归并构建；
 正式分发仍通过 Native Release 的插件目录校验完整包大小和 SHA-256。
 发布之前先推送 fork 的固定提交，再推送 Native 和主仓库；本次只做本地提交，未发布 Release。
+
+2026-10-18 回传的 `Formatting Check` 失败属于 fork 的格式门禁，日志没有 MSBuild 编译步骤。
+已用相同的 clang-format 20.1.8 修正 fork 改动行，并让检查相对固定上游祖先执行，
+保留原有上游格式与生成的着色器数组。格式差异仍会使检查失败。
+fork 的 `SSMT OptiScaler component` 现支持分支推送、PR 和手动触发；
+实际 DLL 与来源记录在 `SSMT-OptiScaler-windows-x64` Actions Artifact 中，格式检查不会生成 DLL。
+本地入口为 fork 的 `scripts/check-format.py`，依赖见 `scripts/requirements-format.txt`。
 
 本地测试先运行 Native 的 `tools/build-optiscaler.ps1 -SourceDirectory <fork目录>`，
 再运行 `tools/stage-local-plugins.ps1`。本次已生成
