@@ -12,16 +12,16 @@ pub struct ManagedReShadeConfig {
 pub struct IniConflict {
     pub section: String,
     pub key: String,
-    pub hoyoshade_value: String,
-    pub dlss5_value: String,
+    pub existing_value: String,
+    pub incoming_value: String,
 }
 
 impl std::fmt::Display for IniConflict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ReShade configuration conflict [{}] {}: HoYoShade={}, DLSS5={}",
-            self.section, self.key, self.hoyoshade_value, self.dlss5_value
+            "ReShade 配置冲突：[{}] {} 的值不一致（已有值={}；新增值={}）。请统一该项设置后重试",
+            self.section, self.key, self.existing_value, self.incoming_value
         )
     }
 }
@@ -107,8 +107,8 @@ fn merge_value(section: &str, key: &str, left: &str, right: &str) -> Result<Stri
                         return Err(IniConflict {
                             section: section.to_string(),
                             key: key.to_string(),
-                            hoyoshade_value: old,
-                            dlss5_value: part.to_string(),
+                            existing_value: old,
+                            incoming_value: part.to_string(),
                         });
                     }
                 }
@@ -122,8 +122,8 @@ fn merge_value(section: &str, key: &str, left: &str, right: &str) -> Result<Stri
     Err(IniConflict {
         section: section.to_string(),
         key: key.to_string(),
-        hoyoshade_value: left.to_string(),
-        dlss5_value: right.to_string(),
+        existing_value: left.to_string(),
+        incoming_value: right.to_string(),
     })
 }
 
@@ -214,16 +214,14 @@ pub fn compose(
     dlss_preset: &str,
     addon_names: &[String],
 ) -> Result<ManagedReShadeConfig, IniConflict> {
-    // The managed host uses one game-local preset, allowing the Feeder's
-    // required techniques and HoYoShade's presets to share that file.
+    // 预设内容已分别传入，共享 Host 的路径由最终计划指定。两侧都必须改写，
+    // 否则以空配置开始逐项收集贡献时，会把首个源预设路径误判为冲突。
     let mut hoyo_ini = hoyo_ini.to_string();
-    set_entry(
-        &mut hoyo_ini,
-        "GENERAL",
-        "PresetPath",
-        ".\\ReShadePreset.ini",
-    );
-    let mut game_ini = merge_document(&hoyo_ini, dlss_ini)?;
+    let mut dlss_ini = dlss_ini.to_string();
+    for ini in [&mut hoyo_ini, &mut dlss_ini] {
+        set_entry(ini, "GENERAL", "PresetPath", ".\\ReShadePreset.ini");
+    }
+    let mut game_ini = merge_document(&hoyo_ini, &dlss_ini)?;
     set_entry(
         &mut game_ini,
         "ADDON",
@@ -404,6 +402,23 @@ mod tests {
     }
 
     #[test]
+    fn source_preset_paths_are_rebased_on_both_sides_and_across_collection_steps() {
+        let source = "[GENERAL]\nPresetPath=C:\\HoYo\\Presets\\Mod OFF.ini\nPresetPath=Presets\\Other.ini\n";
+        let shade = compose("", source, "", "Techniques=Shade@Shade.fx\n", &[]).unwrap();
+        let combined = compose(
+            &shade.game_ini,
+            "[GENERAL]\nPresetPath=D:\\DLSS\\ReShadePreset.ini\n",
+            &shade.preset_ini,
+            "Techniques=Feed@feed.fx\n",
+            &[],
+        ).unwrap();
+        assert_eq!(get_entry(&combined.game_ini, "GENERAL", "PresetPath").as_deref(), Some(".\\ReShadePreset.ini"));
+        assert_eq!(combined.game_ini.matches("PresetPath=").count(), 1);
+        assert!(combined.preset_ini.contains("Techniques=Feed@feed.fx,Shade@Shade.fx"));
+        assert_eq!(compose(&combined.game_ini, "", &combined.preset_ini, "", &[]).unwrap(), combined);
+    }
+
+    #[test]
     fn reports_conflicting_scalar_key() {
         let error = compose(
             "[DEPTH]\nUseAspectRatioHeuristics=1\n",
@@ -415,6 +430,13 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.section, "DEPTH");
         assert_eq!(error.key, "UseAspectRatioHeuristics");
+        assert_eq!(error.existing_value, "1");
+        assert_eq!(error.incoming_value, "0");
+        let message = error.to_string();
+        assert!(message.contains("[DEPTH] UseAspectRatioHeuristics"));
+        assert!(message.contains("已有值=1；新增值=0"));
+        assert!(message.contains("请统一该项设置"));
+        assert!(!message.contains("DLSS5="));
     }
 
     #[test]

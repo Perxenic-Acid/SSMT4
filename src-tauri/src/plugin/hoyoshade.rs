@@ -430,7 +430,7 @@ mod tests {
         ] {
             fs::write(source.join(file), b"fixture").unwrap();
         }
-        let source_ini = "[GENERAL]\nEffectSearchPaths=Shaders\n[ADDON]\nDisabledAddons=ShaderToggler\n[OVERLAY]\nTutorialProgress=0\n";
+        let source_ini = "[GENERAL]\nPresetPath=C:\\HoYo\\Presets\\Mod OFF.ini\nEffectSearchPaths=Shaders\n[ADDON]\nDisabledAddons=ShaderToggler\n[OVERLAY]\nTutorialProgress=0\n";
         fs::write(source.join("ReShade.ini"), source_ini).unwrap();
         fs::write(
             source.join("Presets/Mod OFF.ini"),

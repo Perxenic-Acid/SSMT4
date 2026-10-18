@@ -783,6 +783,8 @@ mod tests {
             );
         }
         if let Some(shade) = std::env::var_os("SSMT_HOT_TEST_SHADE_ROOT") {
+            let shade_ini_path = Path::new(&shade).join("ReShade.ini");
+            let shade_before = fs::read(&shade_ini_path).unwrap();
             let package = registry
                 .plugins_root()
                 .join(HOYOSHADE_PLUGIN_ID)
@@ -803,7 +805,7 @@ mod tests {
             let combined = prepare_at(&registry.for_game("GIMI"), &installation).unwrap();
             assert_eq!(combined.dlls, plan.dlls);
             let text = read_text(&config).unwrap();
-            let shade_ini = read_text(&Path::new(&shade).join("ReShade.ini")).unwrap();
+            let shade_ini = read_text(&shade_ini_path).unwrap();
             if let Some(disabled) = shade_ini
                 .lines()
                 .find(|line| line.starts_with("DisabledAddons="))
@@ -817,26 +819,27 @@ mod tests {
                     .to_string()
             ));
             let (addon, _) = profile_files(&installation.profile).unwrap();
-            fs::write(
-                installation.root.join(&addon).join("stale-shade.addon64"),
-                "owned fixture",
-            )
-            .unwrap();
+            // 只检查组合器实际登记的贡献，不能向目录塞入未知 Add-on 再期待删除。
+            let ownership: std::collections::BTreeMap<String, String> = serde_json::from_str(
+                &read_text(&config.parent().unwrap().join("ReShade.ssmt-addons.json")).unwrap(),
+            ).unwrap();
+            for name in ownership.keys() {
+                assert!(installation.root.join(&addon).join(name).is_file());
+            }
             registry
                 .set_game_enabled("GIMI", HOYOSHADE_PLUGIN_ID, false)
                 .unwrap();
             prepare_at(&registry.for_game("GIMI"), &installation).unwrap();
-            assert!(!installation
-                .root
-                .join(addon)
-                .join("stale-shade.addon64")
-                .exists());
-            assert!(!read_text(&config).unwrap().contains(
-                &canonical_path(Path::new(&shade))
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string()
-            ));
+            for name in ownership.keys() {
+                assert!(!installation.root.join(&addon).join(name).exists());
+            }
+            // 界面字体、截图目录等用户状态允许保留；停用后不能继续贡献效果搜索路径。
+            let saved = read_text(&config).unwrap();
+            let shade_root = canonical_path(Path::new(&shade)).unwrap().to_string_lossy().to_string();
+            for line in saved.lines().filter(|line| line.starts_with("EffectSearchPaths=") || line.starts_with("TextureSearchPaths=")) {
+                assert!(!line.contains(&shade_root));
+            }
+            assert_eq!(fs::read(shade_ini_path).unwrap(), shade_before);
         }
         assert_eq!(
             fs::read(source.root.join("components/OptiScaler/OptiScaler.ini")).unwrap(),

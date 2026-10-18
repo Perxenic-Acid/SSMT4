@@ -21,7 +21,7 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
   let ini = '[Loader]\nloader = XXMI Launcher.exe\nlaunch = C:/old.exe\nlaunch_args = old\nmodule = d3d11.dll\n';
   const calls = [];
   const messages = [];
-  const t = key => key;
+  const t = (key, params) => key === 'launchGame.messages.graphicsPluginUnavailableContinue' ? `${key} ${JSON.stringify(params)}` : key;
   const mocks = {
     '@tauri-apps/api/path': { join: async (...parts) => parts.join('/') },
     '@tauri-apps/plugin-fs': {
@@ -54,12 +54,12 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
         for (const [id, plugin, candidate] of [['dlss', 'DLSS5', hotRuntime], ['shade', 'Shade', shadeHotRuntime]]) {
           if (!candidate) continue;
           if (args.excludedProviders.includes(id)) { handled = true; continue; }
-          if (!args.allowHotRuntime) { diagnostics.push({ plugin, error: '当前启动方式无法继承热注入计划' }); continue; }
+          if (!args.allowHotRuntime) { diagnostics.push({ candidateId: id, plugin, error: '当前启动方式无法继承热注入计划' }); continue; }
           handled = true;
           try {
             const plan = typeof candidate === 'function' ? candidate() : candidate;
             if (plan) return { candidateId: id, plugin, plan, handled, diagnostics };
-          } catch (error) { diagnostics.push({ plugin, error: String(error) }); }
+          } catch (error) { diagnostics.push({ candidateId: id, plugin, error: String(error) }); }
         }
         return { candidateId: null, plugin: null, plan: null, handled, diagnostics };
       }
@@ -215,6 +215,35 @@ test('DLSS5 画质配置失败时 Shade 仍走有序预加载，不回退到独�
   assert.equal(h.calls.filter(call => call.command === 'configure_plugin_launch_contract' && call.args.candidateId === 'dlss').length, 1);
   assert.equal(h.calls.some(call => call.command === 'prepare_hoyoshade_launch'), false);
   assert.equal(h.messages.filter(message => message.kind === 'warning').length, 1);
+});
+
+test('共享故障按原因合并，列出所有受影响插件；不同原因仍分别显示', async () => {
+  for (const sameReason of [true, false]) {
+    const reason = 'ReShade 配置冲突：[DEPTH] UseAspectRatioHeuristics，已有值=1；新增值=0';
+    const h = harness({ ...base, gamePreset: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe' }, null,
+      () => { throw new Error(reason); }, null,
+      () => { throw new Error(sameReason ? reason : 'HoYoShade 缺失 ReShade64.dll'); });
+    await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+    const warnings = h.messages.filter(message => message.kind === 'warning');
+    assert.equal(warnings.length, sameReason ? 1 : 2);
+    assert.ok(warnings[0].message.message.includes(reason));
+    assert.ok(warnings[0].message.message.includes('DLSS5'));
+    assert.ok(warnings[sameReason ? 0 : 1].message.message.includes('Shade'));
+    assert.equal(warnings[0].message.grouping, true);
+    assert.ok(h.calls.some(call => call.command === 'launch_programs'));
+    assert.doesNotMatch(h.ini(), /C:\/SSMT\/Owned/);
+  }
+});
+
+test('回退重试不再执行已报错候选，也不重复发出横幅', async () => {
+  let attempts = 0;
+  const h = harness({ ...base, gamePreset: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe', extraDlls: ['C:/Player/ReShade64.dll'] }, null,
+    () => { attempts++; throw new Error('NR 组件校验失败：hash mismatch'); }, null, hotPlan);
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.equal(attempts, 1);
+  assert.equal(h.messages.filter(message => message.kind === 'warning').length, 2);
+  assert.ok(h.calls.some(call => call.command === 'launch_programs'));
+  assert.doesNotMatch(h.ini(), /C:\/SSMT\/Owned/);
 });
 
 test('各游戏热注入计划合并进单次挂起启动，保留 PluginHost，不再启动第二套 Shade 注入器', async () => {

@@ -642,12 +642,12 @@ export class LaunchGame {
             let skipDlss5 = false;
             let hotRuntimeDlls: string[] = [];
             let hotLaunchArgs = config.launchArgs || "";
+            const contributionWarnings = new Map<string, Set<string>>();
             const warnContribution = (plugin: string, error: unknown) => {
-                ElMessage.warning({
-                    message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin, error: String(error) }),
-                    showClose: true,
-                    duration: 12000,
-                });
+                const reason = String(error).trim();
+                const plugins = contributionWarnings.get(reason) ?? new Set<string>();
+                plugins.add(plugin);
+                contributionWarnings.set(reason, plugins);
             };
             const collectHotRuntimeDlls = (plan: HotRuntimePlan): string[] => {
                 const configuredExtras = Array.isArray(config.extraDlls)
@@ -672,12 +672,15 @@ export class LaunchGame {
                     while (true) {
                         const prepared = await invoke<{
                             candidateId: string | null; plugin: string | null; plan: HotRuntimePlan | null;
-                            handled: boolean; diagnostics: Array<{ plugin: string; error: string }>;
+                            handled: boolean; diagnostics: Array<{ candidateId: string; plugin: string; error: string }>;
                         }>("prepare_plugin_graphics_plan", { gameName, gameExecutable: targetExe, allowHotRuntime: canCreateTarget, excludedProviders, graphicsDecision });
                         graphicsHotHandled ||= prepared.handled;
                         for (const diagnostic of prepared.diagnostics) {
                             skipDlss5 = true;
                             warnContribution(diagnostic.plugin, diagnostic.error);
+                            if (diagnostic.candidateId && !excludedProviders.includes(diagnostic.candidateId)) {
+                                excludedProviders.push(diagnostic.candidateId);
+                            }
                         }
                         if (!prepared.plan) break;
                         const candidateId = prepared.candidateId;
@@ -715,12 +718,16 @@ export class LaunchGame {
                 } catch (error) {
                     if (!skipDlss5) throw error;
                     console.warn("Shade Bridge 准备失败，继续普通启动：", error);
-                    ElMessage.warning({
-                        message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: "Shade Bridge", error: String(error) }),
-                        showClose: true,
-                        duration: 12000,
-                    });
+                    warnContribution("Shade Bridge", error);
                 }
+            }
+            for (const [error, plugins] of contributionWarnings) {
+                ElMessage.warning({
+                    message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: [...plugins].join("、"), error }),
+                    grouping: true,
+                    showClose: true,
+                    duration: 12000,
+                });
             }
             // Runtime plugins are injected by Run.exe, including configured-target mode.
             const effectivePluginHostConfig = useRunInjector

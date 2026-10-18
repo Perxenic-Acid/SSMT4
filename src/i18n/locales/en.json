@@ -1567,7 +1567,7 @@
       "launchFailed": "Launch failed: {error}",
       "launchFailedDetailed": "Launch failed.\n\nDetailed error:\n{error}",
       "ssmtRuntimeUpdateFallback": "SSMT Runtime ({file}) could not be updated. Continuing with the existing version.",
-      "graphicsPluginUnavailableContinue": "{plugin} was skipped for this launch. The game will continue to start. Check its component settings in the plugin marketplace. {error}",
+      "graphicsPluginUnavailableContinue": "{plugin} was skipped for this launch. The game will continue to start. Reason: {error}",
       "gimiHotManualLaunchUnsupported": "DLSS5 hot injection requires SSMT to create the game process. Enable Launch target program in the game settings.",
       "gimiHotExternalLauncherUnsupported": "DLSS5 hot injection cannot currently launch the game through another program. Launch path: {launcher}; target: {target}. Set the Shell launch path to the same game executable, or select normal launch.",
       "ssmtRuntimeUnavailable": "SSMT Runtime ({file}) could not be prepared and no existing version is available. Repair the application resources and try again.",

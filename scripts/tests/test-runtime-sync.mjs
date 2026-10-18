@@ -92,9 +92,9 @@ async function harness(t, options = {}) {
         ]) {
           if (!present) continue;
           if (args.excludedProviders.includes(id)) { handled = true; continue; }
-          if (!args.allowHotRuntime) { diagnostics.push({ plugin, error: '当前启动方式无法继承热注入计划' }); continue; }
+          if (!args.allowHotRuntime) { diagnostics.push({ candidateId: id, plugin, error: '当前启动方式无法继承热注入计划' }); continue; }
           handled = true;
-          if (failure) { diagnostics.push({ plugin, error: failure }); continue; }
+          if (failure) { diagnostics.push({ candidateId: id, plugin, error: failure }); continue; }
           return { candidateId: id, plugin, plan, handled, diagnostics };
         }
         return { candidateId: null, plugin: null, plan: null, handled, diagnostics };

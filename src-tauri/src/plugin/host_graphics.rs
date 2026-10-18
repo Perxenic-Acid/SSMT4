@@ -5,7 +5,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Diagnostic { pub plugin: String, pub error: String }
+pub struct Diagnostic { pub candidate_id: String, pub plugin: String, pub error: String }
 
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -54,7 +54,7 @@ fn prepare(extension: &HostExtensionContribution, plugin: &InstalledPlugin, game
 
 pub(super) fn reshade_contributions(registry: &PluginRegistry) -> Result<Vec<super::shade_policy::Contribution>, String> {
     let mut result = Vec::new();
-    for plugin in registry.installed().iter().filter(|plugin| plugin.enabled) {
+    for plugin in registry.selected_plugins().filter(|plugin| plugin.enabled) {
         for extension in extensions(plugin) {
             if extension.provider != "ssmt.graphics.reshade" { continue; }
             if plugin.id() != super::hoyoshade::HOYOSHADE_PLUGIN_ID { return Err("ReShade provider 尚未绑定此插件".into()); }
@@ -70,7 +70,7 @@ pub(super) fn collect(
     excluded: &[String],
     mut prepare: impl FnMut(&HostExtensionContribution, &InstalledPlugin) -> Result<Option<HotRuntimePlan>, String>,
 ) -> GraphicsPreparation {
-    let mut candidates: Vec<_> = registry.installed().iter().filter(|p| p.enabled)
+    let mut candidates: Vec<_> = registry.selected_plugins().filter(|p| p.enabled)
         .flat_map(|plugin| extensions(plugin).into_iter().filter(|extension| extension.provider.starts_with("ssmt.graphics."))
             .map(move |extension| (plugin, extension))).collect();
     candidates.sort_by(|a, b| b.1.priority.cmp(&a.1.priority).then_with(|| a.0.id().cmp(b.0.id())).then_with(|| a.1.id.cmp(&b.1.id)));
@@ -79,19 +79,19 @@ pub(super) fn collect(
         let id = format!("{}:{}", plugin.id(), extension.id);
         if excluded.contains(&id) { result.handled = true; continue; }
         if !allowed {
-            result.diagnostics.push(Diagnostic { plugin: plugin.manifest.name.clone(), error: "当前启动方式无法继承热注入计划，请由 SSMT 直接创建目标游戏进程".into() });
+            result.diagnostics.push(Diagnostic { candidate_id: id, plugin: format!("{} v{}", plugin.manifest.name, plugin.version()), error: "当前启动方式无法继承热注入计划，请由 SSMT 直接创建目标游戏进程".into() });
             continue;
         }
         result.handled = true;
         match prepare(&extension, plugin) {
             Ok(Some(plan)) => {
                 result.candidate_id = Some(id);
-                result.plugin = Some(plugin.manifest.name.clone());
+                result.plugin = Some(format!("{} v{}", plugin.manifest.name, plugin.version()));
                 result.plan = Some(plan);
                 break;
             }
             Ok(None) => (),
-            Err(error) => result.diagnostics.push(Diagnostic { plugin: plugin.manifest.name.clone(), error }),
+            Err(error) => result.diagnostics.push(Diagnostic { candidate_id: id, plugin: format!("{} v{}", plugin.manifest.name, plugin.version()), error }),
         }
     }
     result
@@ -112,7 +112,7 @@ pub fn prepare_plugin_graphics_plan(game_name: String, game_executable: String, 
 #[tauri::command]
 pub fn configure_plugin_launch_contract(game_name: String, game_executable: String, candidate_id: String) -> Result<(), String> {
     let registry = super::commands::installed_plugin_registry()?.ok_or("插件已移除")?.for_game(&game_name);
-    for plugin in registry.installed().iter().filter(|p| p.enabled) {
+    for plugin in registry.selected_plugins().filter(|p| p.enabled) {
         for extension in extensions(plugin) {
             if format!("{}:{}", plugin.id(), extension.id) != candidate_id { continue; }
             return match extension.provider.as_str() {
@@ -162,11 +162,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ssmt-host-plans-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
         let mut registry = PluginRegistry::new(root.join("plugins")).unwrap();
         assert!(!collect(&registry, true, &[], |_, _| panic!("无插件不能准备资源")).handled);
-        for (id, priority) in [("example.a", 10), ("example.b", 50), ("example.c", 20)] {
-            let package = registry.plugins_root().join(id).join("1.0.0");
+        for ((id, priority), version) in [("example.a", 10), ("example.b", 50), ("example.c", 20)]
+            .into_iter().flat_map(|plugin| ["1.9.0", "1.10.0"].into_iter().map(move |version| (plugin, version))) {
+            let package = registry.plugins_root().join(id).join(version);
             fs::create_dir_all(&package).unwrap();
             fs::write(package.join("ssmt-plugin.json"), serde_json::json!({
-                "schemaVersion":1,"id":id,"name":id,"version":"1.0.0","author":"Example",
+                "schemaVersion":1,"id":id,"name":id,"version":version,"author":"Example",
                 "compatibility":{"ssmt":">=4.0.0","platforms":["windows-x64"]},
                 "contributions":{"hostExtensions":[{"id":"host","provider":"ssmt.graphics.test","priority":priority}]}
             }).to_string()).unwrap();
@@ -182,9 +183,16 @@ mod tests {
             }
             let scoped = registry.for_game("WWMI");
             let mut visited = Vec::new();
-            let result = collect(&scoped, true, &[], |_, plugin| { visited.push(plugin.id().to_string()); Err("模拟准备失败".into()) });
+            let result = collect(&scoped, true, &[], |_, plugin| {
+                assert_eq!(plugin.version(), "1.10.0");
+                visited.push(plugin.id().to_string()); Err("模拟准备失败".into())
+            });
             assert_eq!(visited.len(), (mask as u32).count_ones() as usize);
             assert_eq!(result.diagnostics.len(), visited.len());
+            for diagnostic in &result.diagnostics {
+                assert!(diagnostic.plugin.ends_with(" v1.10.0"));
+                assert!(diagnostic.candidate_id.ends_with(":host"));
+            }
             assert!(!collect(&scoped, false, &[], |_, _| panic!("外部启动不准备资源")).plan.is_some());
         }
         let scoped = registry.for_game("WWMI");

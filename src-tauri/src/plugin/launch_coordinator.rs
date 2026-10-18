@@ -196,8 +196,7 @@ impl<'a> LaunchCoordinator<'a> {
 
         let enabled_plugins = self
             .registry
-            .installed()
-            .iter()
+            .selected_plugins()
             .filter(|plugin| plugin.enabled)
             .map(|plugin| {
                 validate_plugin_preflight(plugin)?;

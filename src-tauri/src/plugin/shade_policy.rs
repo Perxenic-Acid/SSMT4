@@ -16,6 +16,7 @@ pub(super) struct Policy {
 }
 
 pub(super) struct Contribution {
+    pub source: String,
     pub config: String,
     pub preset: String,
     pub addons: BTreeMap<String, PathBuf>,
@@ -63,6 +64,6 @@ impl Policy {
                 addons.insert(name.clone(), checked_path(&root, &format!("{}/{name}", self.addons))?);
             }
         }
-        Ok(Contribution { config, preset, addons })
+        Ok(Contribution { source: format!("{} v{}：{}", plugin.manifest.name, plugin.version(), root.join(&self.config).display()), config, preset, addons })
     }
 }

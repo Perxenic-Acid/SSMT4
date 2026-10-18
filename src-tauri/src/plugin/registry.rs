@@ -303,6 +303,13 @@ impl PluginRegistry {
         &self.installed
     }
 
+    /// 安装记录保留旧包；执行贡献时与 find 一样，只选择每个 ID 的最高版本。
+    pub fn selected_plugins(&self) -> impl Iterator<Item = &InstalledPlugin> {
+        self.installed.iter().filter(|plugin| {
+            self.find(plugin.id()).is_some_and(|selected| selected.version() == plugin.version())
+        })
+    }
+
     pub fn find(&self, id: &str) -> Option<&InstalledPlugin> {
         self.installed
             .iter()
@@ -324,7 +331,8 @@ impl PluginRegistry {
     pub(crate) fn for_game_preset(&self, game_name: &str, preset: &str) -> Self {
         let mut scoped = self.clone();
         for plugin in &mut scoped.installed {
-            plugin.enabled = if plugin.manifest.is_app_scoped() {
+            let selected = self.find(plugin.id()).is_some_and(|current| current.version() == plugin.version());
+            plugin.enabled = selected && if plugin.manifest.is_app_scoped() {
                 self.state.plugins.get(&package_key(plugin.id(), plugin.version()))
                     .is_some_and(|settings| settings.enabled)
             } else {
@@ -470,8 +478,7 @@ impl PluginRegistry {
 
     pub fn generate_plugin_host_config(&self) -> PluginHostConfig {
         let mut plugins = self
-            .installed
-            .iter()
+            .selected_plugins()
             .filter(|plugin| plugin.enabled)
             .flat_map(|plugin| {
                 plugin
@@ -699,6 +706,43 @@ mod tests {
         restarted.set_enabled("ssmt.fixture", false).unwrap();
         assert!(!restarted.find("ssmt.fixture").unwrap().enabled);
         drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_versions_contribute_only_the_latest_and_never_reenable_an_older_package() {
+        let root = temp_root("selected-version");
+        let id = "example.multiversion";
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        for version in ["1.9.0", "1.10.0"] {
+            let source = fixture_package(&root.join(version), id, version);
+            registry.install_directory_package(&source).unwrap();
+            registry.set_enabled(id, true).unwrap();
+        }
+        registry.set_game_enabled("GIMI", id, true).unwrap();
+        let expected = vec![format!("{id}/1.10.0/native/example.dll")];
+        for registry in [&registry, &PluginRegistry::new(registry.plugins_root()).unwrap()] {
+            assert_eq!(registry.installed().len(), 2);
+            assert_eq!(registry.selected_plugins().count(), 1);
+            assert_eq!(registry.generate_plugin_host_config().plugins, expected);
+            let scoped = registry.for_game("GIMI");
+            assert_eq!(scoped.installed().iter().filter(|plugin| plugin.enabled).count(), 1);
+            assert_eq!(scoped.generate_plugin_host_config().plugins, expected);
+        }
+        registry.set_enabled(id, false).unwrap();
+        // 老包遗留的全局 enabled=true 不能绕过当前版本的关闭状态。
+        assert!(registry.generate_plugin_host_config().plugins.is_empty());
+        registry.set_game_enabled("GIMI", id, false).unwrap();
+        assert!(registry.for_game("GIMI").generate_plugin_host_config().plugins.is_empty());
+        let latest = registry.find(id).unwrap().package_root.clone();
+        let path = latest.join(MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest["compatibility"]["games"] = serde_json::json!(["SRMI"]);
+        fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        registry.refresh().unwrap();
+        registry.write_game_enabled("gimi", id, true).unwrap();
+        assert!(registry.for_game("GIMI").generate_plugin_host_config().plugins.is_empty());
+        assert!(registry.installed().iter().all(|plugin| plugin.package_root.is_dir()));
         fs::remove_dir_all(root).unwrap();
     }
 

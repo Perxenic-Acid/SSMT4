@@ -138,7 +138,7 @@ pub(super) fn compose(
     let mut addon_sources = BTreeMap::new();
     for contribution in super::host_graphics::reshade_contributions(registry)? {
         let merged = managed_reshade::compose(&base, &contribution.config, &preset, &contribution.preset, &[])
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("合并共享 ReShade 贡献失败（{}）：{e}", contribution.source))?;
         base = merged.game_ini;
         preset = merged.preset_ini;
         for (name, source) in contribution.addons {
@@ -151,7 +151,7 @@ pub(super) fn compose(
     }
 
     let mut prepared: PreparedConfig = managed_reshade::compose(&base, dlss_ini, &preset, dlss_preset, required)
-        .map_err(|error| error.to_string())?.into();
+        .map_err(|error| format!("合并共享 ReShade 与当前图形路线的配置失败：{error}"))?.into();
     prepared.addon_sources = addon_sources;
     prepared.addon_directory = Some(canonical_path(addon_directory).map_err(|e| e.to_string())?);
     Ok(prepared)
@@ -313,6 +313,11 @@ mod tests {
             .join("0.1.0");
         fs::create_dir_all(&package).unwrap();
         fs::write(package.join("ssmt-plugin.json"), include_str!("../../../native/official-plugin-packages/ssmt.hoyoshade.bridge/0.1.0/ssmt-plugin.json")).unwrap();
+        let newer = package.parent().unwrap().join("0.1.1");
+        fs::create_dir_all(&newer).unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(package.join("ssmt-plugin.json")).unwrap()).unwrap();
+        manifest["version"] = "0.1.1".into();
+        fs::write(newer.join("ssmt-plugin.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
         let shade = root.join("shade");
         fs::create_dir_all(shade.join("reshade-shaders/Addons")).unwrap();
         fs::create_dir_all(shade.join("Presets")).unwrap();
@@ -327,7 +332,7 @@ mod tests {
         }
         fs::write(
             shade.join("ReShade.ini"),
-            "[GENERAL]\nEffectSearchPaths=Shaders\n[ADDON]\nDisabledAddons=ShadeEffect\n",
+            "[GENERAL]\nPresetPath=C:\\HoYo\\Presets\\Mod OFF.ini\nEffectSearchPaths=Shaders\n[ADDON]\nDisabledAddons=ShadeEffect\n",
         )
         .unwrap();
         fs::write(
@@ -361,6 +366,7 @@ mod tests {
                 .preset_ini
                 .contains("DLSS5_Feed@DLSS5_Feed.fx,ShadeEffect@Shade.fx"));
             assert!(!addon.join("ShadeEffect.addon64").exists());
+            assert!(combined.game_ini.contains("PresetPath=.\\ReShadePreset.ini"));
             save_config(&addon, combined, "Techniques=DLSS5_Feed@DLSS5_Feed.fx\n", &required).unwrap();
             let mut saved = read_text(&addon.join("ReShade.ini")).unwrap();
             managed_reshade::set_entry(&mut saved, "OVERLAY", "TutorialProgress", "4");
@@ -391,6 +397,10 @@ mod tests {
                 .unwrap_err()
                 .contains("所有权冲突")
         );
+        fs::write(shade.join("ReShade.ini"), "[DEPTH]\nUseAspectRatioHeuristics=1\n").unwrap();
+        let conflict = compose(&registry.for_game("GIMI"), &addon, &[], "[DEPTH]\nUseAspectRatioHeuristics=0\n", "").unwrap_err();
+        assert!(conflict.contains("共享 ReShade"));
+        assert!(conflict.contains("[DEPTH] UseAspectRatioHeuristics"));
         let canonical = root.canonicalize().unwrap();
         assert_eq!(
             canonical.parent(),

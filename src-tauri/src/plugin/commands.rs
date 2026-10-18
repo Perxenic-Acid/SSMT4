@@ -655,8 +655,7 @@ fn lifecycle_status(plugin: &super::registry::InstalledPlugin) -> PluginLifecycl
 
 fn ui_routes(registry: &PluginRegistry) -> Vec<PluginUiRouteSnapshot> {
     registry
-        .installed()
-        .iter()
+        .selected_plugins()
         .filter(|plugin| plugin.enabled)
         .flat_map(|plugin| {
             plugin
