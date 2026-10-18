@@ -373,6 +373,14 @@ onUnmounted(() => {
         </ul>
         <p>{{ label('组件配置成功仅代表安装完成，NR 效果需进入游戏验证。', 'Configured components indicate installation only; verify NR rendering in game.') }}</p>
       </div>
+      <div class="graphics-startup">
+        <h4>{{ label('游戏内控制', 'In-game controls') }}</h4>
+        <ul>
+          <li>{{ label('Home：打开 ReShade，在附加组件中调整 DLSS5 神经渲染。F6：开关神经渲染。', 'Home: open ReShade and adjust DLSS5 Neural Rendering under Add-ons. F6: toggle Neural Rendering.') }}</li>
+          <li>{{ label('Insert：打开 OptiScaler，调整超分与界面设置。请保持其中的“启用神经渲染”关闭，避免额外运行另一套 NR。', 'Insert: open OptiScaler for upscaling and interface settings. Keep its Enable Neural Rendering option off to avoid running another NR implementation.') }}</li>
+        </ul>
+        <p>{{ label('可展开启动浮窗中的控制台详情，查看 FSR2 Bridge 与 DLSS5 NR 的本次运行日志。', 'Expand the launch console details to view this session’s FSR2 Bridge and DLSS5 NR logs.') }}</p>
+      </div>
       <details class="graphics-source">
         <summary>{{ label('组件来源与安装位置', 'Component source and installation') }}</summary>
         <p>{{ label('来自 CXP GIMI 集成项目（GitHub）及其 Runtime 包（Google Drive），按固定版本和哈希校验。第三方实验组件的兼容性仍取决于游戏与显卡。', 'From CXP GIMI integration (GitHub) and its runtime package (Google Drive), verified against pinned versions and hashes. Compatibility of these experimental components depends on the game and GPU.') }}</p>

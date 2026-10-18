@@ -266,3 +266,30 @@ DLL 与配套 `nvngx_dlss.dll`、`D3D12_Optiscaler/D3D12Core.dll` 位于组件�
 2. 切换语言、保存设置并重启，确认语言、快捷键与用户选项保留；
 3. 分别检查 DLSS5 单独、与 Shade 共用、关闭插件及回退旧包，确认普通 Mod 仍有效；
 4. 对照同次 Bridge dispatch、Feature 18 成功帧和实际画面，继续验收 NR 与稳定性。
+
+## OptiScaler 提示缺少 NR 转接桥（2026-10-18）
+
+`Insert` 面板里的“启用神经渲染”控制 OptiScaler 自身的 NR，
+需要其专用 `nvngx.dll_dlssnr.dll`，以及放在它相邻目录的模型文件。
+SSMT 的原神 FSR2 Bridge 路线通过 ReShade 的 `nr-before-sr` Add-on 执行 NR，
+实际使用所选 Profile 目录里的 `nrchain_nvngx.dll` 与 `nvngx_dlssnr.dll`。
+前者的缺文件提示不能用来判断当前 Add-on 是否生效。
+
+SSMT 在启动前将 `[DlssNr] Enabled=false` 固定到本次 OptiScaler 配置，
+避免同一画面重复运行两套 NR；在游戏中主动勾选内置开关仍会触发另一套组件查找。
+不要为消除此提示复制或改名 NR 桥，也不要向游戏目录补代理 DLL。
+本路线按 `Home` 打开 ReShade 的附加组件面板调整 NR，按 `F6` 开关；
+`Insert` 用于 OptiScaler 的超分与界面设置。
+
+本机 2026-10-18 19:40 启动对应的 `nr-before-sr.log` 记录了
+`signed feature 18 create 1280x800 -> 1280x800 ... Success`，
+并连续出现 `NR-before-SR evaluate succeeded`，计数达到 3000。
+这说明该次 NR 已实际执行；画质、其他显卡与长期稳定性仍需各自验收。
+
+原神插件设置现列出上述游戏内控制入口；启动计划同时提供 ReShade、
+FSR2 Bridge 和当前 Profile 的 NR 日志来源，通过已有只读日志跟随器显示并镜像到缓存日志。
+此改动无需重编 OptiScaler、重新下载 NR，或修改原始下载组件。
+
+验证：153 项插件回归、3 项日志跟随回归、28 项设置页测试及前端构建通过。
+RTX 50、RTX 30/40 两套真实组件分别完成离线准备，覆盖汉化 DLL、
+单独启用与 HoYoShade 共用时的日志来源；未启动游戏或执行 GPU 测试。

@@ -280,6 +280,7 @@ fn prepare_at(
     configure_optiscaler(&mut ini, &opti);
     composed.extra_files.insert(opti.join("OptiScaler.ini"), ini.into_bytes());
     super::hot_reshade::save_config(&reshade, composed, "", &["nr-before-sr.zh-CN.addon64".into()])?;
+    let bridge_log = bridge.with_extension("log");
     let dlls = vec![
         root.join("components/ReShade/ReShade64.dll"),
         bridge,
@@ -311,7 +312,21 @@ fn prepare_at(
     Ok(HotRuntimePlan {
         dlls,
         environment,
-        log_sources: vec![crate::commands::launch_logs::LaunchLogSource { name: "ReShade".into(), path: reshade.join("ReShade.log") }],
+        // NR 的执行状态属于所选 Profile 的 Add-on，OptiScaler 面板的内置 NR 是另一条链。
+        log_sources: vec![
+            crate::commands::launch_logs::LaunchLogSource {
+                name: "ReShade".into(),
+                path: reshade.join("ReShade.log"),
+            },
+            crate::commands::launch_logs::LaunchLogSource {
+                name: "FSR2 Bridge".into(),
+                path: bridge_log,
+            },
+            crate::commands::launch_logs::LaunchLogSource {
+                name: "DLSS5 NR".into(),
+                path: root.join(&addon).join("nr-before-sr.log"),
+            },
+        ],
         runtime_directory: root,
         required_launch_args: Vec::new(),
         excluded_launch_args: Vec::new(),
@@ -729,6 +744,24 @@ mod tests {
         assert!(plan.dlls[0].ends_with("ReShade64.dll"));
         assert!(plan.dlls[1].ends_with("Dx11FsrBridge.dll"));
         assert!(plan.dlls[2].ends_with("OptiScaler.dll"));
+        let (addon, _) = profile_files(&installation.profile).unwrap();
+        assert_eq!(
+            plan.log_sources
+                .iter()
+                .map(|source| (source.name.as_str(), source.path.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "ReShade",
+                    installation.root.join("state/reshade-runtime/ReShade.log"),
+                ),
+                ("FSR2 Bridge", plan.dlls[1].with_extension("log")),
+                (
+                    "DLSS5 NR",
+                    installation.root.join(&addon).join("nr-before-sr.log"),
+                ),
+            ]
+        );
         let config = installation.root.join("state/reshade-runtime/ReShade.ini");
         assert_eq!(
             canonical_path(Path::new(
@@ -830,6 +863,17 @@ mod tests {
                 .unwrap();
             let combined = prepare_at(&registry.for_game("GIMI"), &installation).unwrap();
             assert_eq!(combined.dlls, plan.dlls);
+            assert_eq!(
+                combined
+                    .log_sources
+                    .iter()
+                    .map(|source| &source.path)
+                    .collect::<Vec<_>>(),
+                plan.log_sources
+                    .iter()
+                    .map(|source| &source.path)
+                    .collect::<Vec<_>>()
+            );
             let text = read_text(&config).unwrap();
             let shade_ini = read_text(&shade_ini_path).unwrap();
             if let Some(disabled) = shade_ini
