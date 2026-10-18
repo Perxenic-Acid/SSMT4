@@ -61,3 +61,31 @@ Rust 测试覆盖两份记录、单侧不一致、缺失条目、未知格式、
 当前结论仅为新版资源路径的可复现缺陷已修复，不能据此认定纯 3DMigoto 的全部异常已消除。下一次实机应先确认普通启动时贴图恢复，再观察两条 DLSS5 路线；不以 F10 作为修复步骤。如果仍有异常，需本次运行产生的新日志或 Frame Analysis 来确认实际纹理创建和替换路径，不能继续引用旧日志。
 
 Runtime 修复提交为 `895bcc01`；本地构建版本为 `1.2.2.17`，已同步应用资源及开发运行目录，由正常启动流程更新游戏 Runtime。未直接覆盖游戏 DLL、改动 Mod 或重编 OptiScaler。
+
+### 1.2.2.17 复测未恢复：头像等 2D 贴图
+
+用户通过 `runtime/debug.ps1` 重新构建并排除 DLL 被覆盖后，确认仍然异常，进一步说明
+主要是头像等 2D 贴图。此反馈确认新版纹理入口修复尚不足以解释全部实机异常；
+保留已经独立复现的入口修复，不把模型 Blend 或 Player Tweaks 作为当前根因。
+
+只读检查实际头像 Mod：TextureOverride 先设置 AvatarFix 标志并执行
+`handling = skip`，随后 ShaderOverride 的 post 命令调用 CustomShader，读取
+`vs-t0 = vb0` 与 `x0 = first_vertex` 后 `draw = from_caller`。
+因此丢图既可能是匹配问题，也可能是跳过原绘制后没有正确重绘；拉伸还需检查实际
+VB 布局、偏移及 UI 着色器输入，不能只验证 DDS 加载。
+
+在忽略目录构造软件夹具，验证同一跳过 / 重绘流程、24 字节 POSITION / COLOR /
+TEXCOORD 顶点、非整 stride 大小的缓冲区、交替的 IA 偏移与 BaseVertex，以及
+Device3 延迟 Context 提交；像素回读均通过。这只排除了所构造的简化场景，
+没有复现真实头像着色器与游戏当前的绘制链，不能据此宣称游戏侧已恢复。
+未启动游戏或硬件 GPU 测试，也未修改玩家 Mod。
+
+本次 `d3d11_log.txt` 仍停在 10 月 15 日，原因是原 `debug.ps1` 保留了关闭日志的
+INI 设置。现将该开发入口默认设为 Info，并提供 `-FrameAnalysisLogOnly`：在异常页面
+按一次 F8，仅采集本帧 API / Mod 命令，避免整帧资源转储。每次独立备份 INI，提供
+`-LogLevel preserve` 保留开关及 `-PrepareOnly` 离线准备。Windows PowerShell 5
+配置回归通过，WARP 实际采集只生成包含 Draw 的 `log.txt`。
+
+当前尚未定位本次实机根因。下一步必须检查同次异常页面的 TextureOverride 命中、
+AvatarFix post 重绘和绑定记录；不能将旧日志中的同名资源或重复 Mod 内容视为本次证据。
+命令与恢复步骤见 [Runtime 调试入口](../runtime/docs/reshade-compatibility.md)。
