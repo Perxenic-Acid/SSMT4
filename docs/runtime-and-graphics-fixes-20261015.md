@@ -89,3 +89,36 @@ INI 设置。现将该开发入口默认设为 Info，并提供 `-FrameAnalysisL
 当前尚未定位本次实机根因。下一步必须检查同次异常页面的 TextureOverride 命中、
 AvatarFix post 重绘和绑定记录；不能将旧日志中的同名资源或重复 Mod 内容视为本次证据。
 命令与恢复步骤见 [Runtime 调试入口](../runtime/docs/reshade-compatibility.md)。
+
+### 两次异常采集：多设备延迟加载遗漏参数纹理
+
+用户确认 23:12:20 的采集表现为拉伸，23:12:38 的采集表现为消失。两份日志均来自
+Runtime 1.2.2.17，纹理命中后成功设置 AvatarFix 标志、替换 DDS 并执行 post 重绘。
+拉伸样本使用 `4f8eee47124e933d` / CustomShaderFix2，VB stride 24、BaseVertex 3188；
+消失样本使用 `f61f9bc2a15bedef` / CustomShaderFix3，VB stride 24、BaseVertex 1140。
+因此不能再归因为完全未匹配、未执行重绘或缺少 GameType。
+
+同次初始化日志显示，两个设备在加载完整 Mod 配置前创建，均跳过了空参数纹理；
+完整配置随后只补建了一份 397 参数的纹理。原 `ReloadConfig` 仅更新触发重载的
+设备，却用全局 CPU 数组长度判断其他设备是否已经拥有资源。辅助交换链先 Present
+时，游戏设备可能始终没有 `t120`，使 AvatarFix 虽设置了 `x0=first_vertex`，
+GPU 实际仍按零取数。不同 UI 中错误顶点的 UV / 尺寸计算可表现为拉伸或不绘制。
+日志中的跨设备 TexFx 搬运另作线索，不将每一条搬运告警都认定为此缺陷所致。
+
+在两个 WARP 设备与延迟 include 的同一时序下复现：旧 DLL 的游戏 Context 在
+`t120` 返回空，非零 BaseVertex 重绘回读为黑色；仅保留单设备的旧测试会通过。
+现增加配置代次：每台设备在下一次绘制、Dispatch 或 Mod 命令前补齐自身参数纹理，
+每个已有 Context 重新绑定相应代次；不重跑 `[Constants]`，避免重置玩家状态。
+参数数量不变的重载、扩容、缩容及清空也同步，普通热路径不新增分配或锁。
+
+新增 `params-early` / `params-delayed` 回归各覆盖 30 次真实纹理替换、post 重绘与
+像素回读。旧 DLL 分别在参数扩容与初始缺失处失败，新 DLL 连同原有检查共十三项
+通过；x64 Release 编译通过。测试只使用 WARP，未启动游戏或硬件 GPU 测试，
+未改动玩家 Mod。当前结论为与实机日志时序一致的资源同步缺陷已复现并修复；
+最终画面仍待纯 3DMigoto 启动复测，再核对两条 DLSS5 路线。
+
+Runtime 提交 `0d1f1fb9`，本地构建版本 `1.2.2.19`。已核对三处 DLL 的哈希一致并同步
+应用资源、开发运行资源和 GIMI 测试目录，保留旧游戏 Runtime 备份及匹配的新 PDB。
+临时采集 INI 与独立备份之间仅有 Hunting / analyse_options / log_level 的变化，
+已恢复采集前原件；两份异常帧日志和原备份保留。可直接重启游戏复测原来两处界面，
+无须 F10 重载。
