@@ -107,6 +107,17 @@ pub struct WorkspaceAccessIssue {
 }
 
 impl WorkspaceAccessIssue {
+    pub fn describe(&self) -> String {
+        format!(
+            "{}: {} {}",
+            self.code,
+            self.path.as_deref().unwrap_or(""),
+            self.detail.as_deref().unwrap_or("")
+        )
+        .trim_end()
+        .to_string()
+    }
+
     pub fn new(code: impl Into<String>, path: Option<String>, detail: impl Into<String>) -> Self {
         Self {
             code: code.into(),

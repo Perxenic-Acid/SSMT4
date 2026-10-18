@@ -1056,6 +1056,31 @@
     }
   },
   "workPage": {
+    "publishErrors": {
+      "stage": "失败阶段：{stage}",
+      "logPath": "诊断日志：{path}",
+      "stages": {
+        "archive": "本地检查与打包",
+        "initialize": "检查并创建上传",
+        "upload": "上传分片",
+        "finalize": "服务端校验与发布"
+      },
+      "serviceUnavailable": "无法连接工作空间服务，请检查网络与工作空间代理设置。",
+      "serviceRequestFailed": "工作空间服务拒绝了请求，HTTP 状态见下方详情。",
+      "serviceInvalidResponse": "工作空间服务返回了无法识别的响应，可能被代理或网关拦截。",
+      "partFailed": "工作空间分片上传失败，已自动重试。请检查网络、代理和下方 HTTP 状态。",
+      "etagMissing": "存储服务未返回分片校验标识，无法安全完成上传。",
+      "rateLimit": "今天的提交次数已达到上限，请稍后再试。",
+      "byteQuota": "今天的上传容量已达到上限，请稍后再试。",
+      "archiveTooLarge": "工作空间包超过服务允许的大小上限。",
+      "archiveInvalid": "服务端拒绝了工作空间包，归档结构或内容校验未通过。",
+      "githubPublishFailed": "文件处理完成，但公共工作空间目录发布失败。",
+      "initializationFailed": "服务端返回了非预期的上传状态。",
+      "missingReference": "工作空间引用了不存在的文件，具体路径见下方详情。",
+      "unsupportedExtension": "工作空间含有不支持共享的文件类型，具体路径见下方详情。",
+      "missingDrawIB": "工作空间存在未配置 DrawIB 的 LOD，具体名称见下方详情。",
+      "workspaceChanged": "打包期间工作空间发生了变化，请等待提取或保存结束后重试。"
+    },
     "common": {
       "create": "创建",
       "confirm": "确认",

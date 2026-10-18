@@ -10,17 +10,17 @@ export default {
   async fetch(request, env, ctx) {
     try {
       const url = new URL(request.url);
-      if (request.method === 'POST' && url.pathname === '/v1/submissions') return initializeSubmission(request, env);
+      if (request.method === 'POST' && url.pathname === '/v1/submissions') return await initializeSubmission(request, env);
       const partsMatch = url.pathname.match(/^\/v1\/submissions\/([^/]+)\/parts$/u);
-      if (request.method === 'POST' && partsMatch) return issueUploadParts(request, env, partsMatch[1]);
+      if (request.method === 'POST' && partsMatch) return await issueUploadParts(request, env, partsMatch[1]);
       const completeMatch = url.pathname.match(/^\/v1\/submissions\/([^/]+)\/complete$/u);
-      if (request.method === 'POST' && completeMatch) return completeSubmission(request, env, completeMatch[1]);
+      if (request.method === 'POST' && completeMatch) return await completeSubmission(request, env, completeMatch[1]);
       const cancelMatch = url.pathname.match(/^\/v1\/submissions\/([^/]+)$/u);
-      if (request.method === 'DELETE' && cancelMatch) return cancelSubmission(env, cancelMatch[1]);
+      if (request.method === 'DELETE' && cancelMatch) return await cancelSubmission(env, cancelMatch[1]);
       const downloadMatch = url.pathname.match(/^\/v1\/entries\/([^/]+)\/download$/u);
-      if (request.method === 'GET' && downloadMatch) return downloadEntry(env, downloadMatch[1]);
+      if (request.method === 'GET' && downloadMatch) return await downloadEntry(env, downloadMatch[1]);
       const downloadRecordMatch = url.pathname.match(/^\/v1\/entries\/([^/]+)\/downloads$/u);
-      if (request.method === 'POST' && downloadRecordMatch) return recordEntryDownload(request, env, ctx, downloadRecordMatch[1]);
+      if (request.method === 'POST' && downloadRecordMatch) return await recordEntryDownload(request, env, ctx, downloadRecordMatch[1]);
       return apiError('NOT_FOUND', 404);
     } catch (error) {
       console.error('workspace-api request failed', error instanceof Error ? error.name : 'unknown');
@@ -124,7 +124,7 @@ async function initializeSubmission(request, env) {
         await releaseQuota(env, ipKey, now.slice(0, 10), declaredSize);
         await env.DB.prepare('UPDATE submissions SET status = ?2, updated_at = ?3 WHERE submission_id = ?1').bind(submissionId, 'failed', now).run();
         console.error('workspace-api existing archive validation failed', error instanceof Error ? error.name : 'unknown');
-        return apiError(error instanceof Error && error.message === 'R2_VALIDATION_UNAVAILABLE' ? 'R2_VALIDATION_UNAVAILABLE' : 'ARCHIVE_INVALID', 422);
+        return apiError(error instanceof Error && error.message === 'R2_VALIDATION_UNAVAILABLE' ? 'R2_VALIDATION_UNAVAILABLE' : 'ARCHIVE_INVALID', 422, archiveErrorDetail(error));
       }
       reusedExistingObject = true;
     } else {
@@ -202,7 +202,7 @@ async function completeSubmission(request, env, submissionId) {
     console.error('workspace-api archive validation failed', error instanceof Error ? error.message : 'unknown');
     if (error instanceof Error && error.message === 'R2_VALIDATION_UNAVAILABLE') return apiError('R2_VALIDATION_UNAVAILABLE', 422);
     const discarded = await discardCompletedSubmission(env, row);
-    return discarded ? apiError('ARCHIVE_INVALID', 422) : apiError('R2_CLEANUP_FAILED', 502);
+    return discarded ? apiError('ARCHIVE_INVALID', 422, archiveErrorDetail(error)) : apiError('R2_CLEANUP_FAILED', 502);
   }
   const status = createStatus(row.entry_id, metadata, numberEnv(env.LARGE_REVIEW_THRESHOLD, 209715200));
   await env.DB.prepare('UPDATE submissions SET metadata_json = ?2, updated_at = ?3 WHERE submission_id = ?1').bind(submissionId, JSON.stringify(metadata), new Date().toISOString()).run();
@@ -214,6 +214,11 @@ async function completeSubmission(request, env, submissionId) {
   }
   await finalizePublishedSubmission(env, submissionId, row.ip_key, row.created_at.slice(0, 10), row.declared_size, null, new Date().toISOString());
   return json({ submissionId, entryId: row.entry_id, status: 'published', metadataPath: `games/${metadata.gamePreset}/entries/${row.entry_id}/metadata.json` });
+}
+
+function archiveErrorDetail(error) {
+  // 只向客户端公开稳定的校验错误码，不透传 R2 地址或底层异常正文。
+  return error instanceof Error && /^ARCHIVE_[A-Z0-9_]+$/u.test(error.message) ? error.message : undefined;
 }
 
 async function finalizePublishedSubmission(env, submissionId, ipKey, utcDate, bytes, metadataJson, now) {

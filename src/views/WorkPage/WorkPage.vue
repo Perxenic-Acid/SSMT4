@@ -40,6 +40,7 @@ import SidePanel from './SidePanel.vue';
 import ExtractConfigSection from './ExtractConfigSection.vue';
 import ConfigTables from './ConfigTables.vue';
 import type { ModelRow, SkipRow, VSCheckRow } from './WorkPage.types';
+import { workspacePublishErrorDetails } from './WorkspacePublishError';
 
 const appSettings = AppStateManager.appSettings;
 const { t } = useI18n();
@@ -1962,6 +1963,14 @@ const normalizedWorkspaceAliases = (): string[] => Array.from(new Set(
   workspaceAccessAliases.value.split(/[\n,]/u).map((value) => value.trim()).filter(Boolean),
 ));
 
+const showWorkspacePublishError = (error: unknown): void => {
+  void ElMessageBox.alert(workspacePublishErrorDetails(error, t), t('workPage.messages.workspacePublishFailed'), {
+    type: 'error',
+    customClass: 'workspace-publish-error',
+    confirmButtonText: t('workPage.common.confirm'),
+  }).catch(() => {});
+};
+
 const handlePublishWorkspaceFromDialog = async (): Promise<void> => {
   if (!workspaceName.value || workspaceAccessBusy.value) return;
   try {
@@ -1996,7 +2005,7 @@ const handlePublishWorkspaceFromDialog = async (): Promise<void> => {
     void refreshWorkspaceLibraryAfterPublish(result.entryId);
   } catch (error) {
     console.error('Workspace publish failed', error);
-    ElMessage.error(t('workPage.messages.workspacePublishFailed'));
+    showWorkspacePublishError(error);
   } finally {
     workspacePublishing.value = false;
     window.setTimeout(() => {
@@ -2321,7 +2330,7 @@ const _legacyPublishWorkspace = async (withArchive: boolean): Promise<void> => {
       return;
     }
     console.error('Workspace publish failed', error);
-    ElMessage.error(t('workPage.messages.workspacePublishFailed'));
+    showWorkspacePublishError(error);
   }
 };
 
@@ -3794,6 +3803,11 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 </template>
 
 <style scoped>
+:global(.workspace-publish-error .el-message-box__message p) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .work-page-container {
   --work-crystal: var(--theme-accent);
   --work-crystal-rgb: var(--theme-accent-rgb);

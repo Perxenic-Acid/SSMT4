@@ -1057,6 +1057,31 @@
     }
   },
   "workPage": {
+    "publishErrors": {
+      "stage": "Failed stage: {stage}",
+      "logPath": "Diagnostic log: {path}",
+      "stages": {
+        "archive": "Local validation and packaging",
+        "initialize": "Validation and upload initialization",
+        "upload": "Part upload",
+        "finalize": "Server validation and publication"
+      },
+      "serviceUnavailable": "Cannot connect to the workspace service. Check the network and workspace proxy settings.",
+      "serviceRequestFailed": "The workspace service rejected the request. See the HTTP status below.",
+      "serviceInvalidResponse": "The workspace service returned an unrecognized response. A proxy or gateway may have intercepted it.",
+      "partFailed": "A workspace part failed to upload after automatic retries. Check the network, proxy, and HTTP status below.",
+      "etagMissing": "The storage service did not return a part ETag, so the upload cannot safely complete.",
+      "rateLimit": "The daily submission limit has been reached. Try again later.",
+      "byteQuota": "The daily upload capacity has been reached. Try again later.",
+      "archiveTooLarge": "The workspace archive exceeds the service size limit.",
+      "archiveInvalid": "The server rejected the workspace archive because its structure or content validation failed.",
+      "githubPublishFailed": "File processing completed, but publication to the public workspace directory failed.",
+      "initializationFailed": "The service returned an unexpected upload state.",
+      "missingReference": "The workspace references a missing file. See the path below.",
+      "unsupportedExtension": "The workspace contains a file type that cannot be shared. See the path below.",
+      "missingDrawIB": "A workspace LOD has no DrawIB configured. See its name below.",
+      "workspaceChanged": "The workspace changed during packaging. Wait for extraction or saving to finish, then retry."
+    },
     "common": {
       "create": "Create",
       "confirm": "Confirm",

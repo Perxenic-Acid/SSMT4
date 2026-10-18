@@ -7,7 +7,7 @@ function storedManifestBytes(manifest) {
   const entries = [
     ['manifest.json', new TextEncoder().encode(JSON.stringify(manifest))],
     ['portable-workspace.json', new TextEncoder().encode('{}')],
-    ['payload/LOD0/mesh.buf', new Uint8Array([1, 2, 3, 4])],
+    ...manifest.files.map((file) => [file.path, Uint8Array.from({ length: file.size }, (_, index) => index + 1)]),
   ];
   const locals = [];
   const centrals = [];
@@ -103,6 +103,37 @@ test('R2 validation reads a Zip64 local manifest header', async () => {
   const zipped = zip64ManifestHeader(bytes);
   const env = { WORKSPACE_BUCKET: { async head() { return { size: zipped.length }; }, async get() { return { async arrayBuffer() { return zipped.buffer; }, body: new ReadableStream({ start(controller) { controller.enqueue(zipped); controller.close(); } }) }; } } };
   await assert.doesNotReject(() => validateR2Archive(env, 'packages/test.ssmtws', { fullData: { uncompressedSize: 4, fileCount: 1 } }));
+});
+
+test('expands the manifest range using Zip64 sizes when the first 64 KiB is insufficient', async () => {
+  const files = Array.from({ length: 500 }, (_, index) => ({ path: `payload/LOD0/model_${index}/mesh.buf`, role: 'payload', size: 4, sha256: 'a'.repeat(64) }));
+  const manifest = { archiveVersion: 1, portableMetadataPath: 'portable-workspace.json', fileCount: files.length, totalUncompressedSize: files.length * 4, files };
+  for (const zip64 of [false, true]) {
+    const bytes = zip64 ? zip64ManifestHeader(storedManifestBytes(manifest)) : storedManifestBytes(manifest);
+    const ranges = [];
+    const env = { WORKSPACE_BUCKET: {
+      async head() { return { size: bytes.length }; },
+      async get(key, { range } = {}) {
+        const chunk = range ? bytes.slice(range.offset, range.offset + range.length) : bytes;
+        if (range) ranges.push(range);
+        return { async arrayBuffer() { return chunk.buffer; }, body: new ReadableStream({ start(controller) { controller.enqueue(chunk); controller.close(); } }) };
+      },
+    } };
+    const metadata = { fullData: { size: bytes.length, uncompressedSize: manifest.totalUncompressedSize, fileCount: manifest.fileCount, sha256: createHash('sha256').update(bytes).digest('hex') } };
+    assert.deepEqual(await validateR2Archive(env, 'packages/test.ssmtws', metadata), manifest);
+    assert.equal(ranges[0].length, 64 * 1024);
+    assert.ok(ranges[1].length > 64 * 1024 && ranges[1].length < 128 * 1024);
+  }
+});
+
+test('rejects oversized Zip64 manifest lengths before an expanded R2 read', async () => {
+  const manifest = { archiveVersion: 1, portableMetadataPath: 'portable-workspace.json', fileCount: 1, totalUncompressedSize: 4, files: [{ path: 'payload/LOD0/mesh.buf', role: 'payload', size: 4, sha256: 'a'.repeat(64) }] };
+  const bytes = zip64ManifestHeader(storedManifestBytes(manifest));
+  new DataView(bytes.buffer).setBigUint64(30 + 13 + 12, BigInt(32 * 1024 * 1024), true);
+  let reads = 0;
+  const env = { WORKSPACE_BUCKET: { async get() { reads += 1; return { async arrayBuffer() { return bytes.buffer; } }; } } };
+  await assert.rejects(() => validateR2Archive(env, 'packages/test.ssmtws', { fullData: {} }), /ARCHIVE_MANIFEST_INVALID/u);
+  assert.equal(reads, 1);
 });
 
 test('R2 validation rejects a central-directory payload size that disagrees with the manifest', async () => {

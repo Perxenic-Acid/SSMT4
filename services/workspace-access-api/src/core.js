@@ -16,8 +16,8 @@ export const ERROR_CODES = Object.freeze({
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 });
 
-export function apiError(code, status = 400) {
-  return new Response(JSON.stringify({ error: { code } }), {
+export function apiError(code, status = 400, detail = undefined) {
+  return new Response(JSON.stringify({ error: { code, ...(detail ? { detail } : {}) } }), {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });

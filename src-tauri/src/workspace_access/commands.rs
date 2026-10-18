@@ -1,3 +1,4 @@
+use crate::workspace_access::diagnostics::{PublishLog, WorkspacePublishError};
 use std::path::PathBuf;
 
 use crate::workspace_access::archive::{
@@ -18,6 +19,13 @@ use crate::workspace_access::transfer::{
 };
 use crate::workspace_access::upload::{cancel_upload, publish_workspace, remove_upload_state};
 use crate::workspace_access::validate::preflight_workspace;
+
+fn publish_log(app: &tauri::AppHandle, request: &WorkspaceAccessPublishRequest) -> PublishLog {
+    PublishLog::new(
+        &crate::config::path_manager::PathManager::ssmt_cache_root(app).join("Logs"),
+        request,
+    )
+}
 
 #[tauri::command]
 pub fn workspace_access_preflight(
@@ -95,44 +103,61 @@ pub fn workspace_access_import_metadata_skeleton(
 pub async fn workspace_access_publish(
     app: tauri::AppHandle,
     request: WorkspaceAccessPublishRequest,
-) -> Result<WorkspacePublishResult, String> {
+) -> Result<WorkspacePublishResult, WorkspacePublishError> {
     use tauri::Emitter;
-    publish_workspace(&request, |progress| {
+    let mut log = publish_log(&app, &request);
+    let result = publish_workspace(&request, |progress| {
+        log.progress(&progress);
         let _ = app.emit("workspace-access-upload-progress", progress);
     })
-    .await
+    .await;
+    log.finish(result)
 }
 
 #[tauri::command]
 pub async fn workspace_access_create_and_publish(
     app: tauri::AppHandle,
     mut request: WorkspaceAccessPublishRequest,
-) -> Result<WorkspacePublishResult, String> {
-    let archive_path = temporary_archive_path(&request.workspace_name)?;
-    let created = create_workspace_archive(
+) -> Result<WorkspacePublishResult, WorkspacePublishError> {
+    let mut log = publish_log(&app, &request);
+    log.stage("archive");
+    let archive_path = match temporary_archive_path(&request.workspace_name) {
+        Ok(path) => path,
+        Err(error) => return log.finish(Err(error)),
+    };
+    let created = match create_workspace_archive(
         &WorkspaceAccessPreflightRequest {
             workspace_path: request.workspace_path.clone(),
             game_preset: request.game_preset.clone(),
             workspace_name: request.workspace_name.clone(),
         },
         &archive_path,
-    );
-    if let Err(error) = created {
-        let _ = std::fs::remove_file(&archive_path);
-        return Err(error);
-    }
+    ) {
+        Ok(created) => created,
+        Err(error) => {
+            let _ = std::fs::remove_file(&archive_path);
+            return log.finish(Err(error));
+        }
+    };
+    log.write(&format!("打包完成：{} 字节", created.size));
     request.archive_path = Some(archive_path.to_string_lossy().to_string());
     use tauri::Emitter;
+    log.stage("initialize");
     let result = publish_workspace(&request, |progress| {
+        log.progress(&progress);
         let _ = app.emit("workspace-access-upload-progress", progress);
     })
     .await;
     if result.is_err() {
-        let _ = cancel_upload(&request.worker_url, &archive_path, request.proxy_port).await;
+        if let Err(error) =
+            cancel_upload(&request.worker_url, &archive_path, request.proxy_port).await
+        {
+            log.write(&format!("清理未发布上传失败：{error}"));
+        }
     }
     remove_upload_state(&archive_path);
     let _ = std::fs::remove_file(&archive_path);
-    result
+    log.finish(result)
 }
 
 #[tauri::command]

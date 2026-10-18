@@ -215,7 +215,13 @@ function readZip64LocalSize(extra, compressedSize, uncompressedSize) {
 
 function manifestRequiredLength(bytes) {
   if (bytes.length < 30 || readU32(bytes, 0) !== 0x04034b50) throw new Error('ARCHIVE_MANIFEST_INVALID');
-  return 30 + readU16(bytes, 26) + readU16(bytes, 28) + readU32(bytes, 18);
+  const nameLength = readU16(bytes, 26);
+  const dataStart = 30 + nameLength + readU16(bytes, 28);
+  if (dataStart > bytes.length) throw new Error('ARCHIVE_MANIFEST_INVALID');
+  // SSMT 的 ZIP64 头会将 32 位长度写成 0xffffffff；扩展 Range 时也必须解析 extra。
+  const size = readZip64LocalSize(bytes.slice(30 + nameLength, dataStart), readU32(bytes, 18), readU32(bytes, 22));
+  if (size === null || !Number.isSafeInteger(dataStart + size)) throw new Error('ARCHIVE_MANIFEST_INVALID');
+  return dataStart + size;
 }
 
 function readU16(bytes, offset) { return bytes[offset] | (bytes[offset + 1] << 8); }

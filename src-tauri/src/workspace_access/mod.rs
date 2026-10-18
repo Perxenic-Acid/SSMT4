@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod commands;
+mod diagnostics;
 pub mod library;
 pub mod models;
 pub mod transfer;

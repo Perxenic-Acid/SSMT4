@@ -10,6 +10,13 @@ import worker from '../src/index.js';
 const run = promisify(execFile);
 const entryId = '0191f000-0000-7000-8000-000000000000';
 
+test('async route failures return a structured service error without exception contents', async () => {
+  const env = { DB: { prepare() { return { bind() { return { async first() { throw new Error('private request URL'); } }; } }; } } };
+  const response = await worker.fetch(new Request('https://example.test/v1/submissions/broken/complete', { method: 'POST' }), env, {});
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: { code: 'INTERNAL_ERROR' } });
+});
+
 function submissionEnv(row) {
   const writes = [];
   return {

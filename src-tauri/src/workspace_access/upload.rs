@@ -119,6 +119,7 @@ struct ErrorResponse {
 #[derive(Debug, Deserialize)]
 struct ErrorCode {
     code: String,
+    detail: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -156,7 +157,7 @@ where
         preflight
             .errors
             .first()
-            .map(|issue| issue.code.clone())
+            .map(|issue| issue.describe())
             .unwrap_or_else(|| "WORKSPACE_PREFLIGHT_FAILED".to_string())
     })?;
     let archive = request.archive_path.as_ref().map(PathBuf::from);
@@ -373,8 +374,28 @@ where
                 &new_idempotency_key(),
             )
             .await?;
+            // 服务端可能复用已校验的 R2 对象并直接发布，无需再请求分片。
+            if response.status == "published" {
+                on_progress(WorkspaceUploadProgress {
+                    submission_id: response.submission_id.clone(),
+                    completed_bytes: info.size,
+                    total_bytes: info.size,
+                    completed_parts: 0,
+                    total_parts: 0,
+                });
+                let _ = fs::remove_file(&state_path);
+                return Ok(WorkspacePublishResult {
+                    submission_id: response.submission_id,
+                    entry_id: response.entry_id,
+                    status: response.status,
+                    metadata_path: response.metadata_path,
+                });
+            }
             if response.status != "awaiting_upload" {
-                return Err("UPLOAD_INITIALIZATION_FAILED".to_string());
+                return Err(format!(
+                    "UPLOAD_INITIALIZATION_FAILED: status={}",
+                    response.status
+                ));
             }
             UploadState {
                 version: 2,
@@ -445,7 +466,9 @@ where
                     tokio::task::spawn_blocking(move || read_part(&path, part_number, info.size))
                         .await
                         .map_err(|_| "ARCHIVE_READ_FAILED".to_string())??;
-                let etag = upload_part_with_retry(&client, &part.url, bytes, &cancellation).await?;
+                let etag = upload_part_with_retry(&client, &part.url, bytes, &cancellation)
+                    .await
+                    .map_err(|error| format!("{error}; part={part_number}"))?;
                 Ok::<(u32, String), String>((part_number, etag))
             }
         }))
@@ -505,6 +528,7 @@ async fn upload_part_with_retry(
     bytes: Vec<u8>,
     cancellation: &AtomicBool,
 ) -> Result<String, String> {
+    let mut last_failure = String::new();
     for attempt in 0..UPLOAD_RETRIES {
         if cancellation.load(Ordering::Relaxed) {
             return Err("UPLOAD_CANCELLED".to_string());
@@ -513,8 +537,8 @@ async fn upload_part_with_retry(
         if cancellation.load(Ordering::Relaxed) {
             return Err("UPLOAD_CANCELLED".to_string());
         }
-        if let Ok(response) = response {
-            if response.status().is_success() {
+        match response {
+            Ok(response) if response.status().is_success() => {
                 return response
                     .headers()
                     .get(reqwest::header::ETAG)
@@ -522,6 +546,8 @@ async fn upload_part_with_retry(
                     .map(str::to_string)
                     .ok_or_else(|| "UPLOAD_ETAG_MISSING".to_string());
             }
+            Ok(response) => last_failure = format!("HTTP {}", response.status().as_u16()),
+            Err(error) => last_failure = transport_failure(&error).to_string(),
         }
         if attempt + 1 < UPLOAD_RETRIES {
             let jitter = SystemTime::now()
@@ -532,7 +558,22 @@ async fn upload_part_with_retry(
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
     }
-    Err("UPLOAD_PART_FAILED".to_string())
+    Err(format!(
+        "UPLOAD_PART_FAILED: {last_failure}; attempts={UPLOAD_RETRIES}"
+    ))
+}
+
+fn transport_failure(error: &reqwest::Error) -> &'static str {
+    // 不回显 reqwest 的 URL：分片地址携带短期签名，不能写入日志或弹窗。
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_body() {
+        "body transfer failed"
+    } else {
+        "request failed"
+    }
 }
 
 fn cancellation_registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
@@ -612,22 +653,50 @@ async fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(
     if let Some(key) = idempotency_key {
         request = request.header("Idempotency-Key", key);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|_| "WORKSPACE_SERVICE_UNAVAILABLE")?;
+    let response = request.send().await.map_err(|error| {
+        format!(
+            "WORKSPACE_SERVICE_UNAVAILABLE: {}",
+            transport_failure(&error)
+        )
+    })?;
     let status = response.status();
     let payload = response
         .text()
         .await
         .map_err(|_| "WORKSPACE_SERVICE_INVALID_RESPONSE")?;
     if !status.is_success() {
-        let code = serde_json::from_str::<ErrorResponse>(&payload)
-            .map(|error| error.error.code)
-            .unwrap_or_else(|_| "WORKSPACE_SERVICE_REQUEST_FAILED".to_string());
-        return Err(code);
+        let error = serde_json::from_str::<ErrorResponse>(&payload).ok();
+        let code = error
+            .as_ref()
+            .map(|error| error.error.code.as_str())
+            .filter(|code| is_service_error_code(code))
+            .unwrap_or("WORKSPACE_SERVICE_REQUEST_FAILED");
+        let detail = error
+            .as_ref()
+            .and_then(|error| error.error.detail.as_deref())
+            .filter(|detail| is_service_error_code(detail))
+            .unwrap_or("");
+        return Err(format!("{code}: HTTP {}; {detail}", status.as_u16())
+            .trim_end_matches([';', ' '])
+            .to_string());
     }
-    serde_json::from_str(&payload).map_err(|_| "WORKSPACE_SERVICE_INVALID_RESPONSE".to_string())
+    serde_json::from_str(&payload).map_err(|error| {
+        format!(
+            "WORKSPACE_SERVICE_INVALID_RESPONSE: HTTP {}; {:?} at {}:{}",
+            status.as_u16(),
+            error.classify(),
+            error.line(),
+            error.column()
+        )
+    })
+}
+
+fn is_service_error_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == b'_')
 }
 
 fn read_part(path: &Path, part_number: u32, total_size: u64) -> Result<Vec<u8>, String> {
@@ -704,6 +773,10 @@ fn new_idempotency_key() -> String {
     ));
     format!("ssmt-{:x}", digest.finalize())
 }
+
+#[cfg(test)]
+#[path = "upload_tests.rs"]
+mod protocol_tests;
 
 #[cfg(test)]
 mod tests {

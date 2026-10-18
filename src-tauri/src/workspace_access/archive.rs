@@ -294,7 +294,7 @@ fn require_preflight_metadata(
         report
             .errors
             .first()
-            .map(|issue| issue.code.clone())
+            .map(|issue| issue.describe())
             .unwrap_or_else(|| "WORKSPACE_PREFLIGHT_FAILED".to_string())
     })
 }
