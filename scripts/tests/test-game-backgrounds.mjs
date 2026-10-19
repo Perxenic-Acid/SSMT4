@@ -9,7 +9,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import * as vue from 'vue';
 
-function load(relative, mocks) {
+function load(relative, mocks, globals = {}) {
   const source = readFileSync(new URL(relative, import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -17,6 +17,7 @@ function load(relative, mocks) {
   const exports = {};
   vm.runInNewContext(compiled, {
     exports, crypto: webcrypto, AbortSignal, console: { ...console, warn() {}, log() {} },
+    ...globals,
     require(name) {
       assert.ok(name in mocks, `Unexpected import: ${name}`);
       return mocks[name];
@@ -267,6 +268,42 @@ function playback({ frames = false, reject = false } = {}) {
     hide(value) { doc.hidden = value; doc.dispatchEvent(new Event('visibilitychange')); },
   };
 }
+
+test('默认计时器使用浏览器全局接收者，切换卸载时正常清理', () => {
+  let scheduled = 0, cleared = 0;
+  // Node 原生计时器不检查接收者，需保留浏览器的 Web IDL 约束。
+  const browser = {
+    performance: { now: () => 0 },
+    setInterval(callback, delay) {
+      assert.equal(this, browser, 'setInterval 接收者必须是浏览器全局对象');
+      assert.equal(typeof callback, 'function');
+      assert.equal(delay, 1000);
+      return ++scheduled;
+    },
+    clearInterval(timer) {
+      assert.equal(this, browser, 'clearInterval 接收者必须是浏览器全局对象');
+      assert.equal(timer, scheduled);
+      cleared++;
+    },
+  };
+  const { attachBackgroundVideo } = load('../../src/utils/backgroundVideo.ts', {}, {
+    ...browser, globalThis: browser,
+  });
+  for (let index = 0; index < 3; index++) {
+    const video = new EventTarget();
+    let loads = 0;
+    Object.assign(video, {
+      paused: true, currentTime: 0,
+      play: () => Promise.resolve(), pause() {}, removeAttribute() {}, load() { loads++; },
+    });
+    const stop = attachBackgroundVideo(video, new EventTarget(), () => assert.fail('正常切换不能回退'));
+    stop();
+    stop();
+    assert.equal(loads, 1);
+    assert.equal(cleared, index + 1);
+  }
+  assert.equal(scheduled, 3);
+});
 
 test('无首帧和播放后停帧均有界回退，释放 src 与解码器', () => {
   const loading = playback();

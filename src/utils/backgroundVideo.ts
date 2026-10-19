@@ -3,7 +3,12 @@ export function attachBackgroundVideo(
   video: HTMLVideoElement,
   visibility: Pick<Document, 'hidden' | 'addEventListener' | 'removeEventListener'>,
   onFailure: () => void,
-  clock = { now: () => performance.now(), setInterval, clearInterval },
+  // 浏览器计时器必须以 Window 为接收者，不能直接挂到 clock 后作为其方法调用。
+  clock = {
+    now: () => performance.now(),
+    setInterval: (callback: () => void, delay: number) => globalThis.setInterval(callback, delay),
+    clearInterval: (timer: ReturnType<typeof setInterval>) => globalThis.clearInterval(timer),
+  },
 ) {
   let disposed = false;
   let started = false;

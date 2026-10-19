@@ -46,3 +46,17 @@
 
 自动测试覆盖状态与资源生命周期；特定编码、超大视频的实际解码性能仍需在目标 WebView 上验收。
 
+## 切换游戏后悬停正常、点击失效
+
+2026-10-19 在运行中的 WebView 捕获到 `attachBackgroundVideo` 抛出
+`TypeError: Illegal invocation`。旧实现把浏览器原生 `setInterval`、`clearInterval`
+直接保存为 `clock` 的方法，调用时接收者变成 `clock`，违反浏览器 API 的接收者约束。
+动态背景的挂载异常打断了 Vue 更新队列，因此 CSS 悬停和原生窗口操作仍有效，
+而游戏切换、设置和页面导航无法更新。已经中断的开发页面需刷新一次才能恢复队列。
+
+默认计时器现在通过包装函数调用 `globalThis.setInterval` 和
+`globalThis.clearInterval`；保留可注入时钟用于超时测试。Node 的计时器和普通替身
+不会暴露此问题，因此回归另行检查接收者，并在禁用 GPU 的 Chromium 中使用真实
+计时器、真实 `BackgroundVideo`、主页、标题栏与 KeepAlive 切换验证：旧代码可复现
+异常和设置失效，新代码多次切换静态 / 动态背景及设置页面均正常。
+
