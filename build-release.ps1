@@ -32,6 +32,18 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $projectRoot
 
+# 先检查版本，避免 Native / Runtime 编译和资源暂存后才被 Tauri 拒绝。
+$tauriConfigPath = Join-Path $projectRoot "src-tauri/tauri.conf.json"
+$rawConfig = Get-Content -LiteralPath $tauriConfigPath -Raw
+$cfg = $rawConfig | ConvertFrom-Json
+$hasVersionOverride = -not [string]::IsNullOrEmpty($Version)
+if (-not $hasVersionOverride) {
+    $Version = [string]$cfg.version
+}
+if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+    throw "发布版本号 '$Version' 应为 x.y.z，例如 4.2.1；不能使用四段版本号（如 4.2.0.001）或带前导零的数字。请修改 src-tauri/tauri.conf.json，或传入 -Version 4.2.1。"
+}
+
 $keyDir = Join-Path $HOME ".ssmt"
 $privateKeyPath = Join-Path $keyDir "updater-signing.key"
 $passwordFile = Join-Path $keyDir "updater-signing-key.password"
@@ -48,20 +60,11 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $privateKeyPath
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (Get-Content -LiteralPath $passwordFile -Raw).Trim()
 
 # ---------- 2. 版本号处理 ----------
-$tauriConfigPath = Join-Path $projectRoot "src-tauri/tauri.conf.json"
-$rawConfig = Get-Content -LiteralPath $tauriConfigPath -Raw
-
-if ($Version) {
-    if ($Version -notmatch "^\d+\.\d+\.\d+$") {
-        throw "版本号格式应为 x.y.z，例如 4.2.0"
-    }
-    $updated = $rawConfig -replace '("version"\s*:\s*)"\d+\.\d+\.\d+"', ('${1}"' + $Version + '"')
+if ($hasVersionOverride) {
+    # 原值可能正是导致失败的非法版本，不能只匹配合法的三段版本。
+    $updated = $rawConfig -replace '("version"\s*:\s*)"[^"]*"', ('${1}"' + $Version + '"')
     [System.IO.File]::WriteAllText($tauriConfigPath, $updated, [System.Text.UTF8Encoding]::new($false))
     Write-Host "已更新版本号 -> $Version" -ForegroundColor Cyan
-}
-else {
-    $cfg = $rawConfig | ConvertFrom-Json
-    $Version = [string]$cfg.version
 }
 Write-Host "本次打包版本：$Version" -ForegroundColor Cyan
 
