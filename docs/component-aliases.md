@@ -38,6 +38,45 @@ Component、重新生成映射或合并工作空间而错配。值是显示文�
 也已更新。旧服务端会剔除不认识的可选字段，因此只发布新客户端不能让“仅配置”
 下载保留别名。无需迁移 D1 或修改已有公共工作空间条目；本次未部署线上服务。
 
+### 现有云端服务的升级步骤
+
+当前客户端 `WorkPage.vue` 的 `WORKSPACE_ACCESS_API_URL` 指向
+`https://ssmt-workspace-api-dev.angeloyrd856.workers.dev`，对应本仓库
+`services/workspace-access-api/wrangler.toml` 的 `ssmt-workspace-api-dev`。
+下面更新的是这套现有服务；只部署示例中的另一个 `ssmt-workspace-api`，当前客户端
+不会自动改用它。若已另行切换线上地址，应使用该地址对应的部署配置。
+
+1. 在公共元信息库 `Perxenic-Acid/SSMT-WorkSpace_Access-Library` 中，将
+   `schema/v1/metadata.schema.json` 更新为本项目
+   `services/workspace-access-api/schema/v1/metadata.schema.json` 的内容，
+   确认 LOD 支持可选 `componentAliases`。提交并推送这一个 schema 文件，等待该库
+   的校验 / 索引 Action 成功；不要用整个模板覆盖已有 `games`、索引或工作流。
+2. 在 SSMT 根目录打开 PowerShell，验证并部署 Worker：
+
+   ```powershell
+   Set-Location services/workspace-access-api
+   npm ci
+   npm test
+   npx wrangler whoami
+   npx wrangler deploy --config wrangler.toml --dry-run
+   npx wrangler deploy --config wrangler.toml --keep-vars
+   ```
+
+   `whoami` 未登录时先执行 `npx wrangler login`。部署沿用现有 D1 / R2 绑定与
+   Worker secrets；此次没有新增 SQL migration，无需创建资源或重填密钥。
+   `--keep-vars` 保留控制台设置的普通变量；配置中显式声明的值仍以本地配置为准。
+   命令已对本项目 Wrangler 4.123.0 的帮助核对，参数含义见
+   [Wrangler 命令文档](https://developers.cloudflare.com/workers/wrangler/commands/)。
+3. 发布更新后的 SSMT；Blender 用户同时更新配套 TheHerta。用带一个 Component
+   别名的小工作空间发布新的“仅配置”条目，确认公共库该条目的 `metadata.json`
+   包含 `lods[].componentAliases`；下载到新工作空间后，确认对应 LOD 生成
+   `ComponentAliases.json`，SSMT 与 Blender 都能显示别名。再检查旧条目仍能导入。
+
+修改本地别名不会回写既有公共条目；需要重新发布工作空间，已有云端条目保持原版本。
+新建独立生产环境的资源、secrets 与恢复流程另见
+[部署运行手册](../services/workspace-access-api/DEPLOYMENT.md)。本节仅说明部署，
+不表示线上服务或公共元信息库已经更新。
+
 ## Blender
 
 配套 TheHerta 提交：`f2d8276`（独立仓库，需同步更新插件）。
