@@ -591,7 +591,7 @@ def main():
     parser.add_argument("root", nargs="?", default=None)
     parser.add_argument("--gametype-dir", default=None, help="GameType folder override (auto-discovered from the current game when omitted)")
     parser.add_argument("--settings-file", default=None, help="Absolute path to SSMT4 settings.json (prefer MCP GlobalConfig.AppSettingsFilePath)")
-    parser.add_argument("--gametype-root", default=None, help="GameType library directory (prefer MCP GlobalConfig.SSMT4GlobalConfigsFolder()/GameType)")
+    parser.add_argument("--gametype-root", default=None, help="GameType library directory (prefer MCP GlobalConfig.SSMTResourcesFolder()/GameType)")
     parser.add_argument("--drawib-file", default=None, help="Explicit DrawIB list JSON (workspace Config.json format, or a plain array of hashes)")
     parser.add_argument("--scan-all", action="store_true", help="Audit every IB in the dump instead of the workspace DrawIB list")
     parser.add_argument("--verbose", action="store_true", help="print every IB (default prints only a summary and missing signatures)")

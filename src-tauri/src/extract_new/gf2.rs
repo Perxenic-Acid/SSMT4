@@ -347,7 +347,7 @@ impl GF2NewExtractor {
             }
         };
 
-        let gametype_folder_path = PathManager::ssmt_gametype_folder();
+        let gametype_folder_path = PathManager::bundled_gametype_folder();
         let current_gametype_folder_path = gametype_folder_path.join("GF2");
         let d3d11_gametype_lv2 = D3D11GameTypeLv2::new(current_gametype_folder_path)?;
 

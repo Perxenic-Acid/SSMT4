@@ -89,7 +89,7 @@ def read_settings(settings_file=None) -> dict:
 
 
 def bundled_gametype_root() -> str:
-    """Return a GameType folder ancestor if the skill lives inside one."""
+    """Return the GameType library folder this skill is shipped inside."""
     cur = os.path.abspath(os.path.dirname(__file__))
     while True:
         if os.path.basename(cur).lower() == "gametype":
@@ -105,8 +105,10 @@ def gametype_roots(gametype_root=None) -> list:
     """Candidate GameType library roots.
 
     ``gametype_root`` (when provided, typically via MCP) is the authoritative
-    GameType directory and is checked first. Otherwise fall back to the dev repo,
-    the embedded skill directory and the runtime user-config directory.
+    GameType directory and is checked first. Otherwise fall back to the dev repo
+    and to the GameType folder this skill itself is shipped inside (i.e. the
+    installed ``resources/GameType``). The legacy user-config copy is deliberately
+    not consulted: the runtime no longer reads it.
     """
     roots = []
     if gametype_root:
@@ -119,9 +121,6 @@ def gametype_roots(gametype_root=None) -> list:
     skill = bundled_gametype_root()
     if skill and skill not in roots and os.path.isdir(skill):
         roots.append(skill)
-    user = os.path.join(ssmt_global_configs_folder(), "GameType")
-    if user not in roots and os.path.isdir(user):
-        roots.append(user)
     return roots
 
 
