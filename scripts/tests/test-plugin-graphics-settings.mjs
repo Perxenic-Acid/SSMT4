@@ -86,7 +86,7 @@ function marketplace(t, options = {}) {
     'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
     'catalog', 'catalogError', 'allEntries', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
     'selectedDependencies', 'dependencyActionsEnabled', 'openDependencyDownload', 'openDependencySettings', 'optionalDependency',
-    'openDependencyDirectory', 'installOfficial',
+    'openDependencyDirectory', 'installOfficial', 'updateEntries', 'selectedPlugin',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
     '@tauri-apps/plugin-opener': { openUrl: options.openUrl ?? (() => { throw new Error('Unexpected external download'); }), openPath: options.openPath },
@@ -169,6 +169,40 @@ test('Native Release 多版本目录只展示每个插件最新版，显式安�
   assert.deepEqual(calls.slice(3).map(call => call.command), latest.flatMap(() => [
     'install_official_plugin', 'plugin_registry_snapshot_for_game',
   ]), '安装后只刷新注册表，不启用插件或部署外部依赖');
+});
+
+test('已装旧 Poser 从 GitHub 目录发现新版并完成更新，包版本独立于 Native Release 标签', async t => {
+  const id = 'ssmt.poser.genshin-probe';
+  const current = { ...dlssPlugin(false), manifest: { ...dlssPlugin(false).manifest, id } };
+  let installed = [current];
+  const calls = [];
+  const entry = { id, name: 'Poser', description: 'Poser', author: 'SSMT', version: '0.1.1',
+    supportedGames: ['GIMI'], permissions: [], externalDependencies: [] };
+  const s = marketplace(t, { invoke: async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'official_plugin_catalog') return [entry];
+    if (command === 'local_plugin_packages') return [];
+    if (command === 'plugin_registry_snapshot_for_game') return installed;
+    if (command === 'install_official_plugin') {
+      assert.equal(args.id, id);
+      assert.equal(args.version, '0.1.1');
+      installed = [...installed, { ...current, manifest: { ...current.manifest, version: args.version } }];
+      return installed;
+    }
+    throw new Error(`Unexpected update IPC: ${command}`);
+  } });
+  await s.refreshAll();
+  s.selectedId.value = id;
+  assert.equal(s.selectedPlugin.value.manifest.version, '0.1.0');
+  assert.equal(s.updateEntries.value.length, 1);
+  assert.equal(s.lifecycleFor(s.allEntries.value[0], s.selectedPlugin.value), 'update_available');
+  assert.equal(calls.length, 3, '检查更新不安装、不启用插件');
+  await s.installOfficial(s.updateEntries.value[0]);
+  assert.equal(s.selectedPlugin.value.manifest.version, '0.1.1');
+  assert.equal(s.updateEntries.value.length, 0);
+  assert.equal(s.selectedPlugin.value.enabled, false);
+  s.catalog.value = [{ ...entry, version: '0.1.0', official: true }];
+  assert.equal(s.updateEntries.value.length, 0, '目录更旧时不得显示降级为更新');
 });
 
 test('marketplace exposes DLSS5 settings only for the selected enabled game and discards stale target reads', async t => {
