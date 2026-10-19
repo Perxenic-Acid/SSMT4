@@ -96,8 +96,13 @@ for (const useShell of [false, true]) {
       await h.launch.launch('EFMI', { gameLaunchMode: 'always-normal' }, () => {});
       const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
       const injector = programs.find(program => program.path.endsWith('/Run.exe'));
+      const directTarget = launchTargetProgram && !useShell;
       assert.match(injector.args, /--inject-mode direct --wait-for-target/);
       assert.equal(programs.some(program => program.path === base.targetExePath), false);
+      if (directTarget) {
+        assert.match(injector.args, /--launch-parent "C:\/Official\/Games.exe"/);
+        assert.match(injector.args, /--target-args "-force-d3d11"/);
+      }
       assert.equal(programs.some(program => program.path === 'C:/Official/Games.exe'), useShell && launchTargetProgram);
       assert.equal(programs.some(program => program.waitOnly), false);
       assert.doesNotMatch(h.ini(), /^\s*launch\s*=/m);
@@ -117,8 +122,23 @@ test('enabled PluginHost config is passed to the external injector', async () =>
   assert.match(h.ini(), /inject_dlls = C:\/Extra\/a.dll\|C:\/Extra\/b.dll/);
 });
 
+test('EFMI direct launch falls back to -force-d3d11 when launch arguments are empty', async () => {
+  const h = harness({ ...base, launchArgs: '', launcherExePath: 'C:/Official/Games.exe' });
+  await h.launch.launch('EFMI', { gameLaunchMode: 'always-normal' }, () => {});
+  const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+  const injector = programs.find(program => program.path.endsWith('/Run.exe'));
+  assert.match(injector.args, /--target-args "-force-d3d11"/);
+});
+
+test('EFMI direct launch requires an official launcher path', async () => {
+  const h = harness({ ...base, launcherExePath: '' });
+  await h.launch.launch('EFMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.equal(h.calls.some(call => call.command === 'launch_programs'), false);
+  assert.equal(h.messages[0].kind, 'error');
+});
+
 test('disabled plugins add no host argument and no plugin-owned files', async () => {
-  const h = harness({ ...base });
+  const h = harness({ ...base, launcherExePath: 'C:/Official/Games.exe' });
   await h.launch.launch('EFMI', { gameLaunchMode: 'always-normal' }, () => {});
   const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
   assert.equal(programs.length, 1);
@@ -153,11 +173,12 @@ test('pure launch still skips runtime configuration and injection', async () => 
 });
 
 test('post-launch programs get the full external-launch timeout', async () => {
-  const h = harness({ ...base, postLaunchPrograms: [{ exePath: 'C:/After.exe', args: '' }] });
+  const h = harness({ ...base, launcherExePath: 'C:/Official/Games.exe', postLaunchPrograms: [{ exePath: 'C:/After.exe', args: '' }] });
   await h.launch.launch('EFMI', { gameLaunchMode: 'always-normal' }, () => {});
   const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
-  assert.equal(programs[1].waitTimeoutSecs, 120);
-  assert.equal(programs[2].path, 'C:/After.exe');
+  const waitProgram = programs.find(program => program.waitOnly);
+  assert.equal(waitProgram.waitTimeoutSecs, 120);
+  assert.equal(programs.at(-1).path, 'C:/After.exe');
 });
 
 test('EFMI manual wait requires an explicit executable path', async () => {
