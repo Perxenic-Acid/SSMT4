@@ -79,7 +79,7 @@ def main():
     parser.add_argument(
         "--gametype-root",
         default=None,
-        help="GameType library directory (prefer MCP GlobalConfig.SSMT4GlobalConfigsFolder()/GameType)",
+        help="GameType library directory (prefer MCP GlobalConfig.SSMTResourcesFolder()/GameType)",
     )
     parser.add_argument(
         "--dry-run",

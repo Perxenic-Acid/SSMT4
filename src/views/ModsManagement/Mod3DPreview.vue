@@ -440,6 +440,7 @@ const readFormatValues = (view: DataView, offset: number, format = ''): number[]
 };
 const loadGimiLayouts = () => gimiLayoutsPromise ||= (async () => {
   const roots: string[] = [];
+  // 数据类型随程序发布，只读安装目录那一份（与 Rust 侧 get_game_type_list 一致）。
   try {
     const resources = await resourceDir();
     roots.push(await join(resources, 'GameType', 'GIMI'), await join(resources, 'resources', 'GameType', 'GIMI'));

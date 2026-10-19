@@ -52,7 +52,7 @@ impl FrameAnalysisBase {
         };
 
         let current_gametype_folder_path =
-            PathManager::ssmt_gametype_folder().join(game_type_folder_name);
+            PathManager::bundled_gametype_folder().join(game_type_folder_name);
         let d3d11_gametype_lv2 = D3D11GameTypeLv2::new(current_gametype_folder_path)?;
 
         Ok(Self {

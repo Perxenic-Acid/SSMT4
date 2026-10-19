@@ -123,17 +123,6 @@ pub fn run() {
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
             app.manage(commands::launch_shortcut::LaunchConsoleShortcut::default());
 
-            // 将随包发布的 GameType 同步到用户配置目录，
-            // 确保新版本的数据类型 JSON 能覆盖旧版本文件。
-            match gametype::sync_bundled_gametype_to_config() {
-                Ok(copied) => {
-                    println!("[GameType] Synced {copied} bundled GameType file(s) to user config.");
-                }
-                Err(error) => {
-                    eprintln!("[GameType] Failed to sync bundled GameType folder: {error}");
-                }
-            }
-
             if show_window_shortcut_enabled_on_launch(app) {
                 if let Err(error) = register_show_window_shortcut(app.handle()) {
                     // A shortcut collision must not prevent SSMT from starting.

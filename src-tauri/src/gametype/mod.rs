@@ -4,70 +4,28 @@ use std::path::{Path, PathBuf};
 use crate::common::d3d11_gametype::D3D11GameType;
 use crate::config::path_manager::PathManager;
 
-/// 运行时读取的数据类型根目录（用户配置目录，安装时由 bundle 同步）。
-pub fn runtime_gametype_folder() -> PathBuf {
-    PathManager::ssmt_gametype_folder()
-}
-
-/// 随包发布的 GameType 根目录（安装包 resources/GameType）。
+/// 数据类型库根目录：`resources/GameType`，随程序一起发布、一起被覆盖安装与卸载。
+///
+/// 这是运行时**唯一**的数据类型来源。历史版本还会把它复制一份到用户配置目录，并且只读
+/// 用户配置目录那一份，于是卸载残留的旧类型会永远生效、覆盖安装也清不掉；现在类型库只跟
+/// 程序走：加类型 = 改仓库里的 `src-tauri/resources/GameType` 并随版本发布。
 pub fn bundled_gametype_folder() -> PathBuf {
     PathManager::bundled_gametype_folder()
 }
 
-/// 将随包发布的 GameType 同步到用户配置目录。
-/// 同名文件直接覆盖（保证新版本的数据类型生效），bundle 中没有的用户文件会保留。
-pub fn sync_bundled_gametype_to_config() -> Result<usize, String> {
-    let source = bundled_gametype_folder();
-    let target = runtime_gametype_folder();
-    if !source.is_dir() {
-        return Err(format!(
-            "Bundled GameType folder not found: {}",
-            source.display()
-        ));
-    }
-    sync_folder(&source, &target)
-}
-
-fn sync_folder(source: &Path, target: &Path) -> Result<usize, String> {
-    fs::create_dir_all(target)
-        .map_err(|e| format!("Failed to create GameType folder {}: {e}", target.display()))?;
-
-    let mut copied = 0usize;
-    for entry in fs::read_dir(source)
-        .map_err(|e| format!("Failed to read GameType source {}: {e}", source.display()))?
-    {
-        let entry = entry.map_err(|e| format!("Failed to read GameType entry: {e}"))?;
-        let from = entry.path();
-        let to = target.join(entry.file_name());
-
-        if from.is_dir() {
-            copied += sync_folder(&from, &to)?;
-        } else {
-            fs::copy(&from, &to).map_err(|e| {
-                format!(
-                    "Failed to copy GameType file {} -> {}: {e}",
-                    from.display(),
-                    to.display()
-                )
-            })?;
-            copied += 1;
-        }
-    }
-
-    Ok(copied)
-}
-
-/// 根据游戏名定位用户配置目录下的 GameType 文件夹。
-fn external_game_type_folder(game_name: &str) -> Option<PathBuf> {
+/// 在类型库根目录下定位某个游戏的类型文件夹。
+///
+/// 目录名匹配不区分大小写（`NarakaM` / `NARAKAM`、`IdentityV` / `IDENTITYV` 都可能出现在
+/// 调用方），IDENTITYV 保留指向 `IdentityV` 目录的特例，与 IdentityVNewExtractor 及前端
+/// GamePreset 的命名一致。
+fn resolve_game_type_folder(root: &Path, game_name: &str) -> Option<PathBuf> {
     let normalized = game_name.trim().to_ascii_uppercase();
-    let root = PathManager::ssmt_gametype_folder();
 
-    // IDENTITYV 使用 IdentityV 目录，与 IdentityVNewExtractor / 前端 GamePreset 命名一致。
     if normalized == "IDENTITYV" {
         return Some(root.join("IdentityV"));
     }
 
-    if let Ok(entries) = fs::read_dir(&root) {
+    if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
@@ -134,14 +92,15 @@ fn load_game_type_list_from_folder(
     Ok(game_type_list)
 }
 
-/// 从用户配置目录读取一个游戏的数据类型列表（JSON 是唯一数据源）。
+/// 读取一个游戏的数据类型列表（JSON 是唯一数据源，类型库随程序发布）。
 pub fn get_game_type_list(game_name: &str) -> Result<Vec<D3D11GameType>, String> {
     let normalized_game_name = game_name.trim().to_ascii_uppercase();
-    let Some(folder) = external_game_type_folder(&normalized_game_name) else {
+    let root = bundled_gametype_folder();
+    let Some(folder) = resolve_game_type_folder(&root, &normalized_game_name) else {
         return Err(format!(
             "GameType folder not found for {} under {}",
             normalized_game_name,
-            PathManager::ssmt_gametype_folder().display()
+            root.display()
         ));
     };
     load_game_type_list_from_folder(&folder, &normalized_game_name)
@@ -155,6 +114,18 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
             .join("GameType")
+    }
+
+    /// 造一个临时类型库根目录，用来验证目录定位规则。
+    fn library_workspace(name: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!(
+            "ssmt4-gametype-library-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        base
     }
 
     #[test]
@@ -212,34 +183,30 @@ mod tests {
     }
 
     #[test]
-    fn sync_folder_copies_overwrites_and_preserves_user_files() {
-        let base =
-            std::env::temp_dir().join(format!("ssmt4-gametype-sync-test-{}", std::process::id()));
-        let source = base.join("source").join("GIMI");
-        let target = base.join("target").join("GIMI");
-        fs::create_dir_all(&source).unwrap();
-        fs::create_dir_all(&target).unwrap();
+    fn resolve_game_type_folder_matches_case_insensitively() {
+        let root = library_workspace("resolve");
 
-        let first = source.join("a.json");
-        let second = source.join("b.json");
-        fs::write(&first, r#"{"D3D11ElementList":[]}"#).unwrap();
-        fs::write(&second, r#"{"D3D11ElementList":[]}"#).unwrap();
-
-        fs::write(target.join("a.json"), "old").unwrap();
-        fs::write(target.join("keep.json"), "user").unwrap();
-
-        let copied = sync_folder(&source, &target).expect("sync should succeed");
-        assert_eq!(copied, 2);
+        fs::create_dir_all(root.join("NarakaM")).unwrap();
         assert_eq!(
-            fs::read_to_string(target.join("a.json")).unwrap(),
-            r#"{"D3D11ElementList":[]}"#
-        );
-        assert!(target.join("b.json").exists());
-        assert_eq!(
-            fs::read_to_string(target.join("keep.json")).unwrap(),
-            "user"
+            resolve_game_type_folder(&root, "narakam"),
+            Some(root.join("NarakaM"))
         );
 
-        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(root.join("IdentityV")).unwrap();
+        assert_eq!(
+            resolve_game_type_folder(&root, "IDENTITYV"),
+            Some(root.join("IdentityV"))
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_game_type_folder_returns_none_for_unknown_game() {
+        let root = library_workspace("missing");
+
+        assert_eq!(resolve_game_type_folder(&root, "NOTAGAME"), None);
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

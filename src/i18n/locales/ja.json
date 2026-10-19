@@ -1025,7 +1025,7 @@
       "frameAnalysisPathInvalid": "現在の FrameAnalysis パスが無効か、アクセスできません",
       "specifyFrameAnalysisPathFirst": "先に FrameAnalysis フォルダーの完全なパスを入力してください",
       "xianzunUnavailable": "先にチーズ猫で API Key を設定してください",
-      "analyzeGameTypePrompt": "gametype-analysis スキルを使用して不足しているデータ型を補完してください。まず MCP ツール GlobalConfig.SSMTResourcesFolder() でリソースディレクトリを特定し、GameType/gametype-analysis/SKILL.md を読み込みます。次に SKILL.md の MCP 優先フローに従い（GlobalConfig.AppSettingsFilePath() で settings.json のパスを取得し、GlobalConfig.SSMT4GlobalConfigsFolder() でグローバル設定ディレクトリを取得して、両方のパスをスクリプトに渡します）、IB のカバレッジを確認し、本当に不足しているデータ型だけを生成してパッケージ化し、最後にパッケージの共有パスを知らせてください。",
+      "analyzeGameTypePrompt": "gametype-analysis スキルを使用して不足しているデータ型を補完してください。まず MCP ツール GlobalConfig.SSMTResourcesFolder() でリソースディレクトリを特定し、GameType/gametype-analysis/SKILL.md を読み込みます。次に SKILL.md の MCP 優先フローに従い（GlobalConfig.AppSettingsFilePath() で settings.json のパスを取得し、GlobalConfig.SSMTResourcesFolder() でデータ型ディレクトリを取得して、両方のパスをスクリプトに渡します）、IB のカバレッジを確認し、本当に不足しているデータ型だけを生成してパッケージ化し、最後にパッケージの共有パスを知らせてください。",
       "selectGameAndCacheFirst": "先にゲーム設定を選択し、キャッシュディレクトリを設定してください",
       "selectOrCreateWorkspaceFirst": "先にワークスペースを選択または作成してください",
       "ibskipGenerated": "現在のゲームの 3Dmigoto Mods フォルダーに IBSkip.ini を生成しました",

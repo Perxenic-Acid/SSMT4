@@ -91,7 +91,7 @@ impl PathManager {
     }
 
     ///SSMT自带的resources目录下的GameType文件夹
-    ///只作为安装包内的初始来源，启动时会同步到用户配置目录。
+    ///这是运行时唯一的数据类型来源，随程序发布，不再复制到用户配置目录。
     pub fn bundled_gametype_folder() -> PathBuf {
         Self::ssmt_resources_folder().join("GameType")
     }
@@ -119,7 +119,7 @@ impl PathManager {
     }
 
     ///用户配置目录下的GameType文件夹
-    ///与Games文件夹一样位于SSMT4GlobalConfigs下，是运行时唯一的数据类型读取来源。
+    ///历史版本把类型库副本放在这里并只从这里读取，运行时已不再读取它。
     pub fn ssmt_gametype_folder() -> PathBuf {
         Self::ssmt_global_config_folder().join("GameType")
     }

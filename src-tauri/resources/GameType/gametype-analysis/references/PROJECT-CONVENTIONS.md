@@ -3,7 +3,7 @@
 ## Repository layout
 
 - Single source of truth: src-tauri/resources/GameType/*.json (one file per data type; each game type has its own folder, e.g. ZZMI/, GF2/, APMI/). The old Rust registry type_zzmi.rs was removed.
-- Runtime data types: %LOCALAPPDATA%/SSMT4GlobalConfigs/GameType/<GameType>/ (synced from the bundle on every app start).
+- Runtime data types: the GameType library shipped with the install (<install dir>/resources/GameType/<GameType>/). The runtime reads only this folder; nothing is copied to user config.
 - Constants: src-tauri/src/constants/gametype_{format,element_name,extract_slot,extract_technique,category_name}.rs.
 - Extractor matching logic: src-tauri/src/extract_new/*.rs (get_possible_gametype_list_unity_vs, filter_trianglelist_index_unity_vs).
 - Frame analysis plumbing: src-tauri/src/common/frame_analysis/frameanalysis_log.rs, frameanalysis_data.rs.
@@ -79,7 +79,7 @@ The default coverage check is a fast layout-signature comparison, not the full f
 2. Let `scripts/gametype_add_missing_types.py` derive and generate the missing files (dry-run first, review, then `--write`).
 3. Re-run the checker: the new hash must match, and no previously matched hash may lose its match.
 4. The `--write` run also creates a `gametype-additions-<GameType>-<timestamp>.zip` package. Share it with developers so they can add the new files to the library directly.
-5. Restart the app (or run `bun tauri dev`) so the file is synced into the user config GameType folder.
+5. The new files are written straight into the installed library (`<resources folder>/GameType/<game>`), so they take effect on the next extraction — no restart needed. In a dev checkout, run `bun tauri dev` once so the file is picked up from `src-tauri/resources/GameType`.
 
 For manual review/fallback when the automatic derivation is not applicable:
 
