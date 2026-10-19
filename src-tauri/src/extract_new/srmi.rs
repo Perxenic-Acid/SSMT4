@@ -1343,7 +1343,7 @@ impl SRMINewExtractor {
         };
 
         //拼接出数据类型文件夹
-        let gametype_folder_path = PathManager::ssmt_gametype_folder();
+        let gametype_folder_path = PathManager::bundled_gametype_folder();
         let current_gametype_folder_path = gametype_folder_path.join("SRMI");
 
         //创建一个D3D11GameTypeLv2对象

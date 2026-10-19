@@ -1246,7 +1246,7 @@
       "frameAnalysisPathInvalid": "当前 FrameAnalysis 路径无效或不可访问",
       "specifyFrameAnalysisPathFirst": "请先填写完整 FrameAnalysis 文件夹路径",
       "xianzunUnavailable": "请先在芝士猫中配置 API Key",
-      "analyzeGameTypePrompt": "请使用 gametype-analysis 技能补齐数据类型：先用 MCP 工具 GlobalConfig.SSMTResourcesFolder() 定位资源目录，读取 GameType/gametype-analysis/SKILL.md；再按 SKILL.md 的 MCP 优先流程执行（用 GlobalConfig.AppSettingsFilePath() 拿 settings.json 路径、用 GlobalConfig.SSMT4GlobalConfigsFolder() 拿全局配置目录，把这两个路径传给脚本），检查 IB 覆盖，只生成真正缺失的数据类型并打包，最后告诉我压缩包分享路径。",
+      "analyzeGameTypePrompt": "请使用 gametype-analysis 技能补齐数据类型：先用 MCP 工具 GlobalConfig.SSMTResourcesFolder() 定位资源目录，读取 GameType/gametype-analysis/SKILL.md；再按 SKILL.md 的 MCP 优先流程执行（用 GlobalConfig.AppSettingsFilePath() 拿 settings.json 路径、用 GlobalConfig.SSMTResourcesFolder() 拿数据类型目录（<resources>/GameType），把这两个路径传给脚本），检查 IB 覆盖，只生成真正缺失的数据类型并打包，最后告诉我压缩包分享路径。",
       "selectGameAndCacheFirst": "请先选择游戏配置并设置缓存目录",
       "selectOrCreateWorkspaceFirst": "请先选择或创建工作空间",
       "ibskipGenerated": "已在当前游戏的 3Dmigoto Mods 文件夹生成 IBSkip.ini",

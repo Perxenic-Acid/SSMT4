@@ -1025,7 +1025,7 @@
       "frameAnalysisPathInvalid": "현재 FrameAnalysis 경로가 유효하지 않거나 접근할 수 없습니다",
       "specifyFrameAnalysisPathFirst": "먼저 전체 FrameAnalysis 폴더 경로를 입력하세요",
       "xianzunUnavailable": "먼저 치즈 캣에서 API Key를 설정하세요",
-      "analyzeGameTypePrompt": "gametype-analysis 스킬을 사용하여 누락된 데이터 유형을 보완하세요. 먼저 MCP 도구 GlobalConfig.SSMTResourcesFolder()로 리소스 디렉터리를 찾고 GameType/gametype-analysis/SKILL.md를 읽습니다. 그런 다음 SKILL.md의 MCP 우선 절차를 따르세요(GlobalConfig.AppSettingsFilePath()로 settings.json 경로를 얻고 GlobalConfig.SSMT4GlobalConfigsFolder()로 전역 설정 디렉터리를 얻은 뒤 두 경로를 스크립트에 전달). IB 커버리지를 확인하고 실제로 누락된 데이터 유형만 생성하여 패키징한 다음, 마지막으로 패키지 공유 경로를 알려 주세요.",
+      "analyzeGameTypePrompt": "gametype-analysis 스킬을 사용하여 누락된 데이터 유형을 보완하세요. 먼저 MCP 도구 GlobalConfig.SSMTResourcesFolder()로 리소스 디렉터리를 찾고 GameType/gametype-analysis/SKILL.md를 읽습니다. 그런 다음 SKILL.md의 MCP 우선 절차를 따르세요(GlobalConfig.AppSettingsFilePath()로 settings.json 경로를 얻고 GlobalConfig.SSMTResourcesFolder()로 데이터 유형 디렉터리를 얻은 뒤 두 경로를 스크립트에 전달). IB 커버리지를 확인하고 실제로 누락된 데이터 유형만 생성하여 패키징한 다음, 마지막으로 패키지 공유 경로를 알려 주세요.",
       "selectGameAndCacheFirst": "먼저 게임 설정을 선택하고 캐시 디렉터리를 설정하세요",
       "selectOrCreateWorkspaceFirst": "먼저 작업 공간을 선택하거나 생성하세요",
       "ibskipGenerated": "현재 게임의 3Dmigoto Mods 폴더에 IBSkip.ini를 생성했습니다",

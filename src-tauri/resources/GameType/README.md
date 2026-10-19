@@ -5,26 +5,25 @@ The hardcoded Rust registries (`src-tauri/src/gametype/type_*.rs`) have been rem
 
 ## Runtime location
 
-At runtime SSMT reads data types from the user config folder:
+The runtime reads data types straight from this folder, as shipped with the app:
 
-    %LOCALAPPDATA%\SSMT4GlobalConfigs\GameType
+    <install dir>\resources\GameType      (installed / portable build)
+    src-tauri/resources/GameType          (dev build)
 
-This is the same parent folder used by `Games`.
-
-On every app start, the bundled copy shipped inside the installer
-(`resources/GameType` next to the exe, which maps to this folder in the repo)
-is synced into the user config folder:
-
-- Files shipped with the new version **overwrite** same-named files, so users
-  never keep old data types after installing an update.
-- Extra JSON files a user added that are not in the bundle are **preserved**.
+This is the **only** source: `gametype::get_game_type_list` resolves the game
+folder here and nowhere else. Older builds copied the whole library into
+`%LOCALAPPDATA%\SSMT4GlobalConfigs\GameType` and read only that copy, which is why
+uninstalling left stale types behind and reinstalling could not clean them up.
+The runtime no longer reads, writes or syncs anything under user config.
 
 ## Adding a type
 
 1. Put one JSON file per type under `src-tauri/resources/GameType/<game>/`
    so the next build/install ships it.
-2. Restart the app (or run `bun tauri dev` once) so the sync copies it into
-   the user config folder.
+2. Update the install (or run `bun tauri dev`) — it is picked up in place.
+
+Types are program assets: an update replaces them wholesale, they live and die
+with the install, and nothing is copied into user data.
 
 Each subfolder is one game preset. Each .json file inside is one D3D11GameType.
 

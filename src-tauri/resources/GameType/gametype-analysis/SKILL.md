@@ -11,8 +11,8 @@ existing GameType data-type library:
 - Covered IBs are reported as "already have a data type" and are not re-derived.
 - Unrecognizable IBs (no pointlist/VB layout) are marked unable and skipped.
 - Only genuinely missing layouts are derived (deduplicated per layout), written as
-  GameType JSON files into the current game's data-type folder, and packaged into a
-  shareable zip.
+  GameType JSON files into the installed data-type library
+  (`<resources folder>/GameType/<game>`), and packaged into a shareable zip.
 
 The DrawIB list lives in the current workspace's `LOD*/Config.json` (each entry is
 `{"DrawIB": "<8-hex hash>", "Alias": ""}`). The whole FrameAnalysis dump also contains
@@ -29,8 +29,8 @@ discover them, call `list_capabilities` and then `get_tool_schema` before invoki
 | Data | MCP tool |
 | --- | --- |
 | settings.json absolute path | `GlobalConfig.AppSettingsFilePath()` |
-| SSMT4 global config folder | `GlobalConfig.SSMT4GlobalConfigsFolder()` |
-| GameType library folder | `<global config folder>/GameType` |
+| SSMT4 resources folder | `GlobalConfig.SSMTResourcesFolder()` |
+| GameType library folder | `<resources folder>/GameType` |
 | (optional) cache folder / workspace | `GlobalConfig.ReadConfig()` fields `DBMTWorkFolder` / `CurrentWorkSpace` |
 
 The scripts read `settings.json` and the workspace `LOD*/Config.json` directly, so
@@ -40,7 +40,8 @@ the DrawIB list automatically.
 ## Workflow
 
 1. Call MCP `GlobalConfig.AppSettingsFilePath()` and save the returned path as `<settings>`.
-2. Call MCP `GlobalConfig.SSMT4GlobalConfigsFolder()` and derive `<gametype-root>` = `<that folder>/GameType`.
+2. Call MCP `GlobalConfig.SSMTResourcesFolder()` and derive `<gametype-root>` = `<that folder>/GameType`,
+   the data-type library shipped with the install (the runtime reads exactly this folder).
 3. From this skill's directory, run a preview (writes nothing):
 
    ```

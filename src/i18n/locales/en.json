@@ -1247,7 +1247,7 @@
       "frameAnalysisPathInvalid": "The current FrameAnalysis path is invalid or inaccessible",
       "specifyFrameAnalysisPathFirst": "Please specify the full FrameAnalysis folder path first",
       "xianzunUnavailable": "Please configure the API Key in Cheese Cat first",
-      "analyzeGameTypePrompt": "Use the gametype-analysis skill to add missing data types: first use MCP GlobalConfig.SSMTResourcesFolder() to locate the resources directory and read GameType/gametype-analysis/SKILL.md, then follow its MCP-first workflow (get settings.json via GlobalConfig.AppSettingsFilePath() and the global config folder via GlobalConfig.SSMT4GlobalConfigsFolder(), and pass those paths to the script), check IB coverage, generate only the genuinely missing data types and package them, then tell me the share path.",
+      "analyzeGameTypePrompt": "Use the gametype-analysis skill to add missing data types: first use MCP GlobalConfig.SSMTResourcesFolder() to locate the resources directory and read GameType/gametype-analysis/SKILL.md, then follow its MCP-first workflow (get settings.json via GlobalConfig.AppSettingsFilePath() and the GameType library folder via GlobalConfig.SSMTResourcesFolder(), and pass those paths to the script), check IB coverage, generate only the genuinely missing data types and package them, then tell me the share path.",
       "selectGameAndCacheFirst": "Please select a game config and set the cache directory first",
       "selectOrCreateWorkspaceFirst": "Please select or create a workspace first",
       "ibskipGenerated": "IBSkip.ini has been generated to the current game 3Dmigoto Mods folder",
