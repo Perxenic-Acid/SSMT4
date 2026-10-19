@@ -87,11 +87,16 @@ export function createLaunchMonitor() {
     state.visible = true;
     state.collapsed = true;
   };
-  const finish = () => {
-    state.launching = false;
-    if (!state.sessions.some(session => session.generation === state.generation)) state.visible = false;
+  const finish = () => { state.launching = false; };
+  const hasActiveLoad = () => state.launching || state.sessions.some(session => session.running);
+  const dismiss = () => {
+    // 所选来源可能已结束，但其他代次的程序或只读日志仍在运行。
+    if (hasActiveLoad()) return false;
+    state.visible = false;
+    state.collapsed = true;
+    return true;
   };
-  return { state, connect, begin, finish, handleEvent, handleConsole,
+  return { state, connect, begin, finish, hasActiveLoad, dismiss, handleEvent, handleConsole,
     async send(text: string) {
       const session = state.sessions.find(item => item.id === state.selectedId);
       if (!session?.running) throw new Error('控制台程序已退出');

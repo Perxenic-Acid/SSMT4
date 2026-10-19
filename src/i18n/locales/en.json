@@ -412,6 +412,8 @@
       "readOnly": "Read-only log", "interactive": "Interactive", "logHint": "Following game logs; collection continues when collapsed",
       "title": "Launch console", "program": "Console program", "running": "Running", "exited": "Exited ({code})", "log": "Open log",
       "minimize": "Minimize", "hide": "Hide", "copy": "Copy", "clear": "Clear", "send": "Send",
+      "close": "Close console", "closeBlocked": "Launch, console programs or log followers are still active. You can collapse details and close after they finish.",
+      "activeSources": "{count} active sources", "starting": "Launching", "idle": "Idle",
       "input": "Type text and press Enter to send", "hideHint": "Hiding keeps programs running",
       "truncated": "Earlier or excessive output was omitted"
     },

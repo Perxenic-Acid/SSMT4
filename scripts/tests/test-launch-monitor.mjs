@@ -82,11 +82,60 @@ test('超量输出和历史记录有界，未知会话输出被忽略，文本�
   assert.ok(h.state.sessions.some(item => item.id === 'a' && item.running));
 });
 
-test('无控制台路径启动完成后关闭短暂提示', async () => {
+test('无控制台路径启动完成后保留阶段提示，由用户空闲时关闭', async () => {
   const h = monitor(); await h.begin(); h.finish();
-  assert.equal(h.state.visible, false);
+  assert.equal(h.state.visible, true);
   assert.equal(h.state.launching, false);
   assert.equal(h.state.sessions.length, 0);
+  assert.equal(h.hasActiveLoad(), false);
+  assert.equal(h.dismiss(), true);
+  assert.equal(h.state.visible, false);
+});
+
+test('启动未结束或任意来源运行时不可关闭，不以所选来源状态判断', async () => {
+  const h = monitor(); await h.begin();
+  assert.equal(h.hasActiveLoad(), true);
+  assert.equal(h.dismiss(), false);
+  h.emit('started'); h.finish();
+  await h.begin(); h.emit('started', '', 'b'); h.emit('exit', '', 'b'); h.finish();
+  assert.equal(h.state.selectedId, 'b');
+  assert.equal(h.dismiss(), false); // 上一代 a 仍在运行。
+  h.emit('log_started', 'a', 'reshade');
+  h.emit('exit');
+  assert.equal(h.dismiss(), false); // Run.exe 退出不代表 ReShade 跟随结束。
+  h.emit('exit', '', 'reshade');
+  assert.equal(h.hasActiveLoad(), false);
+  assert.equal(h.state.visible, true); // 空闲不会自行隐藏。
+  assert.equal(h.dismiss(), true);
+  assert.equal(h.state.visible, false);
+});
+
+test('启动失败仍等待流程释放，来源错误后空闲可关闭且记录保留', async () => {
+  const h = monitor(); await h.begin();
+  h.handleEvent({ event: 'launch_error', message: 'failed' });
+  assert.equal(h.dismiss(), false);
+  h.emit('started'); h.emit('error', 'read failed'); h.finish();
+  assert.equal(h.hasActiveLoad(), false);
+  assert.equal(h.dismiss(), true);
+  assert.equal(h.state.sessions[0].error, 'read failed');
+  assert.equal(h.state.currentEvent.event, 'launch_error');
+});
+
+test('关闭后迟到输出不重新打开，下一次启动重新显示折叠面板并保留历史', async () => {
+  const h = monitor(); await h.begin();
+  h.emit('started'); h.emit('stdout', 'retained'); h.emit('exit'); h.finish();
+  h.state.collapsed = false;
+  assert.equal(h.dismiss(), true);
+  assert.equal(h.state.collapsed, true);
+  h.emit('stdout', ' late');
+  h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
+  h.emit('log_started', 'a', 'late-log');
+  assert.equal(h.state.visible, false);
+  assert.equal(h.state.sessions[0].output, 'retained late');
+  await h.begin();
+  assert.equal(h.state.visible, true);
+  assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.sessions[0].output, 'retained late');
 });
 
 test('监听失败不阻断游戏启动，并清理已经成功注册的监听器', async () => {
