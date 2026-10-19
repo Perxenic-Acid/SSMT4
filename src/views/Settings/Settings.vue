@@ -56,6 +56,7 @@ const settingsNavGroups = computed(() => [
     items: [
       { id: 'settings-general', label: t('settings.sections.general') },
       { id: 'settings-appearance', label: t('settings.sections.appearance') },
+      { id: 'settings-shortcuts', label: t('settings.sections.shortcuts') },
       { id: 'settings-page-visibility', label: t('settings.sections.pageVisibility') },
     ],
   },
@@ -429,57 +430,6 @@ const confirmCreateGame = async () => {
 
               <div class="setting-row">
                 <div class="setting-identity">
-                  <span class="setting-icon"><el-icon><Key /></el-icon></span>
-                  <div>
-                    <div class="setting-label">{{ t('settings.general.showWindowShortcut') }}</div>
-                    <div class="setting-description">{{ t('settings.hints.showWindowShortcut') }}</div>
-                  </div>
-                </div>
-                <div class="setting-control compact-control">
-                  <el-switch
-                    v-model="appSettings.showWindowShortcutEnabled"
-                    :aria-label="t('settings.general.showWindowShortcut')"
-                  />
-                </div>
-              </div>
-
-              <div class="setting-row setting-row-wide console-shortcut-row">
-                <div class="setting-identity">
-                  <span class="setting-icon"><el-icon><Key /></el-icon></span>
-                  <div>
-                    <div class="setting-label">{{ t('settings.general.launchConsoleShortcut') }}</div>
-                    <div class="setting-description">{{ t('settings.hints.launchConsoleShortcut') }}</div>
-                    <div v-if="consoleShortcutError" class="shortcut-error" role="alert">{{ consoleShortcutError }}</div>
-                  </div>
-                </div>
-                <div class="setting-control console-shortcut-control">
-                  <el-switch :model-value="!!appSettings.launchConsoleShortcut" :disabled="consoleShortcutBusy" :aria-label="t('settings.general.launchConsoleShortcut')"
-                    @change="value => applyConsoleShortcut(value ? consoleShortcutDraft : '')" />
-                  <el-input v-model="consoleShortcutDraft" readonly :disabled="consoleShortcutBusy" :placeholder="t('settings.general.recordShortcut')" :aria-label="t('settings.general.recordShortcut')" @keydown="recordConsoleShortcut" />
-                  <el-button :loading="consoleShortcutBusy" :disabled="consoleShortcutDraft === appSettings.launchConsoleShortcut" @click="applyConsoleShortcut(consoleShortcutDraft)">{{ t('settings.general.applyShortcut') }}</el-button>
-                  <el-button @click="LaunchMonitor.open()">{{ t('settings.general.openConsole') }}</el-button>
-                </div>
-              </div>
-
-              <div class="setting-row setting-row-wide">
-                <div class="setting-identity">
-                  <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
-                  <div>
-                    <div class="setting-label">{{ t('settings.general.gameLaunchMode') }}</div>
-                    <div class="setting-description">{{ t('settings.hints.gameLaunchMode') }}</div>
-                  </div>
-                </div>
-                <div class="setting-control">
-                  <el-select v-model="appSettings.gameLaunchMode" :aria-label="t('settings.general.gameLaunchMode')">
-                    <el-option value="always-pure" :label="t('settings.general.gameLaunchModeAlwaysPure')" />
-                    <el-option value="ctrl-pure" :label="t('settings.general.gameLaunchModeCtrlPure')" />
-                    <el-option value="always-normal" :label="t('settings.general.gameLaunchModeAlwaysNormal')" />
-                  </el-select>
-                </div>
-              </div>
-
-              <div class="setting-row">
-                <div class="setting-identity">
                   <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
                   <div>
                     <div class="setting-label">{{ t('settings.general.runtimeOverlayLanguage') }}</div>
@@ -628,6 +578,66 @@ const confirmCreateGame = async () => {
                   />
                 </div>
               </div>
+            </div>
+          </section>
+
+          <section id="settings-shortcuts" class="settings-section">
+            <div class="section-heading">
+              <h2>{{ t('settings.sections.shortcuts') }}</h2>
+              <p>{{ t('settings.sections.shortcutsDesc') }}</p>
+            </div>
+            <div class="settings-group">
+              <div class="setting-row">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Key /></el-icon></span>
+                  <div>
+                    <div class="setting-label">{{ t('settings.general.showWindowShortcut') }}</div>
+                    <div class="setting-description">{{ t('settings.hints.showWindowShortcut') }}</div>
+                  </div>
+                </div>
+                <div class="setting-control compact-control">
+                  <el-switch
+                    v-model="appSettings.showWindowShortcutEnabled"
+                    :aria-label="t('settings.general.showWindowShortcut')"
+                  />
+                </div>
+              </div>
+
+              <div class="setting-row setting-row-wide console-shortcut-row">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Key /></el-icon></span>
+                  <div>
+                    <div class="setting-label">{{ t('settings.general.launchConsoleShortcut') }}</div>
+                    <div class="setting-description">{{ t('settings.hints.launchConsoleShortcut') }}</div>
+                    <div v-if="consoleShortcutError" class="shortcut-error" role="alert">{{ consoleShortcutError }}</div>
+                  </div>
+                </div>
+                <div class="setting-control console-shortcut-control">
+                  <el-switch :model-value="!!appSettings.launchConsoleShortcut" :disabled="consoleShortcutBusy" :aria-label="t('settings.general.launchConsoleShortcut')"
+                    @change="value => applyConsoleShortcut(value ? consoleShortcutDraft : '')" />
+                  <el-input v-model="consoleShortcutDraft" readonly :disabled="consoleShortcutBusy" :placeholder="t('settings.general.recordShortcut')" :aria-label="t('settings.general.recordShortcut')" @keydown="recordConsoleShortcut" />
+                  <el-button :loading="consoleShortcutBusy" :disabled="consoleShortcutDraft === appSettings.launchConsoleShortcut" @click="applyConsoleShortcut(consoleShortcutDraft)">{{ t('settings.general.applyShortcut') }}</el-button>
+                  <el-button @click="LaunchMonitor.open()">{{ t('settings.general.openConsole') }}</el-button>
+                </div>
+              </div>
+
+              <div class="setting-row setting-row-wide">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
+                  <div>
+                    <div class="setting-label">{{ t('settings.general.gameLaunchMode') }}</div>
+                    <div class="setting-description">{{ t('settings.hints.gameLaunchMode') }}</div>
+                  </div>
+                </div>
+                <div class="setting-control">
+                  <el-select v-model="appSettings.gameLaunchMode" :aria-label="t('settings.general.gameLaunchMode')">
+                    <el-option value="always-pure" :label="t('settings.general.gameLaunchModeAlwaysPure')" />
+                    <el-option value="ctrl-pure" :label="t('settings.general.gameLaunchModeCtrlPure')" />
+                    <el-option value="always-normal" :label="t('settings.general.gameLaunchModeAlwaysNormal')" />
+                  </el-select>
+                </div>
+              </div>
+
             </div>
           </section>
 

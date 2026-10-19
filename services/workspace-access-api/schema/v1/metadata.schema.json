@@ -44,7 +44,7 @@
     },
     "lod": {
       "type": "object", "additionalProperties": false, "required": ["name", "drawIB", "skipIB", "vsCheck"],
-      "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 128 }, "drawIB": { "type": "array", "items": { "$ref": "#/$defs/hashAlias" } }, "skipIB": { "type": "array", "items": { "$ref": "#/$defs/skipIB" } }, "vsCheck": { "type": "array", "items": { "$ref": "#/$defs/vs" } } }
+      "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 128 }, "drawIB": { "type": "array", "items": { "$ref": "#/$defs/hashAlias" } }, "skipIB": { "type": "array", "items": { "$ref": "#/$defs/skipIB" } }, "vsCheck": { "type": "array", "items": { "$ref": "#/$defs/vs" } }, "componentAliases": { "type": "object", "maxProperties": 4096, "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" }, "additionalProperties": { "type": "string", "maxLength": 128, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" } } }
     },
     "fullData": {
       "oneOf": [

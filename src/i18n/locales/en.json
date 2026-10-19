@@ -628,6 +628,8 @@
   "settings": {
     "sections": {
       "general": "General",
+      "shortcuts": "Keyboard shortcuts",
+      "shortcutsDesc": "Window activation, launch console and pure launch behavior",
       "generalDesc": "Storage and connection preferences",
       "appearance": "Appearance and workflow",
       "appearanceDesc": "Language, marking, and visual comfort",
@@ -1429,6 +1431,17 @@
       "markStyle": "Mark Style",
       "subMesh": "SubMesh / LOD",
       "drawCall": "DrawCall"
+    },
+    "tree": {
+      "saveAlias": "Save",
+      "cancelAlias": "Cancel",
+      "title": "LOD, IB and Components",
+      "legacyLod": "LOD (legacy workspace)",
+      "renameComponent": "Edit Component alias",
+      "aliasHint": "Up to 128 characters. Leave empty to restore the default name. Directories, IDs and Mod references stay the same.",
+      "invalidAlias": "Use at most 128 characters, without line breaks or control characters.",
+      "aliasSaveFailed": "Could not save Component alias: {reason}",
+      "aliasLoadFailed": "Component aliases for {lod} could not be read. Default names are shown; the file is preserved."
     },
     "preview": {
       "title": "SubMesh 3D Preview",

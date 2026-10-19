@@ -26,4 +26,8 @@ test('server-normalized metadata shape validates against schema v1', () => {
   const metadata = attachServerEntryId(normalized.value, '0191f000-0000-7000-8000-000000000000');
   metadata.fullData.objectKey = `packages/sha256/aa/${'a'.repeat(64)}.ssmtws`;
   assert.equal(validate(metadata), true, ajv.errorsText(validate.errors));
+  metadata.lods[0].componentAliases = { '0f8a6711-3-0': '面部.亮 / Face 😀' };
+  assert.equal(validate(metadata), true, ajv.errorsText(validate.errors));
+  metadata.lods[0].componentAliases['0f8a6711-3-0'] = 'bad\nname';
+  assert.equal(validate(metadata), false);
 });

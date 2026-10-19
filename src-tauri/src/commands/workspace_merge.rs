@@ -298,6 +298,37 @@ fn write_submesh_trianglelist_metadata(
     .map_err(|error| format!("Failed to write submesh texture metadata: {error}"))
 }
 
+fn write_component_aliases(
+    target_lod: &Path,
+    sources: &[(Option<PathBuf>, &str)],
+    preferences: &HashMap<String, String>,
+    conflicting_hashes: &HashSet<String>,
+) -> Result<(), String> {
+    use crate::workspace::component_aliases::{
+        read_component_aliases, ComponentAliases, COMPONENT_ALIASES_FILE,
+    };
+    let mut merged = ComponentAliases::new();
+    for (lod, source_key) in sources {
+        let Some(lod) = lod else { continue };
+        for (key, alias) in read_component_aliases(lod)? {
+            // 别名跟随被选中的实际资源，不能把另一个工作空间同 IB 的标签串过来。
+            if target_lod.join(&key).is_dir()
+                && source_submesh_is_selected(&key, source_key, preferences, conflicting_hashes)
+            {
+                merged.entry(key).or_insert(alias);
+            }
+        }
+    }
+    if !merged.is_empty() {
+        fs::write(
+            target_lod.join(COMPONENT_ALIASES_FILE),
+            serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("保存合并后的 Component 别名失败: {e}"))?;
+    }
+    Ok(())
+}
+
 fn merge_object_map_metadata(source: &Path, target: &Path) -> Result<(), String> {
     let source_content = fs::read_to_string(source)
         .map_err(|error| format!("Failed to read merge metadata: {error}"))?;
@@ -451,7 +482,9 @@ fn copy_lod(
         // This map is derived from the extracted submesh folders. It must not
         // be carried over from either source, or a zip merge hides the other
         // source's components in the post-processing page.
-        if is_draw_ib_component_map(&source_path) {
+        if is_draw_ib_component_map(&source_path)
+            || entry.file_name() == crate::workspace::component_aliases::COMPONENT_ALIASES_FILE
+        {
             continue;
         }
 
@@ -650,6 +683,21 @@ pub fn workspace_merge(
         }
         for lod in &lods {
             let lod_path = temporary.join(&lod.name);
+            write_component_aliases(
+                &lod_path,
+                &[
+                    (
+                        lod.first_lod_name.as_ref().map(|name| first.join(name)),
+                        "first",
+                    ),
+                    (
+                        lod.second_lod_name.as_ref().map(|name| second.join(name)),
+                        "second",
+                    ),
+                ],
+                &hash_preferences,
+                &conflicting_hashes,
+            )?;
             write_submesh_trianglelist_metadata(
                 &lod_path,
                 &[
@@ -719,6 +767,18 @@ mod tests {
         fs::write(second_lod.join("second_aaaaaaaa.buf"), b"second").expect("write second file");
         fs::write(second_lod.join("second_bbbbbbbb.buf"), b"unique").expect("write unique file");
 
+        fs::create_dir_all(first_lod.join("aaaaaaaa-3-0")).unwrap();
+        fs::create_dir_all(second_lod.join("aaaaaaaa-3-0")).unwrap();
+        fs::write(
+            first_lod.join("ComponentAliases.json"),
+            r#"{"aaaaaaaa-3-0":"旧面部"}"#,
+        )
+        .unwrap();
+        fs::write(
+            second_lod.join("ComponentAliases.json"),
+            r#"{"aaaaaaaa-3-0":"选中面部"}"#,
+        )
+        .unwrap();
         let preview = workspace_merge_preview(
             base.to_string_lossy().into_owned(),
             "first".to_string(),
@@ -744,6 +804,11 @@ mod tests {
             b"second"
         );
         assert!(base.join("merged/LOD0/second_bbbbbbbb.buf").exists());
+        assert_eq!(
+            crate::workspace::component_aliases::read_component_aliases(&base.join("merged/LOD0"))
+                .unwrap()["aaaaaaaa-3-0"],
+            "选中面部"
+        );
         fs::remove_dir_all(base).expect("remove test workspace");
     }
 
@@ -769,6 +834,16 @@ mod tests {
             r#"[{"DrawIB":"bbbbbbbb","Alias":"Second"}]"#,
         )
         .expect("write second config");
+        fs::write(
+            first_lod.join("ComponentAliases.json"),
+            r#"{"aaaaaaaa-3-0":"脸"}"#,
+        )
+        .unwrap();
+        fs::write(
+            second_lod.join("ComponentAliases.json"),
+            r#"{"bbbbbbbb-3-0":"衣服"}"#,
+        )
+        .unwrap();
         fs::write(
             first_lod.join("ComponentName_DrawCallIndexList.json"),
             r#"{"aaaaaaaa-3-0":["000001"]}"#,
@@ -801,6 +876,10 @@ mod tests {
         .expect("merge workspaces");
 
         let merged_lod = base.join("merged").join("LOD0");
+        let aliases =
+            crate::workspace::component_aliases::read_component_aliases(&merged_lod).unwrap();
+        assert_eq!(aliases["aaaaaaaa-3-0"], "脸");
+        assert_eq!(aliases["bbbbbbbb-3-0"], "衣服");
         let component_map: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(merged_lod.join("ComponentName_DrawCallIndexList.json"))
                 .expect("read merged component metadata"),

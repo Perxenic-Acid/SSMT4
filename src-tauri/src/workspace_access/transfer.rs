@@ -302,6 +302,15 @@ fn write_config(root: &Path, metadata: &PortableWorkspaceMetadataV1) -> Result<(
         &serde_json::json!({ "activeTabId": active, "tabs": tabs }),
     )?;
     for (index, lod) in metadata.lods.iter().enumerate() {
+        if !lod.component_aliases.is_empty() {
+            let lod_path = root.join(&lod.name);
+            fs::create_dir_all(&lod_path).map_err(|_| "IMPORT_CONFIG_FAILED")?;
+            write_json(
+                &lod_path.join(crate::workspace::component_aliases::COMPONENT_ALIASES_FILE),
+                &serde_json::to_value(&lod.component_aliases)
+                    .map_err(|_| "IMPORT_CONFIG_FAILED")?,
+            )?;
+        }
         let model_rows: Vec<_> = lod
             .draw_ib
             .iter()
@@ -426,6 +435,11 @@ mod tests {
         )
         .unwrap();
         fs::write(source.join("LOD0").join("mesh.buf"), [1_u8, 2, 3, 4]).unwrap();
+        fs::write(
+            source.join("LOD0/ComponentAliases.json"),
+            r#"{"0f8a6711-3-0":"面部.高光"}"#,
+        )
+        .unwrap();
         create_workspace_archive(
             &WorkspaceAccessPreflightRequest {
                 workspace_path: source.to_string_lossy().to_string(),
@@ -447,6 +461,22 @@ mod tests {
             .join("LOD0")
             .join("mesh.buf")
             .is_file());
+        let imported_aliases = crate::workspace::component_aliases::read_component_aliases(
+            &Path::new(&result.workspace_path).join("LOD0"),
+        )
+        .unwrap();
+        assert_eq!(imported_aliases["0f8a6711-3-0"], "面部.高光");
+        let metadata =
+            crate::workspace_access::archive::read_workspace_archive_metadata(&archive).unwrap();
+        assert_eq!(metadata.lods[0].component_aliases, imported_aliases);
+        let skeleton = import_metadata_skeleton(&metadata, &destination, "Only Metadata").unwrap();
+        assert_eq!(
+            crate::workspace::component_aliases::read_component_aliases(
+                &Path::new(&skeleton.workspace_path).join("LOD0"),
+            )
+            .unwrap(),
+            imported_aliases
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -459,6 +489,7 @@ mod tests {
             game_preset: "SRMI".to_string(),
             workspace_name: "Skeleton".to_string(),
             lods: vec![crate::workspace_access::models::PortableLodV1 {
+                component_aliases: Default::default(),
                 name: "LOD0".to_string(),
                 draw_ib: vec![crate::workspace_access::models::HashAlias {
                     hash: "0f8a6711".to_string(),

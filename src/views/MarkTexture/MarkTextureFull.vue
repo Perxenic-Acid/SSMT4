@@ -6,7 +6,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeTextFile } from '@
 import { openPath as openExternal, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { moveFileToRecycleBin } from '../../utils/RecycleBin';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Close, Delete, Grid, View } from '@element-plus/icons-vue';
+import { ArrowRight, Close, Delete, Edit, Grid, View } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { AppStateManager } from '../../store/AppStateManager';
 import { GlobalConfig } from '../../store/GlobalConfig';
@@ -28,6 +28,8 @@ import {
 	type TextureMarkNameMemoryItem,
 } from '../../common/TextureMarkNameMemory';
 import { readDrawIBConfigFromWorkspace } from '../../common/DrawIBConfig';
+import { readComponentAliases, writeComponentAlias, isComponentAlias, type ComponentAliases } from '../../common/ComponentAliases';
+import { buildComponentTree, componentIbKey, type ComponentTreeItem } from './ComponentTree';
 import SubmeshPostProcessPreview from './SubmeshPostProcessPreview.vue';
 import {
 	applyTextureMarkForCurrentSubMesh,
@@ -123,7 +125,7 @@ type SubMeshMarkedTextureSummary = {
 
 type DecodedDdsPreview = { width: number; height: number; pixels: Uint8Array };
 
-type SubMeshDrawerItem = {
+type SubMeshDrawerItem = ComponentTreeItem & {
 	value: string;
 	label: string;
 	markCount: number;
@@ -164,6 +166,7 @@ type WorkspaceMarkTextureSource = {
 	subMeshDrawCallMap: Record<string, string[]>;
 	trianglelistDedupedData: TrianglelistDedupedFileNameJson;
 	subMeshTrianglelistDedupedData: SubMeshTrianglelistDedupedFileNameJson;
+	componentAliases: ComponentAliases;
 	drawIBAliasMap: Record<string, string>;
 	drawIBOrderMap: Record<string, number>;
 	drawIBKeysByLengthDesc: string[];
@@ -208,6 +211,10 @@ const workspaceSources = ref<WorkspaceMarkTextureSource[]>([]);
 const subMeshOptions = ref<string[]>([]);
 const drawCallOptions = ref<string[]>([]);
 
+const subMeshDrawerList = ref<HTMLElement>();
+const collapsedLods = ref<string[]>([]);
+const collapsedIBs = ref<string[]>([]);
+const renamingComponent = ref(false);
 const selectedSubMesh = ref('');
 const selectedDrawCall = ref('');
 const previewSyncSelectedSubMesh = ref(false);
@@ -592,37 +599,37 @@ const formatSubMeshLabel = (
 ): string => {
 	const componentInfo = source.drawIBComponentMap[subMeshName];
 	if (componentInfo) {
-		const alias = source.drawIBAliasMap[componentInfo.drawIB] || '';
+		const alias = source.componentAliases[subMeshName] || source.drawIBAliasMap[componentInfo.drawIB] || '';
 		const aliasSuffix = alias ? `.${alias}` : '';
 		return `[${source.tabName}] ${componentInfo.drawIB}-${componentInfo.componentIndex}${aliasSuffix}`;
 	}
 
-	// 回退：DisplayIB-Component.json 无此映射，使用旧格式
-	const alias = resolveDrawIBAlias(source, subMeshName);
+	// 回退：DrawIB-Component.json 无此映射，使用旧格式
+	const alias = source.componentAliases[subMeshName] || resolveDrawIBAlias(source, subMeshName);
 	return alias
 		? `[${source.tabName}] ${subMeshName} (${alias})`
 		: `[${source.tabName}] ${subMeshName}`;
 };
 
 const subMeshOptionItems = computed(() => {
-	return subMeshOptions.value
-		.map(selectionValue => {
-			const parsed = parseSubMeshSelection(selectionValue);
-			if (!parsed) {
-				return undefined;
-			}
-
-			const source = workspaceSources.value.find(item => item.tabId === parsed.tabId);
-			if (!source) {
-				return undefined;
-			}
-
-			return {
-				value: selectionValue,
-				label: formatSubMeshLabel(source, parsed.subMeshName),
-			};
-		})
-		.filter((item): item is { value: string; label: string } => !!item);
+	return subMeshOptions.value.flatMap(selectionValue => {
+		const parsed = parseSubMeshSelection(selectionValue);
+		const source = parsed && workspaceSources.value.find(item => item.tabId === parsed.tabId);
+		if (!parsed || !source) return [];
+		const component = source.drawIBComponentMap[parsed.subMeshName];
+		const drawIB = component?.drawIB || resolveSubMeshDrawIB(source, parsed.subMeshName) || parsed.subMeshName.split('-')[0] || parsed.subMeshName;
+		const ibAlias = source.drawIBAliasMap[drawIB];
+		const defaultLabel = component ? `Component ${component.componentIndex}` : parsed.subMeshName;
+		return [{
+			value: selectionValue,
+			label: formatSubMeshLabel(source, parsed.subMeshName),
+			tabId: source.tabId,
+			tabName: source.tabName || t('markTexture.tree.legacyLod'),
+			drawIB,
+			ibLabel: ibAlias ? `${drawIB} · ${ibAlias}` : drawIB,
+			componentLabel: source.componentAliases[parsed.subMeshName] || defaultLabel,
+		}];
+	});
 });
 
 const drawCallOptionItems = computed(() => {
@@ -645,8 +652,7 @@ const subMeshDrawerItems = computed<SubMeshDrawerItem[]>(() => {
 	return subMeshOptionItems.value.map(item => {
 		const markedTextures = subMeshMarkedTextureMap.value[item.value] ?? [];
 		return {
-			value: item.value,
-			label: item.label,
+			...item,
 			markCount: markedTextures.length,
 			isSelected: selectedSubMesh.value === item.value,
 			markedTextures,
@@ -654,6 +660,61 @@ const subMeshDrawerItems = computed<SubMeshDrawerItem[]>(() => {
 		};
 	});
 });
+
+const subMeshTree = computed(() => buildComponentTree(subMeshDrawerItems.value));
+const toggleCollapsed = (groups: string[], key: string): string[] =>
+	groups.includes(key) ? groups.filter(value => value !== key) : [...groups, key];
+
+const focusSubMeshInDrawer = async (selectionValue: string) => {
+	const item = subMeshOptionItems.value.find(item => item.value === selectionValue);
+	if (!item) return;
+	collapsedLods.value = collapsedLods.value.filter(key => key !== item.tabId);
+	collapsedIBs.value = collapsedIBs.value.filter(key => key !== componentIbKey(item.tabId, item.drawIB));
+	await nextTick();
+	// 只滚动左栏，不让 scrollIntoView 连带移动页面和 3D 预览。
+	const container = subMeshDrawerList.value;
+	const button = Array.from(container?.querySelectorAll<HTMLButtonElement>('[data-submesh]') || [])
+		.find(button => button.dataset.submesh === selectionValue);
+	if (!container || !button || selectedSubMesh.value !== selectionValue) return;
+	button.focus({ preventScroll: true });
+	const bounds = container.getBoundingClientRect();
+	const target = button.getBoundingClientRect();
+	if (target.top < bounds.top || target.bottom > bounds.bottom) {
+		container.scrollTo({
+			top: container.scrollTop + target.top - bounds.top - container.clientHeight / 2 + target.height / 2,
+			behavior: 'instant',
+		});
+	}
+};
+
+const selectPreviewSubMesh = (selectionValue: string) => {
+	selectSubMeshFromDrawer(selectionValue);
+	void focusSubMeshInDrawer(selectionValue);
+};
+
+const renameComponent = async (selectionValue: string) => {
+	if (renamingComponent.value) return;
+	const parsed = parseSubMeshSelection(selectionValue);
+	const source = parsed && workspaceSources.value.find(item => item.tabId === parsed.tabId);
+	if (!parsed || !source) return;
+	renamingComponent.value = true;
+	try {
+		const { value } = await ElMessageBox.prompt(t('markTexture.tree.aliasHint'), t('markTexture.tree.renameComponent'), {
+			inputValue: source.componentAliases[parsed.subMeshName] || '',
+			inputValidator: value => isComponentAlias(value) || t('markTexture.tree.invalidAlias'),
+			confirmButtonText: t('markTexture.tree.saveAlias'), cancelButtonText: t('markTexture.tree.cancelAlias'),
+		});
+		try {
+			source.componentAliases = await writeComponentAlias(source.workspacePath, parsed.subMeshName, value);
+		} catch (error) {
+			ElMessage.error(t('markTexture.tree.aliasSaveFailed', { reason: String(error) }));
+		}
+	} catch {
+		// 取消编辑不改变已保存的别名。
+	} finally {
+		renamingComponent.value = false;
+	}
+};
 
 const previewSubMeshTargets = computed<PreviewSubMeshTarget[]>(() => {
 	const selectedOnly = previewSyncSelectedSubMesh.value
@@ -872,11 +933,16 @@ const loadWorkspaceMarkTextureSource = async (
 				.catch(error => console.warn(`${logPrefix} failed to rebuild component map`, error));
 		}
 
-		const [componentContent, trianglelistContent, subMeshTrianglelistContent, drawIBConfigEntries] = await Promise.all([
+		const [componentContent, trianglelistContent, subMeshTrianglelistContent, drawIBConfigEntries, componentAliases] = await Promise.all([
 			readTextFile(componentJsonPath),
 			readTextFile(trianglelistJsonPath),
 			await exists(subMeshTrianglelistJsonPath) ? readTextFile(subMeshTrianglelistJsonPath) : '{}',
 			readDrawIBConfigFromWorkspace(workspacePath).catch(() => []),
+			readComponentAliases(workspacePath).catch(error => {
+				console.warn(`${logPrefix} Component aliases unreadable`, workspacePath, error);
+				ElMessage.warning(t('markTexture.tree.aliasLoadFailed', { lod: tab.name || 'LOD0' }));
+				return {};
+			}),
 		]);
 
 		const parsedComponent = JSON.parse(componentContent) as Record<string, unknown>;
@@ -957,6 +1023,7 @@ const loadWorkspaceMarkTextureSource = async (
 			subMeshDrawCallMap,
 			trianglelistDedupedData: parsedTrianglelist,
 			subMeshTrianglelistDedupedData: parsedSubMeshTrianglelist,
+			componentAliases,
 			drawIBAliasMap,
 			drawIBOrderMap,
 			drawIBKeysByLengthDesc: Object.keys(drawIBOrderMap).sort((a, b) => b.length - a.length),
@@ -1065,15 +1132,21 @@ const loadSubMeshOptions = async () => {
 		}
 
 		const tabsIndexPath = await join(workspacePath, 'Config', 'WorkPageTabs.json');
-		const tabsIndexContent = await readTextFile(tabsIndexPath);
-		if (loadToken !== subMeshOptionsLoadToken) return;
-		const tabsIndex = JSON.parse(tabsIndexContent) as WorkPageTabsIndex;
-		const tabs = Array.isArray(tabsIndex.tabs)
-			? tabsIndex.tabs
+		let tabs: WorkPageTabMeta[];
+		if (await exists(tabsIndexPath)) {
+			const tabsIndex = JSON.parse(await readTextFile(tabsIndexPath)) as WorkPageTabsIndex;
+			tabs = Array.isArray(tabsIndex.tabs) ? tabsIndex.tabs
 				.filter(tab => !!tab && typeof tab.id === 'string' && typeof tab.name === 'string')
 				.map(tab => ({ id: tab.id.trim(), name: tab.name.trim() || tab.id.trim() }))
-				.filter(tab => tab.id.length > 0)
-			: [];
+				.filter(tab => tab.id.length > 0) : [];
+		} else {
+			// 旧工作空间可以只有 LOD 目录，或直接在根目录保存提取结果。
+			const entries = await readDir(workspacePath);
+			tabs = entries.filter(entry => entry.isDirectory && /^LOD\d+$/i.test(entry.name))
+				.sort((a, b) => naturalCompare(a.name, b.name)).map(entry => ({ id: entry.name, name: entry.name }));
+			if (tabs.length === 0) tabs = [{ id: 'legacy-root', name: '' }];
+		}
+		if (loadToken !== subMeshOptionsLoadToken) return;
 
 		const sources = (
 			await mapWithConcurrency(
@@ -3173,62 +3246,76 @@ watch(activeChannelPreviewItem, (item) => {
 			<section class="left-card">
 				<div class="left-workspace">
 					<div class="submesh-side-column">
-						<nav class="submesh-drawer-list" aria-label="Submesh">
-							<section
-								v-for="subMesh in subMeshDrawerItems"
-								:key="subMesh.value"
-								class="submesh-drawer-item"
-								:class="{ 'is-selected': subMesh.isSelected }"
-							>
-								<div class="submesh-drawer-row">
-									<button
-										class="submesh-select-btn"
-										type="button"
-										:title="subMesh.label"
-										@click="selectSubMeshFromDrawer(subMesh.value)"
-										@contextmenu="openSubMeshContextMenu($event, subMesh.value)"
-									>
-										<span class="submesh-label">{{ subMesh.label }}</span>
-										<span v-if="subMesh.role" class="submesh-role-badge">{{ subMesh.role === 'face' ? 'F' : subMesh.role === 'neck' ? 'N' : 'E' }}</span>
-										<span class="submesh-count">{{ subMesh.markCount }}</span>
-									</button>
-								</div>
+						<nav ref="subMeshDrawerList" class="submesh-drawer-list" :aria-label="t('markTexture.tree.title')">
+							<section v-for="lod in subMeshTree" :key="lod.key" class="submesh-lod-group">
+								<button type="button" class="submesh-group-toggle lod-toggle" :aria-expanded="!collapsedLods.includes(lod.key)" @click="collapsedLods = toggleCollapsed(collapsedLods, lod.key)">
+									<el-icon :class="{ expanded: !collapsedLods.includes(lod.key) }"><ArrowRight /></el-icon><span>{{ lod.label }}</span><small>{{ lod.ibs.length }} IB</small>
+								</button>
+								<div v-if="!collapsedLods.includes(lod.key)" class="submesh-lod-content">
+									<section v-for="ib in lod.ibs" :key="ib.key" class="submesh-ib-group">
+										<button type="button" class="submesh-group-toggle ib-toggle" :aria-expanded="!collapsedIBs.includes(ib.key)" @click="collapsedIBs = toggleCollapsed(collapsedIBs, ib.key)">
+											<el-icon :class="{ expanded: !collapsedIBs.includes(ib.key) }"><ArrowRight /></el-icon><span :title="ib.label">{{ ib.label }}</span><small>{{ ib.items.length }}</small>
+										</button>
+										<div v-if="!collapsedIBs.includes(ib.key)" class="submesh-ib-content">
+											<section
+												v-for="subMesh in ib.items"
+												:key="subMesh.value"
+												class="submesh-drawer-item"
+												:class="{ 'is-selected': subMesh.isSelected }"
+											>
+												<div class="submesh-drawer-row">
+													<button
+														class="submesh-select-btn"
+														type="button"
+														:title="subMesh.label"
+														:data-submesh="subMesh.value"
+														:aria-current="subMesh.isSelected ? 'true' : undefined"
+														@click="selectSubMeshFromDrawer(subMesh.value)"
+														@contextmenu="openSubMeshContextMenu($event, subMesh.value)"
+													>
+														<span class="submesh-label">{{ subMesh.componentLabel }}</span>
+														<span v-if="subMesh.role" class="submesh-role-badge">{{ subMesh.role === 'face' ? 'F' : subMesh.role === 'neck' ? 'N' : 'E' }}</span>
+														<span class="submesh-count">{{ subMesh.markCount }}</span>
+													</button>
+													<button type="button" class="component-alias-button" :disabled="renamingComponent" :title="t('markTexture.tree.renameComponent')" :aria-label="`${t('markTexture.tree.renameComponent')}: ${subMesh.label}`" @click="renameComponent(subMesh.value)"><el-icon><Edit /></el-icon></button>
+												</div>
 
-								<div class="submesh-marked-list">
-									<button
-										v-for="summary in subMesh.markedTextures"
-										:key="summary.id"
-										class="submesh-marked-texture"
-										type="button"
-										:title="summary.textureName"
-										@click="selectMarkedTextureSummary(subMesh.value, summary)"
-									>
-										<span class="submesh-mark-preview" @click.stop="openMarkedTexturePreview(summary)">
-											<img
-												:key="summary.previewKey"
-												:src="summary.preview"
-												:alt="summary.markName"
-												:style="{ opacity: summary.preview ? 1 : 0 }"
-												@load="handlePreviewImageLoad"
-												@error="handlePreviewImageError"
-											/>
-										</span>
-										<span class="submesh-mark-meta">
-											<span class="submesh-mark-meta-row">
-												<span class="submesh-mark-name">{{ summary.markName }}</span>
-												<span
-													class="submesh-mark-status"
-													:class="summary.status === 'applied' ? 'is-applied' : 'is-pending'"
-												>
-													{{ summary.status === 'applied' ? '已应用' : '未应用' }}
-												</span>
-											</span>
-											<span class="submesh-mark-style">{{ summary.markStyle }}</span>
-										</span>
-									</button>
-									<div v-if="subMesh.markedTextures.length === 0" class="submesh-empty-mark">
-										-
-									</div>
+												<div v-if="subMesh.markedTextures.length" class="submesh-marked-list">
+													<button
+														v-for="summary in subMesh.markedTextures"
+														:key="summary.id"
+														class="submesh-marked-texture"
+														type="button"
+														:title="summary.textureName"
+														@click="selectMarkedTextureSummary(subMesh.value, summary)"
+													>
+														<span class="submesh-mark-preview" @click.stop="openMarkedTexturePreview(summary)">
+															<img
+																:key="summary.previewKey"
+																:src="summary.preview"
+																:alt="summary.markName"
+																:style="{ opacity: summary.preview ? 1 : 0 }"
+																@load="handlePreviewImageLoad"
+																@error="handlePreviewImageError"
+															/>
+														</span>
+														<span class="submesh-mark-meta">
+															<span class="submesh-mark-meta-row">
+																<span class="submesh-mark-name">{{ summary.markName }}</span>
+																<span
+																	class="submesh-mark-status"
+																	:class="summary.status === 'applied' ? 'is-applied' : 'is-pending'"
+																>
+																	{{ summary.status === 'applied' ? '已应用' : '未应用' }}
+																</span>
+															</span>
+															<span class="submesh-mark-style">{{ summary.markStyle }}</span>
+														</span>
+													</button>
+												</div>
+											</section>
+										</div>
+									</section>
 								</div>
 							</section>
 						</nav>
@@ -3562,13 +3649,17 @@ watch(activeChannelPreviewItem, (item) => {
 								type="button"
 								class="preview-visibility-sync"
 								:class="{ 'is-active': previewSyncSelectedSubMesh }"
+								:aria-pressed="previewSyncSelectedSubMesh"
 								:title="t('markTexture.preview.syncVisibility')"
 								:aria-label="t('markTexture.preview.syncVisibility')"
 								@click="previewSyncSelectedSubMesh = !previewSyncSelectedSubMesh"
 							>
 								⇆
 							</button>
+							<div class="preview-visibility-rows" :class="{ 'is-synced': previewSyncSelectedSubMesh }" :role="previewSyncSelectedSubMesh ? 'radiogroup' : 'group'" :aria-label="t('markTexture.preview.visibilityControls')">
 							<template v-for="subMesh in subMeshDrawerItems" :key="subMesh.value">
+								<button v-if="previewSyncSelectedSubMesh" type="button" role="radio" class="preview-visibility-button preview-visibility-select" :class="{ 'is-current': subMesh.isSelected, 'needs-review': previewReviewSubMeshMap[subMesh.value] }" :aria-checked="subMesh.isSelected" :title="subMesh.label" :aria-label="subMesh.label" @click="selectPreviewSubMesh(subMesh.value)">{{ subMesh.isSelected ? '●' : '○' }}</button>
+								<template v-else>
 								<button
 									type="button"
 									class="preview-visibility-button preview-visibility-mute"
@@ -3577,8 +3668,7 @@ watch(activeChannelPreviewItem, (item) => {
 										'is-current': subMesh.isSelected,
 										'needs-review': previewReviewSubMeshMap[subMesh.value],
 									}"
-									:disabled="previewSyncSelectedSubMesh"
-									:title="`${t('markTexture.preview.muteSubmesh')}: ${subMesh.label}`"
+																		:title="`${t('markTexture.preview.muteSubmesh')}: ${subMesh.label}`"
 									:aria-label="`${t('markTexture.preview.muteSubmesh')}: ${subMesh.label}`"
 									@click="togglePreviewSubMeshMuted(subMesh.value)"
 								>
@@ -3592,14 +3682,15 @@ watch(activeChannelPreviewItem, (item) => {
 										'is-current': subMesh.isSelected,
 										'needs-review': previewReviewSubMeshMap[subMesh.value],
 									}"
-									:disabled="previewSyncSelectedSubMesh"
-									:title="`${t('markTexture.preview.soloSubmesh')}: ${subMesh.label}`"
+																		:title="`${t('markTexture.preview.soloSubmesh')}: ${subMesh.label}`"
 									:aria-label="`${t('markTexture.preview.soloSubmesh')}: ${subMesh.label}`"
 									@click="togglePreviewSubMeshSolo(subMesh.value)"
 								>
 									S
 								</button>
+								</template>
 							</template>
+							</div>
 						</nav>
 						<SubmeshPostProcessPreview
 							:workspace-path="getSelectedWorkspaceSource()?.workspacePath || ''"
@@ -3753,9 +3844,22 @@ watch(activeChannelPreviewItem, (item) => {
 	box-shadow: inset 0 0 0 1px rgba(var(--theme-surface-tint-rgb), 0.05);
 }
 
-.submesh-drawer-row {
-	min-height: 38px;
-}
+.submesh-drawer-row { display: flex; align-items: center; min-height: 38px; }
+.submesh-drawer-row .submesh-select-btn { flex: 1; }
+.submesh-lod-content, .submesh-ib-content { display: flex; flex-direction: column; gap: 6px; margin-left: 8px; padding-left: 6px; border-left: 1px solid rgba(var(--theme-surface-tint-rgb), 0.12); }
+.submesh-group-toggle { width: 100%; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 9px 4px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.submesh-group-toggle:hover { background: rgba(var(--theme-surface-tint-rgb), 0.06); }
+.submesh-group-toggle span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.submesh-group-toggle small { opacity: 0.55; }
+.submesh-group-toggle .el-icon { flex: none; transition: transform 120ms ease; }
+.submesh-group-toggle .expanded { transform: rotate(90deg); }
+.lod-toggle { font-size: 13px; font-weight: 650; }
+.ib-toggle { font-size: 12px; }
+.component-alias-button { flex: none; width: 28px; height: 30px; display: grid; place-items: center; margin-right: 3px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; opacity: 0.5; cursor: pointer; }
+.component-alias-button:hover, .component-alias-button:focus-visible { opacity: 1; background: rgba(var(--theme-surface-tint-rgb), 0.12); }
+.preview-visibility-rows { flex: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 29px; }
+.preview-visibility-rows.is-synced { grid-template-columns: minmax(0, 1fr); }
+.preview-visibility-select { grid-column: 1 / -1; font-size: 15px !important; }
 
 .submesh-select-btn,
 .submesh-marked-texture {
@@ -4721,10 +4825,8 @@ watch(activeChannelPreviewItem, (item) => {
 
 .preview-visibility-matrix {
 	min-height: 0;
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	grid-auto-rows: 29px;
-	align-content: start;
+	display: flex;
+	flex-direction: column;
 	overflow-y: auto;
 	overflow-x: hidden;
 	border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.2);
@@ -4783,6 +4885,8 @@ watch(activeChannelPreviewItem, (item) => {
 }
 
 .preview-visibility-sync {
+	min-height: 29px;
+	flex: none;
 	grid-column: 1 / -1;
 	border-right: 0 !important;
 	font-size: 16px !important;

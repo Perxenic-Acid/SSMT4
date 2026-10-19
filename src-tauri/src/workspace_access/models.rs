@@ -140,6 +140,9 @@ pub struct PortableWorkspaceMetadataV1 {
 #[serde(rename_all = "camelCase")]
 pub struct PortableLodV1 {
     pub name: String,
+    // 可选增量字段：旧发布和旧客户端都可继续读取 schema v1。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub component_aliases: crate::workspace::component_aliases::ComponentAliases,
     #[serde(rename = "drawIB", alias = "drawIb")]
     pub draw_ib: Vec<HashAlias>,
     #[serde(rename = "skipIB", alias = "skipIb")]

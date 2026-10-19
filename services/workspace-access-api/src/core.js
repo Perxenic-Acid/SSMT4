@@ -62,8 +62,9 @@ export function normalizeMetadata(input, now) {
     const drawIB = normalizeHashAliases(lod.drawIB ?? lod.drawIb, 8, 16);
     const skipIB = normalizeSkipIB(lod.skipIB ?? lod.skipIb);
     const vsCheck = normalizeVS(lod.vsCheck);
-    if (!drawIB || !skipIB || !vsCheck || drawIB.length === 0) return { error: ERROR_CODES.INVALID_METADATA };
-    lods.push({ name, drawIB, skipIB, vsCheck });
+    const componentAliases = normalizeComponentAliases(lod.componentAliases);
+    if (!drawIB || !skipIB || !vsCheck || !componentAliases || drawIB.length === 0) return { error: ERROR_CODES.INVALID_METADATA };
+    lods.push({ name, drawIB, skipIB, vsCheck, ...(Object.keys(componentAliases).length ? { componentAliases } : {}) });
   }
   return {
     value: {
@@ -82,6 +83,20 @@ export function normalizeMetadata(input, now) {
       fullData: normalizeFullData(input.fullData),
     },
   };
+}
+
+function normalizeComponentAliases(value) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length > 4096) return null;
+  const result = [];
+  for (const [key, alias] of entries) {
+    // 键是 LOD 内的提取目录标识，别名只作为文本保存，不能变成路径或 Component 编号。
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(key) || typeof alias !== 'string' || [...alias].length > 128 || /[\u0000-\u001f\u007f]/u.test(alias)) return null;
+    if (alias.trim()) result.push([key, alias.trim()]);
+  }
+  return Object.fromEntries(result);
 }
 
 function normalizeStringList(value, maxItems, maxLength) {

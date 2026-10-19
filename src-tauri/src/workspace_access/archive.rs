@@ -270,6 +270,7 @@ pub(crate) fn validate_portable_metadata(metadata: &PortableWorkspaceMetadataV1)
     let mut names = HashSet::new();
     metadata.lods.iter().all(|lod| {
         is_safe_lod_name(&lod.name)
+            && crate::workspace::component_aliases::valid_component_aliases(&lod.component_aliases)
             && names.insert(lod.name.to_uppercase())
             && !lod.draw_ib.is_empty()
             && lod
@@ -719,6 +720,7 @@ mod tests {
             game_preset: "SRMI".to_string(),
             workspace_name: "Test".to_string(),
             lods: vec![crate::workspace_access::models::PortableLodV1 {
+                component_aliases: Default::default(),
                 name: "..".to_string(),
                 draw_ib: vec![crate::workspace_access::models::HashAlias {
                     hash: "0f8a6711".to_string(),

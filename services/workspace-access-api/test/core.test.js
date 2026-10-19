@@ -11,6 +11,17 @@ const draft = {
   fullData: { available: false },
 };
 
+test('Component aliases round trip without changing keys, and old metadata stays unchanged', () => {
+  const lod = draft.lods[0];
+  const aliases = { '0f8a6711-16884-0': ' 面部.高光 ', '0f8a6711-25830-16884': 'Body', '0f8a6711-3-0': '' };
+  const normalized = normalizeMetadata({ ...draft, lods: [{ ...lod, componentAliases: aliases }] }, new Date().toISOString());
+  assert.deepEqual(normalized.value.lods[0].componentAliases, { '0f8a6711-16884-0': '面部.高光', '0f8a6711-25830-16884': 'Body' });
+  assert.equal(normalizeMetadata(draft, new Date().toISOString()).value.lods[0].componentAliases, undefined);
+  for (const componentAliases of [null, [], { '../other': 'Face' }, { mesh: 'bad\nname' }, { mesh: 'x'.repeat(129) }]) {
+    assert.equal(normalizeMetadata({ ...draft, lods: [{ ...lod, componentAliases }] }, new Date().toISOString()).error, 'INVALID_METADATA');
+  }
+});
+
 test('normalizes metadata and never trusts client timestamps', () => {
   const result = normalizeMetadata(draft, '2026-08-14T00:00:00.000Z');
   assert.equal(result.value.uploadedAt, '2026-08-14T00:00:00.000Z');

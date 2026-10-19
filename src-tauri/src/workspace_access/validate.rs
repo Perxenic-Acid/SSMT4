@@ -360,7 +360,16 @@ fn read_portable_lods(
                 continue;
             }
         };
-        lods.push(map_lod(&tab.name, config, errors, warnings));
+        let mut lod = map_lod(&tab.name, config, errors, warnings);
+        match crate::workspace::component_aliases::read_component_aliases(&lod_path) {
+            Ok(aliases) => lod.component_aliases = aliases,
+            Err(error) => errors.push(issue(
+                "INVALID_COMPONENT_ALIASES",
+                Some(tab.name.clone()),
+                error,
+            )),
+        }
+        lods.push(lod);
     }
     lods
 }
@@ -449,6 +458,7 @@ fn map_lod(
         });
     }
     PortableLodV1 {
+        component_aliases: Default::default(),
         name: name.to_string(),
         draw_ib,
         skip_ib,

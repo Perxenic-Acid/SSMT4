@@ -627,6 +627,8 @@
   "settings": {
     "sections": {
       "general": "通用",
+      "shortcuts": "快捷键",
+      "shortcutsDesc": "窗口唤起、启动控制台与纯净启动方式",
       "generalDesc": "存储位置与连接偏好",
       "appearance": "外观与工作流",
       "appearanceDesc": "语言、标记方式与视觉舒适度",
@@ -1429,6 +1431,17 @@
       "markStyle": "标记风格",
       "subMesh": "SubMesh / LOD",
       "drawCall": "DrawCall"
+    },
+    "tree": {
+      "saveAlias": "保存",
+      "cancelAlias": "取消",
+      "title": "LOD、IB 与 Component",
+      "legacyLod": "LOD（旧工作空间）",
+      "renameComponent": "编辑 Component 别名",
+      "aliasHint": "最多 128 个字符。留空恢复默认名称；不会更改目录、编号或 Mod 引用。",
+      "invalidAlias": "别名不能超过 128 个字符，也不能包含换行等控制字符。",
+      "aliasSaveFailed": "保存 Component 别名失败：{reason}",
+      "aliasLoadFailed": "{lod} 的 Component 别名无法读取，暂时显示默认名称；原文件已保留。"
     },
     "preview": {
       "title": "SubMesh 3D 预览",
