@@ -201,6 +201,7 @@ pub fn run() {
             commands::game_launcher::launch_programs,
             commands::launch_console::write_launch_console,
             commands::game_launcher::file_md5,
+            commands::ssmt_runtime::resolve_ssmt_runtime_source,
             commands::file_locks::query_file_locks,
             commands::file_locks::terminate_file_lock_owners,
             commands::file_locks::rename_mod_with_retry,

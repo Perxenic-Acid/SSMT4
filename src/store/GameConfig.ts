@@ -97,6 +97,8 @@ export type GameConfig = {
     huntingMode?: HuntingMode;
     useShell?: boolean;
     useUpx?: boolean;
+    /** 锁定当前游戏目录中的 Runtime DLL，禁止在线更新和随包覆盖。 */
+    lockRuntimeUpdates?: boolean;
     /**
      * Whether the user has explicitly chosen a DLL packing option.
      * When false/undefined, GIMI defaults to UPX and preset changes may auto-select UPX.
@@ -193,6 +195,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             launchTargetProgram: config.launchTargetProgram !== false,
             useUpx,
             useUpxManuallySet,
+            lockRuntimeUpdates: config.lockRuntimeUpdates === true,
             extraDll,
             extraDlls,
             useShell: extraDlls.length > 0 ? false : !!config.useShell,
@@ -237,6 +240,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             useShell: false,
             useUpx: false,
             useUpxManuallySet: false,
+            lockRuntimeUpdates: false,
             delay: 100,
             autoExitSeconds: 5,
             extraDll: '',

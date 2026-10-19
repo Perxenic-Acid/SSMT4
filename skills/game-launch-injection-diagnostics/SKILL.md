@@ -37,7 +37,7 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 - DLSS5 `0.2.1+` 插件包的旧清单可能仍声明 `dlss5-swapper`、`dlss5-adapter`、`dlss5-payload`，这些仅对该插件版本及 ID 组合视为可选集成；旧冷路线版本、其他插件或依赖仍执行原预检，不能改写已安装清单。最后运行状态应从当前路线实际使用的 ReShade 日志读取；`calls=0` 的 Migoto 日志不代表未注入，Feature 18 评估记录也不等于 NR 持续生效或 Mod 画面通过。发现深度源尺寸与输出不符时，提示用户检查 ReShade Generic Depth 候选项。
 - 外部创建的进程不归注入器所有。失败时不得结束游戏；远程线程超时后不能释放仍可能被读取的参数或结束远程线程。
 - 保留额外 DLL 顺序与已启用 PluginHost 的启动入口；没有插件时不要求插件文件。真实插件组合与测试 Host 是不同证据。
-- 运行时部署从应用资源取得 SSMT Runtime，设置页有意保留 XXMI 上游只读 Changelog，不重复撰写上游说明；阅读 Changelog 不得触发上游 DLL 安装。更新失败用非模态横幅并保留已有文件；首次安装无旧文件才停止。复制校验与 UPX 都在同目录暂存文件完成，最后一次 rename 替换，不能预先删除旧文件或随后再覆盖注入器。回归入口为 `scripts/tests/test-runtime-sync.mjs`；纯净启动跳过这些部署。
+- Runtime 来源、锁定与云端基线见 [运行时更新说明](../../docs/runtime-updates.md)。先确认运行中 ssmt4.exe 的完整路径；源码资源、Debug 资源和安装目录资源不是同一个位置。DX11 从 SSMT Runtime 的 rolling Release 校验资产大小、SHA256SUMS、单 DLL 归档和 PE 版本后缓存，并在随包、缓存、已部署版本中选较新项；禁止旧包按哈希差异降级覆盖。按游戏锁定时保留现有 DLL，跳过在线检查、覆盖及 UPX，缺失才从随包补齐；核心配置包解压不得夹带覆盖 Runtime DLL。设置页有意保留 XXMI 上游只读 Changelog，不触发上游 DLL 安装。更新失败仅非模态横幅，仍有可用 DLL 就继续启动；复制校验与 UPX 在同目录暂存文件完成，最后一次 rename 替换，不能预先删除旧文件或随后再覆盖注入器。回归 `scripts/tests/test-runtime-sync.mjs` 与后端 `commands::ssmt_runtime::tests`；纯净启动跳过部署。真实 GitHub 构建曾因 fork 无版本标签生成 0.0.0.0，须用源码祖先基线保证本地与云端一致，并拒绝零版本发布；回归 `runtime/tests/version-generation/Run-Tests.ps1`。
 - 先按调用链区分 GIMI Core Package 的正常更新详情、XXMI 上游只读 Changelog 与 Runtime DLL 部署；上游说明中出现“XXMI Launcher”不能证明启动了旧 DLL 更新流程，不因此删除正常 Core Package 更新入口。
 - 用独立 `SSMT_INJECTOR_REQUIRE_ADMIN=OFF` 的夹具构建验证真实进程注入，正式目标继续使用管理员 manifest。脚本面向 Windows PowerShell 5 时保留 UTF-8 BOM，并显式按 UTF-8 读取 JSONL。
 - 没有游戏时交付可执行的原生目标、日志脚本和测试步骤；区分旧客户端通过 CLI 选择新模式与新前端的集成路径。不要把夹具加载成功当作反作弊、图形初始化或 Mod 渲染已验收。

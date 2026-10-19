@@ -13,6 +13,7 @@ pub mod gimi_settings;
 pub mod mod_library;
 pub mod mod_manager;
 pub mod recycle_bin;
+pub mod ssmt_runtime;
 pub mod texture_mod_maker;
 pub mod vscheck;
 pub mod workspace_merge;

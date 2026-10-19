@@ -76,6 +76,7 @@ export interface SpecificIbDumpResult {
 export interface RuntimeSyncResult {
   status: 'updated' | 'unchanged' | 'kept_existing' | 'unavailable'
   error?: unknown
+  warning?: string
 }
 
 const normalizeSpecificIbDumpLogicName = (logicName: unknown, gamePreset: unknown): string => {
@@ -202,11 +203,30 @@ export class MigotoManager {
   ): Promise<RuntimeSyncResult> {
     const effectiveConfig = config || await ResourceManager.loadGameConfig(gameName)
     const dllSource = await ResourceManager.resolveMigotoDllSource(effectiveConfig)
-    const sourcePath = dllSource.sourcePath
     const destPath = await join(migotoDir, dllSource.targetFileName)
+    // 锁定保护玩家指定的 DLL，包括无法读取版本的自定义构建；不做联网、打包或覆盖。
+    if (effectiveConfig?.lockRuntimeUpdates === true && await exists(destPath)) {
+      return { status: 'unchanged' }
+    }
 
-    return this.syncRuntimeFile(sourcePath, destPath,
+    let sourcePath = dllSource.sourcePath
+    let warning: string | undefined
+    if (dllSource.targetFileName === 'd3d11.dll' && effectiveConfig?.lockRuntimeUpdates !== true) {
+      try {
+        const resolved = await invoke<{ sourcePath: string; version: string; origin: string; warning?: string }>(
+          'resolve_ssmt_runtime_source', { bundledPath: sourcePath, targetPath: destPath },
+        )
+        sourcePath = resolved.sourcePath
+        warning = resolved.warning || undefined
+      } catch (error) {
+        // 来源解析失败时不能退回无条件覆盖：否则旧安装包又会盖掉较新的本地 DLL。
+        return { status: await exists(destPath) ? 'kept_existing' : 'unavailable', error }
+      }
+    }
+    if (sourcePath === destPath) return { status: 'unchanged', warning }
+    const result = await this.syncRuntimeFile(sourcePath, destPath,
       dllSource.targetFileName === 'd3d11.dll' ? prepareStagedDll : undefined)
+    return { ...result, warning }
   }
 
   /**

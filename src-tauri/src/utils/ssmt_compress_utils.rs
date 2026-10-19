@@ -329,6 +329,19 @@ impl SSMTCompressUtils {
     pub fn extract_zip_archive<F>(
         archive_path: &Path,
         dest_dir: &Path,
+        on_progress: F,
+    ) -> Result<ExtractResult, String>
+    where
+        F: FnMut(u64, u64),
+    {
+        Self::extract_zip_archive_excluding(archive_path, dest_dir, &[], on_progress)
+    }
+
+    /// 排除指定文件名，供核心配置包更新保护由 Runtime 更新链管理的 DLL。
+    pub fn extract_zip_archive_excluding<F>(
+        archive_path: &Path,
+        dest_dir: &Path,
+        excluded_files: &[&str],
         mut on_progress: F,
     ) -> Result<ExtractResult, String>
     where
@@ -393,6 +406,12 @@ impl SSMTCompressUtils {
             }
 
             let outpath = Self::archive_entry_output_path(dest_dir, &target_name)?;
+            if outpath.file_name().and_then(|name| name.to_str()).is_some_and(|name|
+                excluded_files.iter().any(|excluded| name.eq_ignore_ascii_case(excluded))) {
+                processed_entries += 1;
+                on_progress(processed_entries, total_entries);
+                continue;
+            }
 
             if name.ends_with('/') {
                 fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;

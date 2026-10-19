@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use crate::utils::ssmt_compress_utils::SSMTCompressUtils;
 
 #[tauri::command]
-pub async fn extract_zip_archive(zip_path: String, dest_dir: String) -> Result<(), String> {
+pub async fn extract_zip_archive(
+    zip_path: String,
+    dest_dir: String,
+    preserve_runtime_dlls: Option<bool>,
+) -> Result<(), String> {
     let zip_path = PathBuf::from(&zip_path);
     let dest_dir = PathBuf::from(&dest_dir);
 
@@ -19,7 +23,12 @@ pub async fn extract_zip_archive(zip_path: String, dest_dir: String) -> Result<(
             .map_err(|e| format!("Failed to create destination: {}", e))?;
     }
 
-    SSMTCompressUtils::extract_zip_archive(&zip_path, &dest_dir, |_current, _total| {}).map(|_| ())
+    let excluded: &[&str] = if preserve_runtime_dlls.unwrap_or(false) {
+        &["d3d11.dll", "d3d12.dll"]
+    } else {
+        &[]
+    };
+    SSMTCompressUtils::extract_zip_archive_excluding(&zip_path, &dest_dir, excluded, |_current, _total| {}).map(|_| ())
 }
 
 /// 通用解压命令:按扩展名自动选择 zip / 7z / rar 解压器,把压缩包解压到

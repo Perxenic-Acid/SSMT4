@@ -513,7 +513,7 @@ export class LaunchGame {
             return null;
         }
 
-        // 启动前将随应用提供的 SSMT Runtime 部署到 Migoto 目录。
+        // 静默发现 SSMT Runtime 发布并部署；锁定时保留当前 DLL，失败时使用已有版本。
         // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
         const useUpx = getEffectiveUseUpx(migotoCfg);
         const environmentReady = await this.prepareGameEnvironment(
@@ -923,12 +923,23 @@ export class LaunchGame {
     }
 
     private static runtimeSyncReady(result: RuntimeSyncResult, file: string): boolean {
-        if (result.status === "updated" || result.status === "unchanged") return true;
+        if (result.status === "updated" || result.status === "unchanged") {
+            if (result.warning) {
+                console.warn(`SSMT Runtime 在线更新失败 (${file})：`, result.warning);
+                ElMessage.warning({
+                    message: t("launchGame.messages.ssmtRuntimeRemoteFallback", { reason: result.warning }),
+                    showClose: true,
+                    duration: 10000,
+                });
+            }
+            return true;
+        }
         console.warn(`SSMT Runtime 同步失败 (${file})：`, result.error);
+        const reason = result.error instanceof Error ? result.error.message : String(result.error);
         ElMessage.warning({
             message: t(result.status === "kept_existing"
                 ? "launchGame.messages.ssmtRuntimeUpdateFallback"
-                : "launchGame.messages.ssmtRuntimeUnavailable", { file }),
+                : "launchGame.messages.ssmtRuntimeUnavailable", { file, reason }),
             showClose: true,
             duration: 10000,
         });

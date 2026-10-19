@@ -50,6 +50,7 @@ async function harness(t, options = {}) {
     exists: async file => fs.access(file).then(() => true, () => false),
     mkdir: fs.mkdir,
     readTextFile: file => fs.readFile(file, 'utf8'),
+    writeFile: fs.writeFile,
     writeTextFile: (file, text) => fs.writeFile(file, text),
     copyFile: async (from, to) => {
       writes.push({ from, to });
@@ -74,6 +75,11 @@ async function harness(t, options = {}) {
     '@tauri-apps/plugin-fs': fsMocks,
     '@tauri-apps/api/core': { invoke: async (command, args) => {
       calls.push({ command, args });
+      if (command === 'resolve_ssmt_runtime_source') {
+        if (options.resolveError) throw new Error(options.resolveError);
+        return { sourcePath: options.keepNewer ? target : source, version: '1.2.2.24',
+          origin: options.keepNewer ? 'existing' : 'bundled', warning: options.remoteWarning };
+      }
       if (command === 'file_md5') {
         if (options.fail === 'hash' && args.path === source) throw new Error('hash denied');
         return createHash('md5').update(await fs.readFile(args.path)).digest('hex');
@@ -105,6 +111,7 @@ async function harness(t, options = {}) {
         return options.shade ?? null;
       }
       if (command === 'launch_programs') return null;
+      if (command === 'extract_zip_archive') return null;
       if (command === 'execute_external_program') return options.upxResult?.(args) ?? { code: 1, stdout: '', stderr: 'UPX failed' };
       assert.fail(`Unexpected IPC: ${command}`);
     } },
@@ -124,13 +131,13 @@ async function harness(t, options = {}) {
     ...mocks,
     pinia: { defineStore: (_id, setup) => { const store = setup(); return () => store; } },
     './GlobalConfig': { GlobalConfig: globalConfig },
-    '../utils/SSMTFileUtils': {},
+    '../utils/SSMTFileUtils': { SSMTFileUtils: { JoinPath: async (...parts) => path.join(...parts) } },
     '../utils/SSMTJsonUtils': {},
-    './GameConfig': {},
+    './GameConfig': { GameConfigManager: { loadGameConfig: async () => config } },
     './GamePreset': {},
     '@tauri-apps/plugin-http': { fetch: async url => {
       calls.push({ command: 'fetch', url });
-      return { ok: true, json: async () => [
+      return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer, json: async () => [
         { tag_name: 'v2', body: 'upstream notes', assets: [{ name: 'runtime.zip', browser_download_url: 'https://example.com/runtime.zip' }] },
         { tag_name: 'draft', draft: true },
         { tag_name: 'preview', prerelease: true },
@@ -196,6 +203,97 @@ test('DX12 retains its bundled source and never calls DX11 packing', async t => 
     { gamePreset: 'ZZMIDX12' }, async () => assert.fail('DX12 must not use UPX'));
   assert.equal(result.status, 'updated');
   assert.equal(await fs.readFile(path.join(h.migotoDir, 'd3d12.dll'), 'utf8'), 'DX12 Runtime');
+  assert.equal(h.calls.some(call => call.command === 'resolve_ssmt_runtime_source'), false);
+});
+
+test('a newer deployed runtime is kept without repacking or bundled replacement', async t => {
+  const h = await harness(t, { keepNewer: true });
+  const result = await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config,
+    () => assert.fail('A newer existing DLL must not be repacked'));
+  assert.equal(result.status, 'unchanged');
+  assert.equal(h.writes.length, 0);
+  assert.equal(await fs.readFile(h.target, 'utf8'), 'previous working Runtime');
+});
+
+for (const gamePreset of ['GIMI', 'ZZMIDX12']) {
+  test(`${gamePreset} runtime lock preserves custom DLL bytes and skips discovery and UPX`, async t => {
+    const h = await harness(t, { gamePreset, config: { lockRuntimeUpdates: true }, useUpx: true });
+    const target = path.join(h.migotoDir, gamePreset === 'ZZMIDX12' ? 'd3d12.dll' : 'd3d11.dll');
+    await fs.writeFile(target, 'custom DLL without version metadata');
+    const result = await h.migoto.applySSMTRuntimeToMigotoDir(gamePreset, h.migotoDir, h.config,
+      () => assert.fail('A locked DLL must never be repacked'));
+    assert.equal(result.status, 'unchanged');
+    assert.equal(h.calls.length, 0);
+    assert.equal(h.writes.length, 0);
+    assert.equal(await fs.readFile(target, 'utf8'), 'custom DLL without version metadata');
+  });
+}
+
+test('runtime lock bootstraps a missing DLL from the bundle without going online', async t => {
+  const h = await harness(t, { noExisting: true, config: { lockRuntimeUpdates: true } });
+  assert.equal((await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config)).status, 'updated');
+  assert.equal(await fs.readFile(h.target, 'utf8'), 'adapted SSMT Runtime');
+  assert.equal(h.calls.some(call => call.command === 'resolve_ssmt_runtime_source'), false);
+});
+
+test('runtime resolution failure preserves the deployed DLL instead of downgrading', async t => {
+  const h = await harness(t, { resolveError: 'cache unreadable' });
+  assert.equal((await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config)).status, 'kept_existing');
+  assert.equal(h.writes.length, 0);
+  assert.equal(await fs.readFile(h.target, 'utf8'), 'previous working Runtime');
+});
+
+test('source resolution failure with no installed DLL does not deploy an unverified fallback', async t => {
+  const h = await harness(t, { noExisting: true, resolveError: 'no valid runtime source' });
+  assert.equal((await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config)).status, 'unavailable');
+  assert.equal(h.writes.length, 0);
+});
+
+for (const locked of [true, false]) {
+  test(`core package update excludes runtime DLLs; locked=${locked}`, async t => {
+    const h = await harness(t, { config: { lockRuntimeUpdates: locked } });
+    await h.resourceManager.install3DMigotoUpdate('GIMI', 'https://example.com/package.zip', undefined, h.migotoDir);
+    const extract = h.calls.find(call => call.command === 'extract_zip_archive');
+    assert.equal(extract.args.preserveRuntimeDlls, true);
+    assert.equal(await fs.readFile(h.target, 'utf8'), 'previous working Runtime');
+  });
+}
+
+test('runtime lock survives config save and reload independently for each game', async t => {
+  const h = await harness(t);
+  const { GameConfigManager } = load('../../src/store/GameConfig.ts', {
+    pinia: { defineStore: (_id, setup) => { const store = setup(); return () => store; } },
+    './GlobalConfig': { GlobalConfig: { GlobalGamesFolder: async () => h.root } },
+    '../utils/SSMTFileUtils': { SSMTFileUtils: { JoinPath: async (...parts) => path.join(...parts) } },
+    '@tauri-apps/plugin-fs': { exists: file => fs.access(file).then(() => true, () => false),
+      mkdir: fs.mkdir, readTextFile: file => fs.readFile(file, 'utf8'), writeTextFile: fs.writeFile },
+    '../utils/RecycleBin': {},
+    './GamePreset': { isValidGamePreset: () => true, resolveGamePresetByGameName: () => '' },
+  });
+  await GameConfigManager.createNewConfig('custom', { lockRuntimeUpdates: true });
+  await GameConfigManager.createNewConfig('other');
+  assert.equal((await GameConfigManager.loadGameConfig('custom')).lockRuntimeUpdates, true);
+  assert.equal((await GameConfigManager.loadGameConfig('other')).lockRuntimeUpdates, false);
+  await GameConfigManager.saveGameConfig('custom', { lockRuntimeUpdates: false });
+  assert.equal((await GameConfigManager.loadGameConfig('custom')).lockRuntimeUpdates, false);
+});
+
+test('online update failure shows its reason once without blocking launch', async t => {
+  const h = await harness(t, { remoteWarning: 'GitHub timed out' });
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));
+  const warnings = h.messages.filter(({ kind }) => kind === 'warning');
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].value.message.includes('GitHub timed out'));
+  assert.equal(h.dialogs.length, 0);
+  assert.ok(h.calls.some(call => call.command === 'launch_programs'));
+});
+
+test('normal launch with locked runtime leaves the DLL intact and still starts the injector', async t => {
+  const h = await harness(t, { config: { lockRuntimeUpdates: true }, useUpx: true });
+  await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));
+  assert.equal(await fs.readFile(h.target, 'utf8'), 'previous working Runtime');
+  assert.equal(h.calls.some(call => ['resolve_ssmt_runtime_source', 'execute_external_program'].includes(call.command)), false);
+  assert.ok(h.calls.some(call => call.command === 'launch_programs'));
 });
 
 for (const fail of ['replace', 'run-replace', 'missing-source', 'upx', 'missing-upx']) {

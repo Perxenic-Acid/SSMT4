@@ -1336,7 +1336,7 @@ defineExpose({
             </div>
 
             <div v-if="activeTab === 'dllUpdate'" class="tab-pane">
-              <!-- 运行时由 SSMT 静默部署，这里只展示 XXMI 上游的发布记录。 -->
+              <!-- SSMT Runtime 与 XXMI 上游发布记录分开；记录本身不触发安装。 -->
               <div class="dll-top-bar runtime-top-bar">
                 <div class="dll-version-badge">
                   <div class="dll-version-badge-inner">
@@ -1350,6 +1350,15 @@ defineExpose({
                     </div>
                   </div>
                 </div>
+              </div>
+
+              <div class="settings-toggle-row-inline runtime-lock-row">
+                <div class="settings-toggle-row-info">
+                  <span class="settings-toggle-row-title">{{ t('gameSettingsModal.fields.lockRuntimeUpdates') }}</span>
+                  <span class="settings-toggle-row-hint">{{ t('gameSettingsModal.fields.lockRuntimeUpdatesHint') }}</span>
+                </div>
+                <el-switch v-model="config.lockRuntimeUpdates" @change="saveConfig"
+                  :aria-label="t('gameSettingsModal.fields.lockRuntimeUpdates')" />
               </div>
 
               <!-- Release list section -->
@@ -2036,6 +2045,18 @@ defineExpose({
 
 .runtime-top-bar .dll-version-badge-value {
   white-space: normal;
+}
+
+.settings-toggle-row-inline.runtime-lock-row {
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.12);
+  border-radius: 10px;
+  background: rgba(var(--theme-surface-tint-rgb), 0.035);
+}
+
+.runtime-lock-row :deep(.el-switch) {
+  flex-shrink: 0;
 }
 
 .dll-source-group {

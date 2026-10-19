@@ -65,3 +65,6 @@ ctest --test-dir tmp/overlay-localization/build -C Release --output-on-failure
 2. 原本已启用 Hunting 时检查模式标签；按现有 F8 帧分析键，确认保存提示与文件一致。
 3. 改为 `en` 再重载，确认提示恢复英文；再切回 `zh_s`，确认仍正常。
 4. 检查头像 Mod、两条 DLSS5 路线与 ReShade 共存画面及帧率；字体变更不能代替此前尚待完成的渲染问题验收。
+
+debug 脚本已显示中文、SSMT 仍旧时，检查实际安装目录的资源，而非只检查源码中的
+`src-tauri/resources`。来源选择、GitHub 静默更新和按游戏锁定见 [运行时更新说明](runtime-updates.md)。

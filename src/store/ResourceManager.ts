@@ -865,7 +865,10 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         debugLog('3DMigotoUpdate', 'wrote zip to', target_zip_path);
 
         debugLog('3DMigotoUpdate', 'invoking rust extract_zip_archive', { zip_path: target_zip_path, dest_dir: target_dir });
-        await invoke('extract_zip_archive', { zipPath: target_zip_path, destDir: target_dir });
+        // 核心配置包不拥有 Runtime DLL；即使包内夹带旧 DLL，也不能绕过锁定或覆盖 SSMT 适配版。
+        await invoke('extract_zip_archive', {
+            zipPath: target_zip_path, destDir: target_dir, preserveRuntimeDlls: true,
+        });
 
         // Cleanup zip
         try {
