@@ -7,6 +7,8 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 
 涉及 3DMigoto 叠加层汉化时先读 [Runtime 提示汉化](../../docs/runtime-overlay-localization.md)。文本入口是 `Overlay.cpp` 而非 vendored PCRE2；扩充 `SSMTOverlayText` 精确格式目录并保持 printf 参数、技术值和英文日志。中文从系统微软雅黑生成缓存图集，沿用原始 D3D11 设备与现有状态恢复；缺字体回退英文，不逐帧扫描或生成字形。新头文件被未启用 `/utf-8` 的上游文件包含时使用 UTF-8 BOM，避免 CP936 错解注释尾字节后吞掉下一行。运行 `runtime/tests/overlay-localization` 的格式契约、WARP 字形及真实 Runtime 状态 / 缓存回归；不以离线预览宣称游戏共存与帧率通过。
 
+重载成功提示与红色加载告警须分别验收。反馈红字仍是英文时，从同次日志找到真实格式串，核对 `IniWarning` / `IniWarningW` 和窄宽字符、相邻字面量拼接及参数差异。格式契约检查对照 `IniHandler.cpp`、`Override.cpp` 和表达式错误源码覆盖目录，避免遗漏 `Duplicate section found` 等常见错误；嵌套原因只翻译解析器已知文本，变量、路径和表达式保留。增加告警的红色像素验证，英文详细日志继续保留。
+
 涉及 EFMI 时先读 [终末地注入说明](../../docs/efmi-injection.md)，其中包含交付脚本、验证入口和游戏实测边界。
 
 涉及原神 DLSS5 时先读 [热注入说明](../../docs/gimi-hot-runtime.md)，核对组件 Profile、单 Host 启动计划和日志验收。
