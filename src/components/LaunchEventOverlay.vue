@@ -21,10 +21,14 @@ const activityLabel = computed(() => runningSources.value
   ? t('launchUi.console.activeSources', { count: runningSources.value })
   : t(state.launching ? 'launchUi.console.starting' : 'launchUi.console.idle'));
 const eventLabel = (name: string) => te(`launchUi.events.${name}`) ? t(`launchUi.events.${name}`) : name;
-const error = computed(() => state.currentEvent?.event === 'launch_error' ? state.currentEvent : null);
-const stageLabel = computed(() => error.value ? t('launchUi.failed') : state.currentEvent?.event
-  ? eventLabel(state.currentEvent.event) : state.launching ? t('launchUi.events.launch_started') : t('launchUi.console.history'));
-const busy = computed(() => state.launching && state.currentEvent?.event !== 'launch_complete' && !error.value);
+const error = computed(() => state.failure);
+const stageLabel = computed(() => {
+  if (error.value) return error.value.event === 'launch_error' ? t('launchUi.failed') : eventLabel(error.value.event);
+  if (state.launching && state.currentEvent?.event === 'launch_complete') return eventLabel('finishing_launch');
+  return state.currentEvent?.event ? eventLabel(state.currentEvent.event)
+    : t(state.launching ? 'launchUi.events.launch_started' : 'launchUi.console.history');
+});
+const busy = computed(() => state.launching && !error.value);
 const scrollToEnd = async () => { await nextTick(); if (log.value) log.value.scrollTop = log.value.scrollHeight; };
 watch(() => selected.value?.output, () => { if (expanded.value && followOutput.value) void scrollToEnd(); });
 watch(() => state.selectedId, () => { inputError.value = ''; followOutput.value = true; void scrollToEnd(); });
@@ -72,7 +76,7 @@ const openLog = async () => {
           <button type="button" :class="{ active: tab === 'events' }" :aria-pressed="tab === 'events'" @click="tab = 'events'">{{ t('launchUi.console.events') }}</button>
           <button class="icon-button copy-button" type="button" :title="t('launchUi.console.copy')" :aria-label="t('launchUi.console.copy')" @click="copy"><CopyDocument class="icon" /></button>
         </nav>
-        <div v-if="error" class="monitor-error">{{ error.code }} · {{ error.message || t('launchUi.unknownError') }}</div>
+        <div v-if="error" class="monitor-error"><template v-if="error.code">{{ error.code }} · </template>{{ error.message || eventLabel(error.event) }}</div>
         <template v-if="tab === 'output'">
           <div v-if="state.sessions.length" class="monitor-toolbar">
             <select v-model="state.selectedId" :aria-label="t('launchUi.console.program')">
@@ -82,7 +86,7 @@ const openLog = async () => {
             <button v-if="selected?.logPath" class="icon-button" type="button" :title="t('launchUi.console.log')" :aria-label="t('launchUi.console.log')" @click="openLog"><Document class="icon" /></button>
           </div>
           <div v-if="selected" ref="log" class="monitor-log glass-scrollbar" tabindex="0" :aria-label="t('launchUi.console.output')" @scroll="onScroll"><span v-if="selected.truncated" class="monitor-muted">{{ t('launchUi.console.truncated') }}&#10;</span><span>{{ selected.output || t('launchUi.waiting') }}</span></div>
-          <div v-else class="monitor-empty">{{ t('launchUi.waiting') }}</div>
+          <div v-else class="monitor-empty">{{ t(state.launching ? 'launchUi.waiting' : 'launchUi.console.emptyHistory') }}</div>
           <div v-if="selected?.error || inputError" class="monitor-error">{{ inputError || selected?.error }}</div>
           <form v-if="selected && !selected.readOnly && selected.running" class="monitor-input" @submit.prevent="send">
             <span aria-hidden="true">&gt;</span>

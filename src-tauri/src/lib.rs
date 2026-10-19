@@ -87,7 +87,8 @@ fn show_window_shortcut_enabled_on_launch(app: &tauri::App) -> bool {
 }
 
 #[tauri::command]
-fn set_show_window_shortcut_enabled(app: tauri::AppHandle, enabled: bool) {
+// 注册操作持有插件锁并切回窗口线程，命令必须异步调度，避免并发更新时互锁。
+async fn set_show_window_shortcut_enabled(app: tauri::AppHandle, enabled: bool) {
     if enabled {
         if let Err(error) = register_show_window_shortcut(&app) {
             eprintln!("[GlobalShortcut] Failed to register {SHOW_WINDOW_SHORTCUT_LABEL}: {error}");
@@ -120,6 +121,7 @@ pub fn run() {
             // 初始化 ModWatcher 状态
             app.manage(commands::mod_manager::ModWatcher(Mutex::new(None)));
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
+            app.manage(commands::launch_shortcut::LaunchConsoleShortcut::default());
 
             // 将随包发布的 GameType 同步到用户配置目录，
             // 确保新版本的数据类型 JSON 能覆盖旧版本文件。
@@ -146,6 +148,7 @@ pub fn run() {
         // 从各个子模块中注册命令
         .invoke_handler(tauri::generate_handler![
             set_show_window_shortcut_enabled,
+            commands::launch_shortcut::set_launch_console_shortcut,
             plugin::commands::plugin_registry_snapshot,
             plugin::commands::plugin_registry_snapshot_for_game,
             plugin::commands::plugin_ui_routes,

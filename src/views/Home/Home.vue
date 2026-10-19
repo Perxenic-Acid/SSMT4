@@ -345,20 +345,23 @@ const launchGame = async (event?: MouseEvent) => {
     return;
   }
 
+  let result: Awaited<ReturnType<typeof LaunchGame.launch>> = false;
   try {
     await LaunchMonitor.begin();
+    LaunchMonitor.handleEvent({ event: 'checking_updates' });
     await installPrecheckedUpdatesBeforeLaunch();
-    await LaunchGame.launch(
+    LaunchMonitor.handleEvent({ event: 'preparing_launch' });
+    result = await LaunchGame.launch(
       gameName,
       appSettings,
       check3DMigotoPackageUpdate,
       openSettingsTo3Dmigoto,
       event?.ctrlKey ?? false
     );
+  } catch (error) {
+    LaunchMonitor.handleEvent({ event: 'launch_error', message: String(error) });
   } finally {
-    setTimeout(() => {
-      LaunchMonitor.finish();
-    }, 1000);
+    LaunchMonitor.finish(result !== false, result === 'native');
   }
 }
 

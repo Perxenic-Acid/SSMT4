@@ -235,7 +235,7 @@ export class MigotoManager {
    */
   static async patchD3dxForLaunch(
     gameName: string,
-    options: { dllInitializationDelay?: number; extraDlls?: string[]; useShell?: boolean; launchArgs?: string } = {},
+    options: { dllInitializationDelay?: number; extraDlls?: string[]; useShell?: boolean; launchArgs?: string; overlayLanguage?: 'auto' | 'zh_s' | 'en' } = {},
   ): Promise<void> {
     const gameConfig = await ResourceManager.loadGameConfig(gameName)
     const cfg = gameConfig || {}
@@ -306,6 +306,9 @@ export class MigotoManager {
 
     lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'hunting', normalizeHuntingMode(cfg.huntingMode))
     lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'marking_actions', 'clipboard asm hlsl')
+    if (options.overlayLanguage !== undefined && dllSource.targetFileName === 'd3d11.dll') {
+      lines = D3dxIniManager.setIniValue(lines, 'Hunting', 'overlay_language', options.overlayLanguage)
+    }
 
     if (typeof cfg.autoExitSeconds === 'number') {
       lines = D3dxIniManager.setIniValue(lines, 'Loader', 'delay', String(cfg.autoExitSeconds))

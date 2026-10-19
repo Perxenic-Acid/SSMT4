@@ -250,7 +250,15 @@ fn configure(target: &str, disable_dynamic: bool, fsr2: Option<bool>) -> Result<
 }
 
 #[tauri::command]
-pub fn configure_gimi_launch_settings(
+pub async fn configure_gimi_launch_settings(
+    options: ConfigureGimiLaunchSettingsOptions,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || configure_gimi_launch_settings_blocking(options))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn configure_gimi_launch_settings_blocking(
     options: ConfigureGimiLaunchSettingsOptions,
 ) -> Result<(), String> {
     if !options.configure_game {

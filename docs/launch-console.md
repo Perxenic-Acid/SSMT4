@@ -1,11 +1,29 @@
 # 启动浮窗与控制台
 
 SSMT 启动队列中的 Console PE、`.cmd` 和 `.bat` 程序会在启动浮窗中显示标准输出、标准错误和退出码，支持按行发送文本。
-浮窗默认在应用右下角只显示一行当前启动阶段，主动展开后可查看程序输出和启动事件、切换来源、复制回显或打开日志；切换页面不会丢失会话。收起浮窗不结束进程，也不会因迟到的输出自动展开。
+点击开始游戏即展开浮窗，在等待事件监听与更新检查之前显示。可查看程序输出和启动事件、切换来源、复制回显或打开日志；切换页面不会丢失会话。
+启动队列结束且注入器确认 `launch_complete` 后，自动收起为右下角的一行阶段提示。只发现游戏进程不算注入完成，也不等待 Run.exe 成功后的退出倒计时或游戏日志跟随结束。失败保留展开详情与首次错误，取消或前置检查未通过不当成成功。
+收起浮窗不结束进程，也不会因迟到的普通输出自动展开；当前启动的错误会展开仍可见的面板。
 折叠面板在鼠标未悬停时半透明，悬停或键盘焦点进入时恢复清晰；展开详情保持清晰。无悬停能力的触屏保留清晰状态。
 关闭按钮在启动流程、任意代次的控制台程序或只读日志跟随仍活动时禁用，悬停会解释原因；结束后可关闭。不能仅以所选来源或短命 Run.exe 的退出判断空闲。
-空闲后保留面板，包括没有控制台程序的启动；手动关闭只隐藏界面，保留有界历史与日志。迟到输出不重新打开，下一次启动重新显示折叠面板。
+空闲后保留面板，包括没有控制台程序的启动；手动关闭只隐藏界面，保留有界历史与日志。迟到输出不重新打开，下一次启动重新展开面板。
 GUI 程序沿用原来的 Shell 启动路径。没有可选插件时，同样使用原有游戏启动计划，不额外准备插件资源。
+
+设置 → 通用中可录制“打开启动控制台”全局快捷键，默认 `Ctrl+Shift+L`，并提供禁用开关和直接打开按钮。没有历史或手动关闭过时也能唤起；空白控制台不会启动 Shell 或其他程序。
+快捷键注册成功才保存设置；占用、无效组合或保留的 Alt+F 会在原位提示，原快捷键继续有效。打开控制台会恢复并聚焦 SSMT，和 Alt+F 的显示 / 最小化切换独立。两类注册命令都异步调度，避免插件内部锁与窗口线程调度发生互等。
+
+## 启动期间的窗口响应
+
+插件图形检查、组件准备、PluginHost 配置生成、Player Tweaks 资源校验与原神画质设置均由异步 Tauri 命令转入 `spawn_blocking`。同步命令会占住窗口线程；仅把函数声明成 async 仍会阻塞调度线程，不能直接执行大 DLL 的哈希、复制或等待外部程序。
+UPX 等外部工具、GUI Shell 启动和进程枚举也移到 blocking pool，队列中的延时继续使用异步 sleep。只等进程名时不再逐个读取 EXE 路径。
+控制台握手仍须在提交后确认，防止重复启动；它的等待与游戏生命周期分开，不能用取消握手或提前放行伪装界面响应正常。状态监听不可用或程序退出但没有完成事件时保留“启动状态未确认”与原因，不把缺少完成事件当成成功收起。
+
+## Windows Terminal 的集成边界
+
+`wt.exe` 是 Windows Terminal 的应用入口，官方命令行管理的是窗口、标签和面板，没有向 WebView 提供内嵌控件接口。[Windows Terminal 命令行文档](https://learn.microsoft.com/en-us/windows/terminal/command-line-arguments)
+
+真正复用 Windows Terminal 渲染控件，需要原生 TerminalControl / XAML 宿主和 ConPTY 连接，再处理焦点、DPI、输入、提权与部署。微软的 [UWP 控件 NuGet 打包 PR](https://github.com/microsoft/terminal/pull/20488) 在 2026-10-19 核查时仍为 Draft，说明当前支持范围是 C++ UWP 与 C++ UWP XAML Islands。由此判断，它不能直接作为当前 Vue / Tauri 控件替换。
+当前实现继续提供标准流与日志浮窗，没有内嵌 WT；不能把启动 cmd / pwsh 或自行绘制终端界面称为嵌入 Windows Terminal。后续若采用 TerminalControl，应作为独立的可选原生宿主方案验证，不改动正常游戏启动与无插件路径。
 
 ## 通道与生命周期
 
@@ -42,7 +60,8 @@ ReShade 是 DLL，没有可供接管的独立控制台。浮窗展示它实际�
 
 ## 验证
 
-- `node --test scripts/tests/test-launch-monitor.mjs scripts/tests/test-efmi-launch.mjs`：多会话、无控制台、无插件及插件组合启动队列、记录容量与输入路由；跨代次 / 只读来源的关闭门禁、空闲保留、手动关闭后的迟到输出及再次启动。
+- `node --test scripts/tests/test-launch-monitor.mjs scripts/tests/test-launch-settings.mjs scripts/tests/test-efmi-launch.mjs scripts/tests/test-runtime-sync.mjs`：立即展开、事件与队列完成顺序、成功收起 / 失败保留、快捷键空白唤起、配置持久化，以及多会话、无控制台、无插件与组合启动。
+- 在 `src-tauri` 执行 `cargo test --lib commands::launch_shortcut::tests` 与 `cargo test --lib commands::game_launcher::tests`：快捷键冲突保留与回滚、外部程序等待期间的调度响应。不注册真实系统快捷键，不启动游戏。
 - 在 `src-tauri` 执行 `cargo test --lib commands::launch_console::tests -- --test-threads=1`：真实 Winsock 延迟读取、标准流子进程、无换行提示、中文输入、大段输出、退出码、断开不杀进程、日志轮转。
 - `cargo test --lib commands::launch_logs::tests -- --test-threads=1`：跳过旧日志、延迟创建、追加、重写、轮转、跨分片中文和有界大段输出。
 - `bun run build` 与 `node scripts/check-render-perf.mjs`。

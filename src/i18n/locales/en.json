@@ -408,7 +408,7 @@
   },
   "launchUi": {
     "console": {
-      "history": "Launch history", "output": "Output", "events": "Launch events", "following": "Following", "stopped": "Ended",
+      "history": "Launch history", "output": "Output", "events": "Launch events", "following": "Following", "stopped": "Ended", "emptyHistory": "No console output yet. Launch a game to see program output here.",
       "readOnly": "Read-only log", "interactive": "Interactive", "logHint": "Following game logs; collection continues when collapsed",
       "title": "Launch console", "program": "Console program", "running": "Running", "exited": "Exited ({code})", "log": "Open log",
       "minimize": "Minimize", "hide": "Hide", "copy": "Copy", "clear": "Clear", "send": "Send",
@@ -423,7 +423,7 @@
     "showDetails": "Show details",
     "hideDetails": "Hide details",
     "waiting": "Waiting for launch events…",
-    "events": { "launch_started": "Preparing launch", "target_created": "Game process created", "inject_begin": "Injecting runtime", "inject_complete": "Runtime injected", "plugin_host_begin": "Loading plugin host", "plugin_host_ready": "Plugin host ready", "plugin_host_disabled": "Plugin host disabled", "before_resume": "Preparing game resume", "target_resumed": "Game resumed", "runtime_detected": "Runtime detected", "runtime_verification_unavailable": "Runtime verification unavailable", "launch_complete": "Launch complete" }
+    "events": { "launch_status_unavailable": "Launch status unconfirmed", "finishing_launch": "Finishing launch queue", "checking_updates": "Checking launch resources", "preparing_launch": "Preparing launch configuration", "launch_cancelled": "Launch not completed", "launch_started": "Preparing launch", "target_created": "Game process created", "inject_begin": "Injecting runtime", "inject_complete": "Runtime injected", "plugin_host_begin": "Loading plugin host", "plugin_host_ready": "Plugin host ready", "plugin_host_disabled": "Plugin host disabled", "before_resume": "Preparing game resume", "target_resumed": "Game resumed", "runtime_detected": "Runtime detected", "runtime_verification_unavailable": "Runtime verification unavailable", "launch_complete": "Launch complete" }
   },
   "xianzun": {
     "nav": "Cheese Cat",
@@ -685,6 +685,8 @@
       "current": "Current"
     },
     "hints": {
+      "launchConsoleShortcut": "Focus the field, press a key combination, then Apply. Opens the console globally, even with no launch history, without starting a program.",
+      "runtimeOverlayLanguage": "Applies to in-game messages in SSMT DX11 Runtime on the next normal launch. Auto follows Windows. Pure launches leave configuration unchanged.",
       "cacheFolder": "Used for workspaces, generated files, and local cache data.",
       "githubToken": "Optional. A personal token raises the GitHub API rate limit for update checks.",
       "workspaceAccessProxyPort": "Only used by the workspace public library. Enter the local HTTP proxy port (for example, 7890); use 0 for the system or environment proxy.",
@@ -705,6 +707,12 @@
       "openCacheFolderFailed": "Failed to open the cache folder"
     },
     "general": {
+      "launchConsoleShortcut": "Launch console shortcut",
+      "recordShortcut": "Focus and press shortcut",
+      "applyShortcut": "Apply",
+      "openConsole": "Open console",
+      "runtimeOverlayLanguage": "3DMigoto overlay language",
+      "runtimeOverlayAuto": "Auto (Windows language)",
       "githubToken": "GitHub Token",
       "workspaceAccessProxyPort": "Workspace Library Proxy Port",
       "workspaceAccessProxyPortPlaceholder": "For example 7890; leave empty for system proxy",

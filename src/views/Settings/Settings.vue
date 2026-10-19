@@ -3,10 +3,12 @@ import { AppStateManager, type GameInfo } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
 import { getGamePresetDisplayName, getGamePresetOptions } from '../../store/GamePreset'
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { LaunchMonitor } from '../../store/LaunchMonitor';
 import {
   APP_UI_SCALE_MAX,
   APP_UI_SCALE_MIN,
   APP_UI_SCALE_STEP,
+  DEFAULT_LAUNCH_CONSOLE_SHORTCUT,
   SSMT_LOCALE_OPTIONS,
 } from '../../store/AppSettings'
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -74,6 +76,28 @@ const scrollToSettingsSection = (id: string) => {
 };
 
 const languageOptions = SSMT_LOCALE_OPTIONS;
+const consoleShortcutDraft = ref(appSettings.launchConsoleShortcut || DEFAULT_LAUNCH_CONSOLE_SHORTCUT);
+const consoleShortcutBusy = ref(false);
+const consoleShortcutError = AppStateManager.launchConsoleShortcutError;
+const recordConsoleShortcut = (event: Event | KeyboardEvent) => {
+  if (!(event instanceof KeyboardEvent)) return;
+  if (event.repeat || event.isComposing || ['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return;
+  if (event.key === 'Tab') return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.key === 'Escape') { (event.target as HTMLInputElement).blur(); return; }
+  const modifiers = [event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Super'].filter(Boolean);
+  if (!modifiers.length && !/^F\d{1,2}$/.test(event.code)) return;
+  const key = event.code.replace(/^(?:Key|Digit)(?=[A-Z0-9]$)/, '');
+  consoleShortcutDraft.value = [...modifiers, key].join('+');
+};
+const applyConsoleShortcut = async (shortcut: string) => {
+  if (consoleShortcutBusy.value) return;
+  consoleShortcutBusy.value = true;
+  try { await AppStateManager.setLaunchConsoleShortcut(shortcut); }
+  catch { /* 错误保留在当前设置行，旧快捷键继续有效。 */ }
+  finally { consoleShortcutBusy.value = false; }
+};
 
 const appVersion = ref('1.0.0');
 const workspaceAccessProxyPortInput = ref('');
@@ -419,6 +443,24 @@ const confirmCreateGame = async () => {
                 </div>
               </div>
 
+              <div class="setting-row setting-row-wide console-shortcut-row">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Key /></el-icon></span>
+                  <div>
+                    <div class="setting-label">{{ t('settings.general.launchConsoleShortcut') }}</div>
+                    <div class="setting-description">{{ t('settings.hints.launchConsoleShortcut') }}</div>
+                    <div v-if="consoleShortcutError" class="shortcut-error" role="alert">{{ consoleShortcutError }}</div>
+                  </div>
+                </div>
+                <div class="setting-control console-shortcut-control">
+                  <el-switch :model-value="!!appSettings.launchConsoleShortcut" :disabled="consoleShortcutBusy" :aria-label="t('settings.general.launchConsoleShortcut')"
+                    @change="value => applyConsoleShortcut(value ? consoleShortcutDraft : '')" />
+                  <el-input v-model="consoleShortcutDraft" readonly :disabled="consoleShortcutBusy" :placeholder="t('settings.general.recordShortcut')" :aria-label="t('settings.general.recordShortcut')" @keydown="recordConsoleShortcut" />
+                  <el-button :loading="consoleShortcutBusy" :disabled="consoleShortcutDraft === appSettings.launchConsoleShortcut" @click="applyConsoleShortcut(consoleShortcutDraft)">{{ t('settings.general.applyShortcut') }}</el-button>
+                  <el-button @click="LaunchMonitor.open()">{{ t('settings.general.openConsole') }}</el-button>
+                </div>
+              </div>
+
               <div class="setting-row setting-row-wide">
                 <div class="setting-identity">
                   <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
@@ -432,6 +474,23 @@ const confirmCreateGame = async () => {
                     <el-option value="always-pure" :label="t('settings.general.gameLaunchModeAlwaysPure')" />
                     <el-option value="ctrl-pure" :label="t('settings.general.gameLaunchModeCtrlPure')" />
                     <el-option value="always-normal" :label="t('settings.general.gameLaunchModeAlwaysNormal')" />
+                  </el-select>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
+                  <div>
+                    <div class="setting-label">{{ t('settings.general.runtimeOverlayLanguage') }}</div>
+                    <div class="setting-description">{{ t('settings.hints.runtimeOverlayLanguage') }}</div>
+                  </div>
+                </div>
+                <div class="setting-control compact-control">
+                  <el-select v-model="appSettings.runtimeOverlayLanguage" :aria-label="t('settings.general.runtimeOverlayLanguage')">
+                    <el-option value="auto" :label="t('settings.general.runtimeOverlayAuto')" />
+                    <el-option value="zh_s" label="简体中文" />
+                    <el-option value="en" label="English" />
                   </el-select>
                 </div>
               </div>
@@ -965,6 +1024,12 @@ const confirmCreateGame = async () => {
   width: min(100%, 220px);
   justify-self: end;
 }
+
+.console-shortcut-row { grid-column: 1 / -1; }
+.console-shortcut-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.console-shortcut-control .el-input { flex: 1 1 180px; max-width: 280px; }
+.console-shortcut-control .el-button { margin-left: 0; }
+.shortcut-error { color: var(--el-color-warning); font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }
 
 .page-visibility-container {
   display: grid;

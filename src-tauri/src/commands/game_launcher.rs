@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use sysinfo::{ProcessRefreshKind, UpdateKind};
+use sysinfo::ProcessRefreshKind;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -539,6 +539,13 @@ fn run_wuwa_settings_elevated(helper_path: &Path, request_path: &Path) -> Result
 pub async fn configure_zzmi_launch_settings(
     options: ConfigureZzmiLaunchSettingsOptions,
 ) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || configure_zzmi_launch_settings_blocking(options))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn configure_zzmi_launch_settings_blocking(
+    options: ConfigureZzmiLaunchSettingsOptions,
+) -> Result<(), String> {
     if !options.configure_game {
         return Ok(());
     }
@@ -548,6 +555,13 @@ pub async fn configure_zzmi_launch_settings(
 
 #[tauri::command]
 pub async fn configure_wwmi_launch_settings(
+    options: ConfigureWwmiLaunchSettingsOptions,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || configure_wwmi_launch_settings_blocking(options))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn configure_wwmi_launch_settings_blocking(
     options: ConfigureWwmiLaunchSettingsOptions,
 ) -> Result<(), String> {
     let helper_path = wuwa_settings_exe_path()?;
@@ -588,6 +602,16 @@ pub async fn configure_wwmi_launch_settings(
 
 #[tauri::command]
 pub async fn execute_external_program(
+    program_path: String,
+    args: Option<Vec<String>>,
+    work_dir: Option<String>,
+) -> Result<ExternalProgramOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || execute_external_program_blocking(program_path, args, work_dir))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn execute_external_program_blocking(
     program_path: String,
     args: Option<Vec<String>>,
     work_dir: Option<String>,
@@ -731,9 +755,12 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
                     program_summary
                 );
 
-                let output = std::process::Command::new("powershell")
-                    .args(&["-NoProfile", "-Command", &ps_script])
-                    .output()
+                let output = tauri::async_runtime::spawn_blocking(move || {
+                    let mut command = std::process::Command::new("powershell");
+                    #[cfg(windows)]
+                    command.creation_flags(0x08000000);
+                    command.args(["-NoProfile", "-Command", &ps_script]).output()
+                }).await.map_err(|error| error.to_string())?
                     .map_err(|e| {
                         let msg = format!(
                             "Failed to launch shell command. {}. os_error={}",
@@ -774,8 +801,11 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
                 let mut found = false;
 
                 while start_time.elapsed() < timeout {
-                    let refresh_kind = ProcessRefreshKind::new().with_exe(UpdateKind::Always);
-                    sys.refresh_processes_specifics(refresh_kind);
+                    // 这里只比较进程名，无需逐个打开游戏/系统进程读取 EXE 路径。
+                    sys = tauri::async_runtime::spawn_blocking(move || {
+                        sys.refresh_processes_specifics(ProcessRefreshKind::new());
+                        sys
+                    }).await.map_err(|error| error.to_string())?;
 
                     for (_pid, process) in sys.processes() {
                         let proc_name = std::path::Path::new(process.name())
@@ -808,14 +838,34 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
 }
 
 #[tauri::command]
-pub async fn file_md5(path: String) -> Result<String, String> {
-    SSMTFileUtils::file_md5(path)
+pub async fn file_md5(
+    path: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || SSMTFileUtils::file_md5(path))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn external_program_wait_does_not_block_other_commands() {
+        let task = tokio::spawn(execute_external_program(
+            "powershell".into(),
+            Some(vec!["-NoProfile".into(), "-Command".into(), "Start-Sleep -Milliseconds 300; Write-Output ready".into()]),
+            None,
+        ));
+        let start = std::time::Instant::now();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(start.elapsed() < std::time::Duration::from_millis(250), "单线程调度器被子进程等待阻塞");
+        assert!(!task.is_finished());
+        let output = task.await.unwrap().unwrap();
+        assert_eq!(output.code, 0);
+        assert!(output.stdout.contains("ready"));
+    }
 
     #[test]
     fn sleepy_codec_round_trips_ascii_json() {

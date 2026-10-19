@@ -98,7 +98,19 @@ pub(super) fn collect(
 }
 
 #[tauri::command]
-pub fn prepare_plugin_graphics_plan(game_name: String, game_executable: String, allow_hot_runtime: bool, excluded_providers: Vec<String>, graphics_decision: Option<String>) -> Result<GraphicsPreparation, String> {
+pub async fn prepare_plugin_graphics_plan(
+    game_name: String,
+    game_executable: String,
+    allow_hot_runtime: bool,
+    excluded_providers: Vec<String>,
+    graphics_decision: Option<String>,
+) -> Result<GraphicsPreparation, String> {
+    tauri::async_runtime::spawn_blocking(move || prepare_plugin_graphics_plan_blocking(game_name, game_executable, allow_hot_runtime, excluded_providers, graphics_decision))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn prepare_plugin_graphics_plan_blocking(game_name: String, game_executable: String, allow_hot_runtime: bool, excluded_providers: Vec<String>, graphics_decision: Option<String>) -> Result<GraphicsPreparation, String> {
     let Some(registry) = super::commands::installed_plugin_registry()? else { return Ok(GraphicsPreparation::default()); };
     Ok(collect(&registry.for_game(&game_name), allow_hot_runtime, &excluded_providers,
         |extension, plugin| {
@@ -110,7 +122,17 @@ pub fn prepare_plugin_graphics_plan(game_name: String, game_executable: String, 
 }
 
 #[tauri::command]
-pub fn configure_plugin_launch_contract(game_name: String, game_executable: String, candidate_id: String) -> Result<(), String> {
+pub async fn configure_plugin_launch_contract(
+    game_name: String,
+    game_executable: String,
+    candidate_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || configure_plugin_launch_contract_blocking(game_name, game_executable, candidate_id))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn configure_plugin_launch_contract_blocking(game_name: String, game_executable: String, candidate_id: String) -> Result<(), String> {
     let registry = super::commands::installed_plugin_registry()?.ok_or("插件已移除")?.for_game(&game_name);
     for plugin in registry.selected_plugins().filter(|p| p.enabled) {
         for extension in extensions(plugin) {

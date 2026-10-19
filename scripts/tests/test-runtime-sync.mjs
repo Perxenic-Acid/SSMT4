@@ -509,3 +509,27 @@ test('already packed runtime passes UPX validation without repacking', async t =
   assert.equal(h.messages.some(({ kind }) => kind === 'warning'), false);
   assert.equal(await fs.readFile(h.target, 'utf8'), 'adapted SSMT Runtime');
 });
+
+test('全局叠加层语言在普通与热注入路线写入，切回自动可覆盖旧设置', async t => {
+  for (const hotRuntime of [null, hotPlan]) {
+    const h = await harness(t, { hotRuntime });
+    for (const runtimeOverlayLanguage of ['zh_s', 'en', 'auto']) {
+      assert.equal(await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal', runtimeOverlayLanguage }, () => {}), 'native');
+      const ini = await fs.readFile(path.join(h.migotoDir, 'd3dx.ini'), 'utf8');
+      assert.match(ini, new RegExp(`overlay_language = ${runtimeOverlayLanguage}`));
+      assert.equal((ini.match(/overlay_language\s*=/g) || []).length, 1);
+    }
+  }
+});
+
+test('纯净启动不修改叠加层语言，DX12 不写入不支持的选项', async t => {
+  const h = await harness(t);
+  const iniPath = path.join(h.migotoDir, 'd3dx.ini');
+  const initial = '[Loader]\nmodule = d3d11.dll\n[Hunting]\noverlay_language = en\n';
+  await fs.writeFile(iniPath, initial);
+  assert.equal(await h.launch.launch('GIMI', { gameLaunchMode: 'always-pure', runtimeOverlayLanguage: 'zh_s' }, () => {}), 'direct');
+  assert.equal(await fs.readFile(iniPath, 'utf8'), initial);
+  const dx12 = await harness(t, { gamePreset: 'ZZMIDX12' });
+  await dx12.migoto.patchD3dxForLaunch('ZZMIDX12', { overlayLanguage: 'zh_s' });
+  assert.doesNotMatch(await fs.readFile(path.join(dx12.migotoDir, 'd3dx.ini'), 'utf8'), /overlay_language/);
+});

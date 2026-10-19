@@ -302,7 +302,16 @@ pub(crate) fn installed_plugin_registry() -> Result<Option<PluginRegistry>, Stri
 }
 
 #[tauri::command]
-pub fn inspect_graphics_launch(
+pub async fn inspect_graphics_launch(
+    game_name: String,
+    game_executable: String,
+) -> Result<GraphicsLaunchInspection, String> {
+    tauri::async_runtime::spawn_blocking(move || inspect_graphics_launch_blocking(game_name, game_executable))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn inspect_graphics_launch_blocking(
     game_name: String,
     game_executable: String,
 ) -> Result<GraphicsLaunchInspection, String> {
@@ -475,8 +484,11 @@ pub fn inspect_managed_graphics_stack(
 }
 
 #[tauri::command]
-pub fn restore_managed_graphics_stack(game_executable: String) -> Result<bool, String> {
-    managed_stack::restore(&PathBuf::from(game_executable))
+pub async fn restore_managed_graphics_stack(
+    game_executable: String,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || managed_stack::restore(&PathBuf::from(game_executable)))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -803,7 +815,18 @@ pub fn set_plugin_external_dependency_path(
 }
 
 #[tauri::command]
-pub fn prepare_hoyoshade_launch(
+pub async fn prepare_hoyoshade_launch(
+    game_name: String,
+    game_executable: String,
+    graphics_decision: Option<GraphicsLaunchDecision>,
+    skip_dlss5: Option<bool>,
+) -> Result<Option<PluginLaunchProgram>, String> {
+    tauri::async_runtime::spawn_blocking(move || prepare_hoyoshade_launch_blocking(game_name, game_executable, graphics_decision, skip_dlss5))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn prepare_hoyoshade_launch_blocking(
     game_name: String,
     game_executable: String,
     graphics_decision: Option<GraphicsLaunchDecision>,
@@ -890,7 +913,16 @@ pub fn prepare_hoyoshade_launch(
 }
 
 #[tauri::command]
-pub fn prepare_plugin_host_config(game_name: String, runtime_directory: String) -> Result<Option<String>, String> {
+pub async fn prepare_plugin_host_config(
+    game_name: String,
+    runtime_directory: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || prepare_plugin_host_config_blocking(game_name, runtime_directory))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn prepare_plugin_host_config_blocking(game_name: String, runtime_directory: String) -> Result<Option<String>, String> {
     let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name)) else {
         return Ok(None);
     };

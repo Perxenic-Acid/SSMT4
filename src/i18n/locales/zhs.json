@@ -407,7 +407,7 @@
   },
   "launchUi": {
     "console": {
-      "history": "启动记录", "output": "程序输出", "events": "启动事件", "following": "跟随输出", "stopped": "已结束",
+      "history": "启动记录", "output": "程序输出", "events": "启动事件", "following": "跟随输出", "stopped": "已结束", "emptyHistory": "暂无控制台输出。启动游戏后，程序回显将在这里显示。",
       "readOnly": "只读日志", "interactive": "交互控制台", "logHint": "跟随游戏日志；收起不影响采集",
       "title": "启动控制台", "program": "控制台程序", "running": "运行中", "exited": "已退出 ({code})", "log": "打开日志",
       "minimize": "收起", "hide": "隐藏", "copy": "复制", "clear": "清空", "send": "发送",
@@ -422,7 +422,7 @@
     "showDetails": "显示详情",
     "hideDetails": "隐藏详情",
     "waiting": "等待启动事件…",
-    "events": { "launch_started": "准备启动", "target_created": "游戏进程已创建", "inject_begin": "正在注入运行时", "inject_complete": "运行时注入完成", "plugin_host_begin": "正在加载插件宿主", "plugin_host_ready": "插件宿主已就绪", "plugin_host_disabled": "插件宿主未启用", "before_resume": "准备恢复游戏", "target_resumed": "游戏已恢复运行", "runtime_detected": "已检测到运行时", "runtime_verification_unavailable": "运行时验证受限", "launch_complete": "启动完成" }
+    "events": { "launch_status_unavailable": "启动状态未确认", "finishing_launch": "正在完成启动队列", "checking_updates": "正在检查启动资源", "preparing_launch": "正在准备启动配置", "launch_cancelled": "启动未完成", "launch_started": "准备启动", "target_created": "游戏进程已创建", "inject_begin": "正在注入运行时", "inject_complete": "运行时注入完成", "plugin_host_begin": "正在加载插件宿主", "plugin_host_ready": "插件宿主已就绪", "plugin_host_disabled": "插件宿主未启用", "before_resume": "准备恢复游戏", "target_resumed": "游戏已恢复运行", "runtime_detected": "已检测到运行时", "runtime_verification_unavailable": "运行时验证受限", "launch_complete": "启动完成" }
   },
   "xianzun": {
     "nav": "芝士猫",
@@ -684,6 +684,8 @@
       "current": "当前游戏"
     },
     "hints": {
+      "launchConsoleShortcut": "点击输入框后按下组合键，再点应用。全局生效；即使没有启动记录也可打开控制台，空白控制台不会运行程序。",
+      "runtimeOverlayLanguage": "下次普通启动时生效，仅控制 SSMT DX11 Runtime 的游戏内提示；自动跟随 Windows 语言。纯净启动不修改配置。",
       "cacheFolder": "用于保存工作区、生成文件和本地缓存数据。",
       "githubToken": "可选。个人令牌可以提高更新检查时的 GitHub API 请求限额。",
       "workspaceAccessProxyPort": "仅用于工作空间公共库。填入本机 HTTP 代理端口（例如 7890）；填 0 时使用系统或环境代理。",
@@ -704,6 +706,12 @@
       "openCacheFolderFailed": "无法打开缓存目录"
     },
     "general": {
+      "launchConsoleShortcut": "打开启动控制台",
+      "recordShortcut": "点击后按下快捷键",
+      "applyShortcut": "应用",
+      "openConsole": "打开控制台",
+      "runtimeOverlayLanguage": "3DMigoto 游戏内提示语言",
+      "runtimeOverlayAuto": "自动（Windows 语言）",
       "githubToken": "GitHub Token",
       "workspaceAccessProxyPort": "工作空间公共库代理端口",
       "workspaceAccessProxyPortPlaceholder": "例如 7890；留空使用系统代理",

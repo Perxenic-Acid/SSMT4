@@ -9,6 +9,7 @@ pub mod game_discovery;
 pub mod game_launcher;
 pub mod launch_console;
 pub mod launch_logs;
+pub mod launch_shortcut;
 pub mod gimi_settings;
 pub mod mod_library;
 pub mod mod_manager;

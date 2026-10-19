@@ -47,6 +47,8 @@ export type PostProcessPreviewLightingMode = 'half-lambert' | 'unlit' | 'pbr'
 export type ImageBlurMode = 'all' | 'nsfw' | 'none'
 export type GameLaunchMode = 'always-pure' | 'ctrl-pure' | 'always-normal'
 export type ModelExtractionLogLanguage = 'zh-CN' | 'en'
+export type RuntimeOverlayLanguage = 'auto' | 'zh_s' | 'en'
+export const DEFAULT_LAUNCH_CONSOLE_SHORTCUT = 'Ctrl+Shift+L'
 export type GameBananaTranslationProvider = 'openai' | 'compatible' | 'claude' | 'deepseek' | 'gemini' | 'google'
 export type GameBananaTranslationFontStyle = 'regular' | 'italic' | 'bold' | 'bold-italic'
 export type GameBananaTranslationFailureMode = 'retry' | 'message' | 'silent'
@@ -324,6 +326,8 @@ export class AppSettings {
 	gamebananaTranslationFontStyle: GameBananaTranslationFontStyle = 'regular'
 	gamebananaTranslationFailureMode: GameBananaTranslationFailureMode = 'message'
 	showWindowShortcutEnabled: boolean = true
+	launchConsoleShortcut: string = DEFAULT_LAUNCH_CONSOLE_SHORTCUT
+	runtimeOverlayLanguage: RuntimeOverlayLanguage = 'auto'
 	showHomeLauncherContent: boolean = true
 	showHomeGameNews: boolean = true
 	gameLaunchMode: GameLaunchMode = 'ctrl-pure'
@@ -424,6 +428,8 @@ export class AppSettings {
 			? 'Ctrl'
 			: savedTranslationShortcut
 		this.showWindowShortcutEnabled = init?.showWindowShortcutEnabled ?? this.showWindowShortcutEnabled
+		this.launchConsoleShortcut = typeof init?.launchConsoleShortcut === 'string' ? init.launchConsoleShortcut.trim() : DEFAULT_LAUNCH_CONSOLE_SHORTCUT
+		this.runtimeOverlayLanguage = init?.runtimeOverlayLanguage === 'zh_s' || init?.runtimeOverlayLanguage === 'en' ? init.runtimeOverlayLanguage : 'auto'
 		this.showHomeLauncherContent = init?.showHomeLauncherContent ?? this.showHomeLauncherContent
 		this.showHomeGameNews = init?.showHomeGameNews ?? this.showHomeGameNews
 		this.gameLaunchMode = ['always-pure', 'ctrl-pure', 'always-normal'].includes(init?.gameLaunchMode || '')
@@ -547,6 +553,8 @@ export class AppSettings {
 			gamebananaTranslationFontStyle: this.gamebananaTranslationFontStyle,
 			gamebananaTranslationFailureMode: this.gamebananaTranslationFailureMode,
 			showWindowShortcutEnabled: this.showWindowShortcutEnabled,
+			launchConsoleShortcut: this.launchConsoleShortcut,
+			runtimeOverlayLanguage: this.runtimeOverlayLanguage,
 			showHomeLauncherContent: this.showHomeLauncherContent,
 			showHomeGameNews: this.showHomeGameNews,
 			gameLaunchMode: this.gameLaunchMode,

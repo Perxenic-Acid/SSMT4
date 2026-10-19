@@ -45,7 +45,16 @@ pub(super) fn features(plugin: &InstalledPlugin, preset: &str) -> Result<Vec<Str
 pub struct LaunchAssets { pub dll: PathBuf }
 
 #[tauri::command]
-pub fn prepare_player_tweaks_launch(game_name: String, game_preset: String) -> Result<Option<LaunchAssets>, String> {
+pub async fn prepare_player_tweaks_launch(
+    game_name: String,
+    game_preset: String,
+) -> Result<Option<LaunchAssets>, String> {
+    tauri::async_runtime::spawn_blocking(move || prepare_player_tweaks_launch_blocking(game_name, game_preset))
+        .await
+        .map_err(|error| format!("后台启动任务失败：{error}"))?
+}
+
+fn prepare_player_tweaks_launch_blocking(game_name: String, game_preset: String) -> Result<Option<LaunchAssets>, String> {
     let preset = game_scope_preset(&game_name);
     if !preset.eq_ignore_ascii_case(&game_preset) { return Err("Player Tweaks 游戏预设已改变".into()); }
     let Some(registry) = super::commands::installed_plugin_registry()? else { return Ok(None); };

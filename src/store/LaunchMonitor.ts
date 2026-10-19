@@ -15,16 +15,37 @@ const OUTPUT_LIMIT = 128 * 1024;
 export function createLaunchMonitor() {
   const state = reactive({
     launching: false, visible: false, collapsed: true, selectedId: '', generation: 0,
+    failure: null as LaunchEvent | null,
     currentEvent: null as LaunchEvent | null, events: [] as LaunchEvent[], sessions: [] as ConsoleSession[],
   });
   let connection: Promise<void> | undefined;
   let unlisten: Array<() => void> = [];
+  let queueFinished = false;
+  let nativeExpected = false;
+  const nativeLaunches = new Map<string, boolean>();
+  const missingNativeResult = () => queueFinished && nativeExpected && !nativeLaunches.size &&
+    state.sessions.some(session => session.generation === state.generation && !session.readOnly) &&
+    !state.sessions.some(session => session.generation === state.generation && !session.readOnly && session.running);
+  const settle = () => {
+    if (!queueFinished) return;
+    const waitingForNative = (nativeExpected && !nativeLaunches.size) || [...nativeLaunches.values()].some(done => !done);
+    if (!state.failure && waitingForNative) return;
+    state.launching = false;
+    if (!state.failure) state.collapsed = true;
+  };
   const handleEvent = (event: LaunchEvent) => {
     const source = event.consoleSessionId;
     if (source && !state.sessions.some(session => session.id === source && session.generation === state.generation)) return;
     state.currentEvent = event;
     state.events.push(event);
     if (state.events.length > 80) state.events.splice(0, state.events.length - 80);
+    if (event.event === 'launch_error' || event.event === 'launch_status_unavailable') {
+      state.failure ??= event;
+      if (state.visible) state.collapsed = false;
+    }
+    if (event.event === 'launch_started') nativeLaunches.set(String(source ?? 'native'), false);
+    if (event.event === 'launch_complete' || event.event === 'launch_error') nativeLaunches.set(String(source ?? 'native'), true);
+    if (state.launching) settle();
   };
   const handleConsole = (event: ConsoleEvent) => {
     let session = state.sessions.find(item => item.id === event.sessionId);
@@ -63,11 +84,18 @@ export function createLaunchMonitor() {
       session.running = false;
       session.code = event.code;
       if (event.kind === 'error') session.error = event.text;
+      // 通道断开不等于注入失败；结束等待并保留详情，不伪造启动成功。
+      const completed = nativeLaunches.get(session.id) === true;
+      if (session.generation === state.generation && !session.readOnly && ((event.kind === 'error' && !completed) || nativeLaunches.get(session.id) === false || missingNativeResult())) {
+        handleEvent({ event: 'launch_status_unavailable', consoleSessionId: session.id,
+          message: event.text || '启动程序已退出，但未收到启动完成事件' });
+      }
     }
   };
   const connect = () => connection ??= Promise.allSettled([
     subscribeLaunchEvents(handleEvent),
     listen<ConsoleEvent>('launch-console-event', ({ payload }) => handleConsole(payload)),
+    listen('open-launch-console', () => open()),
   ]).then(results => {
     const listeners = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
     const failure = results.find(result => result.status === 'rejected');
@@ -79,15 +107,37 @@ export function createLaunchMonitor() {
   }).catch(error => { connection = undefined; throw error; });
   const begin = async () => {
     state.launching = true;
-    try { await connect(); }
-    catch (error) { console.warn('[LaunchMonitor] 无法监听启动输出，继续启动', error); }
+    queueFinished = false;
+    nativeExpected = false;
+    nativeLaunches.clear();
     state.generation++;
     state.currentEvent = null;
+    state.failure = null;
     state.events = [];
     state.visible = true;
-    state.collapsed = true;
+    state.collapsed = false;
+    try { await connect(); }
+    catch (error) { console.warn('[LaunchMonitor] 无法监听启动输出，继续启动', error); }
   };
-  const finish = () => { state.launching = false; };
+  const finish = (success = false, waitForNative = false) => {
+    queueFinished = true;
+    nativeExpected = waitForNative && unlisten.length > 0;
+    if (!success) {
+      state.launching = false;
+      if (!state.failure) handleEvent({ event: 'launch_cancelled' });
+      return;
+    }
+    if (waitForNative && !unlisten.length) {
+      state.launching = false;
+      handleEvent({ event: 'launch_status_unavailable', message: '启动请求已提交，但无法监听注入状态；请以实际游戏状态为准' });
+      return;
+    }
+    if (!waitForNative && !state.failure) handleEvent({ event: 'launch_complete' });
+    if (missingNativeResult() && !state.failure) handleEvent({ event: 'launch_status_unavailable', message: '启动程序已退出，但未收到启动完成事件' });
+    // 进程出现可能早于注入完成；不等 Run.exe 的退出倒计时或游戏日志结束。
+    settle();
+  };
+  const open = () => { state.visible = true; state.collapsed = false; };
   const hasActiveLoad = () => state.launching || state.sessions.some(session => session.running);
   const dismiss = () => {
     // 所选来源可能已结束，但其他代次的程序或只读日志仍在运行。
@@ -96,7 +146,7 @@ export function createLaunchMonitor() {
     state.collapsed = true;
     return true;
   };
-  return { state, connect, begin, finish, hasActiveLoad, dismiss, handleEvent, handleConsole,
+  return { state, connect, begin, finish, open, hasActiveLoad, dismiss, handleEvent, handleConsole,
     async send(text: string) {
       const session = state.sessions.find(item => item.id === state.selectedId);
       if (!session?.running) throw new Error('控制台程序已退出');

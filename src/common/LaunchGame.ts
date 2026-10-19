@@ -541,7 +541,7 @@ export class LaunchGame {
         onNeedsUpdate: () => Promise<boolean | void> | boolean | void,
         onNeedsConfigureProcessPath?: () => void,
         ctrlPressed = false,
-    ): Promise<void> {
+    ): Promise<'native' | 'direct' | false> {
         let managedStagedTarget: string | null = null;
         let launchSubmitted = false;
         try {
@@ -556,7 +556,7 @@ export class LaunchGame {
                 onNeedsUpdate,
                 (targetExe) => this.preflightGraphicsLaunch(gameName, targetExe),
             );
-            if (!preflight) return;
+            if (!preflight) return false;
 
             const { migotoDir, config, targetExe, graphicsDecision } = preflight;
             const launchTargetProgram = config.launchTargetProgram !== false;
@@ -575,7 +575,7 @@ export class LaunchGame {
                 ElMessage.warning(
                     t("launchGame.messages.shellLauncherPathRequired"),
                 );
-                return;
+                return false;
             }
 
             if (
@@ -589,7 +589,7 @@ export class LaunchGame {
                         path: launcherExePath,
                     }),
                 );
-                return;
+                return false;
             }
 
             // Check 3Dmigoto Integrity
@@ -613,11 +613,11 @@ export class LaunchGame {
                 } catch {
                     // Cancelled
                 }
-                return;
+                return false;
             }
 
             if (!pureDirectTarget) {
-                await MigotoManager.patchD3dxForLaunch(gameName);
+                await MigotoManager.patchD3dxForLaunch(gameName, { overlayLanguage: appSettings.runtimeOverlayLanguage ?? 'auto' });
             }
 
             const preLaunchPrograms = launchTargetProgram
@@ -626,7 +626,7 @@ export class LaunchGame {
                       "preLaunchPrograms",
                   )
                 : [];
-            if (!preLaunchPrograms) return;
+            if (!preLaunchPrograms) return false;
 
             const postLaunchPrograms = launchTargetProgram
                 ? await this.buildConfiguredPrograms(
@@ -634,7 +634,7 @@ export class LaunchGame {
                       "postLaunchPrograms",
                   )
                 : [];
-            if (!postLaunchPrograms) return;
+            if (!postLaunchPrograms) return false;
 
             // Construct programs list
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
@@ -762,6 +762,7 @@ export class LaunchGame {
                     extraDlls: hotRuntimeDlls,
                     launchArgs: hotLaunchArgs,
                     useShell: false,
+                    overlayLanguage: appSettings.runtimeOverlayLanguage ?? 'auto',
                 });
             }
 
@@ -811,7 +812,7 @@ export class LaunchGame {
                             targetExe,
                         },
                     );
-                    return;
+                    return false;
                 }
                 programs.push({
                     path: exePath,
@@ -844,6 +845,7 @@ export class LaunchGame {
             await invoke("launch_programs", { programs });
             launchSubmitted = true;
             ElMessage.success(t("launchGame.messages.launchFlowExecuted"));
+            return useRunInjector ? "native" : "direct";
         } catch (e: unknown) {
             const errorText = String(e);
             console.error("Start Game Error:", e);
@@ -857,6 +859,7 @@ export class LaunchGame {
                     confirmButtonText: t("launchGame.common.confirm"),
                 },
             );
+            throw e;
         } finally {
             if (managedStagedTarget && !launchSubmitted) {
                 try {

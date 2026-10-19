@@ -52,6 +52,7 @@ const gamesList = reactive<GameInfo[]>([])
 const gamesDir = ref<string>('')
 const isFirstRunOnboardingOpen = ref(false)
 const gameSwitchRevision = ref(0)
+const launchConsoleShortcutError = ref('')
 
 export const useAppStateStore = defineStore('appState', () => {
   const autoUpdateInFlight = new Set<string>()
@@ -206,6 +207,9 @@ export const useAppStateStore = defineStore('appState', () => {
       appSettings.VersionNumber = AppSettings.getCurrentVersionNumber()
       applyAppThemeColors()
       syncShowWindowShortcut()
+      void setLaunchConsoleShortcut(appSettings.launchConsoleShortcut).catch(error => {
+        console.warn('[LaunchConsoleShortcut]', error)
+      })
       
       void registerWindowSizeListener()
       setTimeout(() => {
@@ -234,6 +238,17 @@ export const useAppStateStore = defineStore('appState', () => {
     }).catch((error) => {
       console.warn('Failed to sync show-window shortcut state:', error)
     })
+  }
+
+  async function setLaunchConsoleShortcut(shortcut: string) {
+    try {
+      await invoke('set_launch_console_shortcut', { shortcut })
+      appSettings.launchConsoleShortcut = shortcut.trim()
+      launchConsoleShortcutError.value = ''
+    } catch (error) {
+      launchConsoleShortcutError.value = String(error)
+      throw error
+    }
   }
 
   async function loadGames() {
@@ -495,6 +510,7 @@ export const useAppStateStore = defineStore('appState', () => {
 
   return {
     saveSettingsNow,
+    setLaunchConsoleShortcut,
     setSidebarGameOrder,
     prepareWindowForDisplay,
     restoreWindowBoundsFromSettings,
@@ -520,6 +536,8 @@ export const AppStateManager = {
   gamesDir,
   isFirstRunOnboardingOpen,
   gameSwitchRevision,
+  launchConsoleShortcutError,
+  get setLaunchConsoleShortcut() { return useAppStateStore().setLaunchConsoleShortcut },
   get saveSettingsNow() { return useAppStateStore().saveSettingsNow },
   get setSidebarGameOrder() { return useAppStateStore().setSidebarGameOrder },
   get prepareWindowForDisplay() { return useAppStateStore().prepareWindowForDisplay },

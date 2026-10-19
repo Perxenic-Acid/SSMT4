@@ -5,11 +5,12 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { reactive } from 'vue';
 
-function monitor(failListen = false) {
+function monitor(failListen = false, ready = Promise.resolve()) {
   const handlers = new Map(), calls = [], stopped = [];
   const mocks = {
     vue: { reactive },
     '@tauri-apps/api/event': { listen: async (name, handler) => {
+      await ready;
       if (failListen) throw new Error('listen unavailable');
       handlers.set(name, event => handler({ payload: event }));
       return () => stopped.push(name);
@@ -28,7 +29,7 @@ function monitor(failListen = false) {
     assert.ok(name in mocks, `Unexpected import ${name}`); return mocks[name];
   } });
   const h = exports.createLaunchMonitor();
-  return { ...h, calls, stopped, emit: (kind, text = '', id = 'a') => h.handleConsole({
+  return { ...h, calls, stopped, shortcut: () => handlers.get('open-launch-console')?.(), emit: (kind, text = '', id = 'a') => h.handleConsole({
     sessionId: id, program: `${id}.exe`, kind, text, pid: 123, code: kind === 'exit' ? 7 : undefined,
   }) };
 }
@@ -54,7 +55,7 @@ test('监听在启动之前就绪，输入发给所选会话，完成和隐藏�
   await assert.rejects(() => h.send('late'));
   assert.equal(h.state.sessions[0].code, 7);
   h.dispose();
-  assert.equal(h.stopped.length, 2);
+  assert.equal(h.stopped.length, 3);
 });
 
 test('上一次启动的进程继续输出，但其启动事件不会覆盖新启动状态', async () => {
@@ -118,10 +119,10 @@ test('启动失败仍等待流程释放，来源错误后空闲可关闭且记�
   assert.equal(h.hasActiveLoad(), false);
   assert.equal(h.dismiss(), true);
   assert.equal(h.state.sessions[0].error, 'read failed');
-  assert.equal(h.state.currentEvent.event, 'launch_error');
+  assert.equal(h.state.failure.event, 'launch_error');
 });
 
-test('关闭后迟到输出不重新打开，下一次启动重新显示折叠面板并保留历史', async () => {
+test('关闭后迟到输出不重新打开，下一次启动重新展开面板并保留历史', async () => {
   const h = monitor(); await h.begin();
   h.emit('started'); h.emit('stdout', 'retained'); h.emit('exit'); h.finish();
   h.state.collapsed = false;
@@ -134,7 +135,7 @@ test('关闭后迟到输出不重新打开，下一次启动重新显示折叠�
   assert.equal(h.state.sessions[0].output, 'retained late');
   await h.begin();
   assert.equal(h.state.visible, true);
-  assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.collapsed, false);
   assert.equal(h.state.sessions[0].output, 'retained late');
 });
 
@@ -147,9 +148,10 @@ test('监听失败不阻断游戏启动，并清理已经成功注册的监听�
   assert.equal(h.state.launching, false);
 });
 
-test('默认只显示阶段，日志来源不展开浮窗、不抢所选会话，并拒绝输入', async () => {
+test('日志来源不重新展开已收起的浮窗、不抢所选会话，并拒绝输入', async () => {
   const h = monitor(); await h.begin();
-  assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.collapsed, false);
+  h.state.collapsed = true;
   h.emit('started');
   h.state.collapsed = false;
   h.state.visible = false;
@@ -174,4 +176,99 @@ test('默认只显示阶段，日志来源不展开浮窗、不抢所选会话�
   assert.equal(h.state.selectedId, 'new-run');
   h.emit('log_started', 'missing-parent', 'ignored-shade');
   assert.equal(h.state.sessions.some(item => item.id === 'ignored-shade'), false);
+});
+
+
+test('监听尚未就绪时立即展开，并在开始新代次前清空旧错误', async () => {
+  let release;
+  const h = monitor(false, new Promise(resolve => { release = resolve; }));
+  h.state.failure = { event: 'launch_error' };
+  const pending = h.begin();
+  assert.equal(h.state.visible, true);
+  assert.equal(h.state.collapsed, false);
+  assert.equal(h.state.generation, 1);
+  assert.equal(h.state.failure, null);
+  release(); await pending;
+});
+
+test('启动队列返回或进程出现不代表注入完成，成功事件后收起且日志继续', async () => {
+  const h = monitor(); await h.begin(); h.emit('started');
+  h.handleEvent({ event: 'launch_started', consoleSessionId: 'a' });
+  h.handleEvent({ event: 'target_created', consoleSessionId: 'a' });
+  h.finish(true, true);
+  assert.equal(h.state.collapsed, false);
+  assert.equal(h.state.launching, true);
+  h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
+  assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.launching, false);
+  assert.equal(h.state.sessions[0].running, true);
+  h.open();
+  h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
+  assert.equal(h.state.collapsed, false); // 重复完成事件不收起手动打开的面板。
+});
+
+test('完成事件早于队列返回时仍等待队列，晚于队列且尚无事件时仍等待注入', async () => {
+  const h = monitor(); await h.begin(); h.emit('started');
+  h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
+  assert.equal(h.state.collapsed, false);
+  h.finish(true, true); assert.equal(h.state.collapsed, true);
+  await h.begin(); h.emit('started', '', 'b');
+  h.finish(true, true); assert.equal(h.state.launching, true);
+  h.handleEvent({ event: 'launch_complete', consoleSessionId: 'b' });
+  assert.equal(h.state.collapsed, true);
+});
+
+test('失败不收起且后续进度不覆盖错误，取消与无控制台成功分别处理', async () => {
+  const h = monitor(); await h.begin();
+  h.handleEvent({ event: 'launch_error', message: 'injection failed' });
+  h.handleEvent({ event: 'launch_error', message: 'late channel error' });
+  h.handleEvent({ event: 'target_created' }); h.finish(true, true);
+  assert.equal(h.state.collapsed, false);
+  assert.equal(h.state.failure.message, 'injection failed');
+  assert.equal(h.state.launching, false);
+  await h.begin(); h.finish(false);
+  assert.equal(h.state.collapsed, false);
+  assert.equal(h.state.currentEvent.event, 'launch_cancelled');
+  await h.begin(); h.finish(true);
+  assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.currentEvent.event, 'launch_complete');
+});
+
+test('未收到完成事件的进程退出或通道错误不永远等待，也不伪造成功', async () => {
+  for (const late of [false, true]) {
+    const h = monitor(); await h.begin(); h.emit('started');
+    if (late) h.finish(true, true);
+    h.emit('exit');
+    if (!late) h.finish(true, true);
+    assert.equal(h.state.launching, false);
+    assert.equal(h.state.collapsed, false);
+    assert.equal(h.state.failure.event, 'launch_status_unavailable');
+  }
+});
+
+test('全局快捷键在没有历史或关闭后展开控制台，不创建程序', async () => {
+  const h = monitor(); await h.connect(); h.shortcut();
+  assert.equal(h.state.visible, true); assert.equal(h.state.collapsed, false);
+  assert.equal(h.state.sessions.length, 0); assert.equal(h.calls.length, 0);
+  assert.equal(h.dismiss(), true);
+  h.shortcut(); assert.equal(h.state.visible, true);
+  assert.equal(h.state.launching, false);
+});
+
+test('无法监听时队列仍可提交，但不把无法确认的注入当成功收起', async () => {
+  const h = monitor(true); await h.begin(); h.finish(true, true);
+  assert.equal(h.state.launching, false);
+  assert.equal(h.state.collapsed, false);
+  assert.equal(h.state.currentEvent.event, 'launch_status_unavailable');
+});
+
+test('注入已确认完成后控制台断线仅保留来源错误，不反向宣称启动失败', async () => {
+  const h = monitor(); await h.begin(); h.emit('started');
+  h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
+  h.finish(true, true);
+  h.emit('error', 'socket disconnected');
+  assert.equal(h.state.failure, null);
+  assert.equal(h.state.currentEvent.event, 'launch_complete');
+  assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.sessions[0].error, 'socket disconnected');
 });
