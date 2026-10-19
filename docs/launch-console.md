@@ -41,6 +41,17 @@ Windows 上接受的连接会继承监听端非阻塞状态，必须显式调用
 通信报文和输入有大小上限。进程退出后最多排空两秒管道，避免后代继承 stdout 导致会话挂住。
 关闭应用会断开输入并停止本体日志写入，helper 继续等待工具退出、排空输出，不主动结束工具或游戏。
 
+### 游戏与 SSMT 的独立生命周期
+
+游戏成功启动后，关闭 SSMT 应只结束界面、输入连接和本体日志跟随；游戏及其进程内 Runtime / 插件继续运行。需要常驻的辅助程序按游戏生命周期退出，图形文件恢复 helper 继续等待游戏结束再还原文件。启动尚未完成时仍可能依赖 SSMT 协调恢复屏障，不能把此阶段当成已经交接。
+
+Windows 的父子进程关系本身不会让父进程退出时自动结束子进程，但子进程默认继承父进程的 Job。上级工具关闭带 `KILL_ON_JOB_CLOSE` 的 Job 时，会结束其中尚存的进程；`CREATE_NO_WINDOW` 和 `DETACHED_PROCESS` 都不能替代 Job 脱离。[Windows 进程退出说明](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process)、[Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
+
+`bun tauri dev` 的 Cargo 启动链尤其需要检查这个边界；Cargo 在 Windows 上创建允许显式脱离的 Job，用于清理整棵启动树。[Cargo Job 实现](https://doc.rust-lang.org/nightly/nightly-rustc/src/cargo/util/job.rs.html)
+控制台 helper 的 PowerShell 启动入口、GUI Shell 启动入口，以及图形恢复 helper 统一通过 `utils::independent_process` 创建，使用 `CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW`。在启动链最外层脱离后，Run.exe 与游戏仍沿用原有参数、工作目录、UAC 和注入顺序。仅移除本体的结束进程代码、或只验证 TCP 断开不杀工具，都不足以验证这个边界。
+
+某些受管环境禁止脱离 Job。仅在进程创建返回访问被拒绝时按原方式重试，并写明无法脱离的诊断信息，避免阻断启动或重复创建已成功启动的目标；这种降级下仍可能受上级 Job 清理影响，不承诺完全独立。
+
 这是标准流控制台，不能接管已独立运行的外部控制台，也不提供完整 ConPTY/VT 终端或 `ReadConsole` 等 Console API 交互。
 输出按流处理 UTF-8；出现非法 UTF-8 时尝试 GBK，跨分片的多字节字符会保留。文本输入使用 UTF-8。
 `Run.exe --machine-readable` 的 JSONL 会复用现有启动事件总线，普通回显仍保留在控制台与日志中。
@@ -63,6 +74,7 @@ ReShade 是 DLL，没有可供接管的独立控制台。浮窗展示它实际�
 - `node --test scripts/tests/test-launch-monitor.mjs scripts/tests/test-launch-settings.mjs scripts/tests/test-efmi-launch.mjs scripts/tests/test-runtime-sync.mjs`：立即展开、事件与队列完成顺序、成功收起 / 失败保留、快捷键空白唤起、配置持久化，以及多会话、无控制台、无插件与组合启动。
 - 在 `src-tauri` 执行 `cargo test --lib commands::launch_shortcut::tests` 与 `cargo test --lib commands::game_launcher::tests`：快捷键冲突保留与回滚、外部程序等待期间的调度响应。不注册真实系统快捷键，不启动游戏。
 - 在 `src-tauri` 执行 `cargo test --lib commands::launch_console::tests -- --test-threads=1`：真实 Winsock 延迟读取、标准流子进程、无换行提示、中文输入、大段输出、退出码、断开不杀进程、日志轮转。
+- `cargo test --lib utils::independent_process::tests -- --test-threads=1`：在隔离夹具内创建真实 `KILL_ON_JOB_CLOSE` Job，对照原路径被结束、新路径继续完成，以及禁止脱离时的启动降级。只关闭测试自建的 Job，不启动游戏。
 - `cargo test --lib commands::launch_logs::tests -- --test-threads=1`：跳过旧日志、延迟创建、追加、重写、轮转、跨分片中文和有界大段输出。
 - `bun run build` 与 `node scripts/check-render-perf.mjs`。
 
@@ -70,3 +82,4 @@ ReShade 是 DLL，没有可供接管的独立控制台。浮窗展示它实际�
 收起并重新展开浮窗，检查输出连续性；切换 ReShade 来源，确认没有输入框，Run.exe 退出后仍收到游戏日志，游戏退出后显示跟随结束。检查日志中的 PID、注入事件与退出码。
 负载活动期间检查关闭按钮禁用及原因提示；所有来源退出后面板仍保留，可以手动关闭。折叠后移开鼠标，检查半透明及悬停 / 键盘聚焦恢复，窄窗口中关闭按钮和底部操作均应留在边界内。
 提权确认、反作弊环境和游戏自身运行结果仍须单独实机确认，离线子进程测试不能替代这些证据。
+成功进入游戏后正常关闭 SSMT，确认游戏及 Mod 保持运行；游戏退出后确认图形恢复完成。开发模式与正式版、Console 与 GUI 启动路径分别验收；不要用任务管理器的“结束进程树”代替正常关闭。

@@ -91,3 +91,6 @@ pedantic = "deny"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry", "Win32_Storage_FileSystem"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_JobObjects", "Win32_Security"] }

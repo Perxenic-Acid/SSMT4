@@ -757,9 +757,8 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
 
                 let output = tauri::async_runtime::spawn_blocking(move || {
                     let mut command = std::process::Command::new("powershell");
-                    #[cfg(windows)]
-                    command.creation_flags(0x08000000);
-                    command.args(["-NoProfile", "-Command", &ps_script]).output()
+                    command.args(["-NoProfile", "-Command", &ps_script]);
+                    crate::utils::independent_process::output(&mut command)
                 }).await.map_err(|error| error.to_string())?
                     .map_err(|e| {
                         let msg = format!(

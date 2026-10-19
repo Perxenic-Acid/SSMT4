@@ -54,6 +54,7 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 
 - 启动时整个 SSMT 无响应，先核对 Tauri 命令是否同步执行插件哈希、复制、注册表或子进程等待；改为 async 后仍须用 `spawn_blocking` 移出调度线程。控制台先展开再等待监听；以队列完成与原生 `launch_complete` 联合收起，不用固定延时、进程出现或 Run.exe 退出代替成功。覆盖事件先后顺序、失败保留、旧代事件与无插件 / 纯净启动。快捷键只展开全局已有浮窗，无历史不创建程序；更新注册须保留旧组合至新组合成功，禁止注销其他功能的快捷键。设置页的 Runtime 语言写入 DX11 `[Hunting] overlay_language`，纯净 / DX12 不写入。
 - 控制台通道失败不能直接归因为注入失败。先查缓存 `Logs/*-launch-console-*.log` 的 PID、stdout/stderr 与退出码；命令已提交后确认超时，不回滚已启动目标或重复启动。Windows 接收本机连接后显式清除非阻塞标志，用真实延迟读取覆盖 Winsock 10035；握手后清除实际读取句柄及其克隆的超时，覆盖长时间无输出与等待输入。UAC 与 stdio 在同级权限 helper 内衔接。回显日志与界面限流分开，关闭浮窗不杀进程。见 [启动控制台](../../docs/launch-console.md)。
+- 关闭 SSMT 连带退出游戏时，区分正常关闭与“结束进程树”，检查 `bun tauri dev` / Cargo / IDE 上级的 Windows Job。没有显式 kill 不等于生命周期独立，`CREATE_NO_WINDOW` / `DETACHED_PROCESS` 也不能脱离 Job。游戏启动入口与需跨本体存活的恢复 helper 使用 `utils::independent_process`，在最外层请求 `CREATE_BREAKAWAY_FROM_JOB`，保持参数、UAC、注入顺序与普通短期工具的管理边界。受管环境访问被拒绝时只能在创建失败后降级并记录限制，不能重试已启动目标。运行真实 Job 的隔离进程回归，同时保留控制台断线回归；游戏成功交接后再验收关闭本体仍可游玩，不能据离线夹具宣称实机通过。
 
 - 扩展 DLSS5 游戏时先区分无原生输入、DX11 原生输入与 DX12 原生输入，再按真实 `gamePreset` 和 EXE 联合选择 Feeder / DX11 Bridge / 原生 consumer。Feeder 必须配齐运动矢量 FX、公共 include 及明确的 technique 顺序；不能把 GIMI FSR2 Bridge 套到其他游戏。下载时校验归档及提取项，ReShade 安装程序仅读取固定哈希对应的内嵌 ZIP，绝不执行。共用一个热注入 Host 与启用贡献组合器，状态检查失败也必须保留重新下载入口。离线实组件提取、接口共存、游戏内成功 NR 帧分开验收。
 - 同一游戏有多个 DLSS 实现时，选择应按实例持久保存，完整安装成功后再原子切换安装记录与路线。旧配置继续原路线；各实现使用各自配套组件，不能同时注入 Feeder 与 FSR2 Bridge / OptiScaler。界面展示所选实现的独立组件状态与抗锯齿要求。

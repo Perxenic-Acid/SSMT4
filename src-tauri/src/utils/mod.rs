@@ -1,4 +1,5 @@
 pub mod extraction_log;
+pub(crate) mod independent_process;
 pub mod ssmt_binary_utils;
 pub mod ssmt_command_utils;
 pub mod ssmt_compress_utils;

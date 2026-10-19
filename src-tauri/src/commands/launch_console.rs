@@ -476,10 +476,7 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
     let script = helper_script(&exe, port, &token, elevated);
     let mut launcher = Command::new("powershell");
     launcher.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
-    #[cfg(windows)]
-    launcher.creation_flags(0x08000000);
-    let result = launcher
-        .output()
+    let result = crate::utils::independent_process::output(&mut launcher)
         .map_err(|e| format!("控制台启动失败：{e}"))?;
     if !result.status.success() {
         log_output(&mut log, "error", &String::from_utf8_lossy(&result.stderr));

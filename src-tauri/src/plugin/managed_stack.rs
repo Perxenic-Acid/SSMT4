@@ -63,12 +63,8 @@ fn watch_game_exit(game_executable: PathBuf) -> Result<(), String> {
         .arg(std::process::id().to_string())
         .arg(&session)
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000 | 0x00000008);
-    }
-    command.spawn().map_err(|error| format!("cannot start graphics cleanup helper: {error}"))?;
+    crate::utils::independent_process::spawn(&mut command)
+        .map_err(|error| format!("cannot start graphics cleanup helper: {error}"))?;
     Ok(())
 }
 
