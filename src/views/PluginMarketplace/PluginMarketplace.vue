@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 import { FolderOpened, Refresh, Search, Setting, Document, Delete, Box, InfoFilled } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
-import { AppStateManager, BGType } from '../../store/AppStateManager'
+import { AppStateManager } from '../../store/AppStateManager'
 import { ResourceManager } from '../../store/ResourceManager'
 
 const PlayerTweaksCameraSettings = defineAsyncComponent(
@@ -529,7 +529,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="plugin-marketplace" :class="{ 'is-video-background': AppStateManager.appSettings.bgType === BGType.Video }">
+  <main class="plugin-marketplace">
     <details v-if="catalogError || localCatalogError" class="catalog-notice">
       <summary><InfoFilled aria-hidden="true" /><span>{{ t('pluginMarketplace.catalogUnavailable') }}</span><span class="notice-details">{{ t('pluginMarketplace.showDetails') }}</span></summary>
       <p v-if="catalogError">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</p>
@@ -841,20 +841,14 @@ onMounted(async () => {
   min-width: 0;
   border: var(--t-page-panel-border);
   border-radius: var(--t-page-panel-radius);
-  background: var(--t-page-panel-bg);
+  background: linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), .05), transparent), rgba(8, 12, 19, .94);
   box-shadow: var(--t-page-panel-shadow);
-  backdrop-filter: var(--t-page-panel-blur);
-  -webkit-backdrop-filter: var(--t-page-panel-blur);
 }
-/* 与工作台采用相同处理：视频下不叠加动态模糊层，避免 WebView2 持续闪烁和文字丢失。 */
-.plugin-marketplace.is-video-background,
-.plugin-marketplace.is-video-background :deep(*) {
+/* 静态背景和未配置游戏时也会遇到合成闪烁；市场及其设置统一使用无背景模糊的材质。 */
+.plugin-marketplace,
+.plugin-marketplace :deep(*) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-}
-.is-video-background .marketplace-sidebar,
-.is-video-background .plugin-detail {
-  background: linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), .05), transparent), rgba(8, 12, 19, .94);
 }
 /* 内容少时保持自然高度，超出本列可用高度后只收缩并滚动列表。 */
 .marketplace-sidebar { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
@@ -941,9 +935,9 @@ onMounted(async () => {
 .detail-empty h2 { margin: 14px 0 6px; font-size: 16px; font-weight: 500; color: var(--t-page-text); }
 .detail-empty p { max-width: 260px; margin: 0; }
 .list-loading { padding: 16px 10px; color: var(--market-muted); font-size: 12px; }
-.loading-row { height: 58px; border-radius: 7px; margin-top: 12px; background: linear-gradient(100deg, var(--t-surface-soft) 25%, var(--t-surface-hover) 50%, var(--t-surface-soft) 75%); background-size: 200% 100%; animation: market-loading 1.5s linear infinite; }
-@keyframes market-loading { to { background-position: -200% 0; } }
-.plugin-marketplace button:focus-visible, .catalog-notice summary:focus-visible { outline: 2px solid var(--t-page-accent); outline-offset: 3px; }
+.loading-row { height: 58px; border-radius: 7px; margin-top: 12px; background: var(--t-surface-hover); animation: market-loading 1.5s ease-in-out infinite; }
+@keyframes market-loading { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
+.plugin-marketplace button:focus-visible, .catalog-notice summary:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
 .plugin-log-view { max-height: 58vh; overflow: auto; margin: 0; padding: 12px; background: var(--t-surface-soft); color: var(--t-page-text); font: 11px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1080px) {
   .marketplace-layout { grid-template-columns: minmax(250px, 280px) minmax(0, 1fr); }

@@ -231,7 +231,7 @@ WorkPage / ModsManagement 均实际出现过，已修复）。
 无限循环的装饰动画**只能**动画 `transform` / `opacity`（合成器属性，GPU 混合，
 零重绘）。禁止动画以下属性，尤其是在列表项上：
 
-- `box-shadow` / `border-color` / `background` —— 每帧主线程重绘
+- `box-shadow` / `border-color` / `background` / `background-position` —— 每帧主线程重绘
 - `left` / `top` / `width` / `height` / `margin` —— 每帧触发布局 + 重绘
 
 等效改造手法：

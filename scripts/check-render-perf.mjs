@@ -37,7 +37,7 @@ const PER_ITEM_SELECTOR_HINTS = [
 const PAINT_LAYOUT_PROPS = new Set([
   'box-shadow', 'border-color', 'border-width', 'left', 'top', 'right',
   'bottom', 'width', 'height', 'margin', 'margin-top', 'margin-left',
-  'padding', 'padding-top', 'background', 'background-color', 'filter',
+  'padding', 'padding-top', 'background', 'background-color', 'background-position', 'filter',
   'clip-path', 'font-size', 'outline', 'text-shadow',
 ]);
 
