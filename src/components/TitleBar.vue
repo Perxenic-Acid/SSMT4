@@ -350,11 +350,23 @@ const toggleMaximize = async () => {
     checkMaximized();
 };
 const close = () => appWindow.close();
-const startDrag = (event: MouseEvent) => {
+const startDrag = async (event: MouseEvent) => {
     // Skip the drag on the second click of a double-click so the dblclick
     // handler (maximize toggle) can fire instead of restarting the drag.
-    if (event.detail > 1) return;
-    appWindow.startDragging();
+    if (event.button !== 0 || event.detail > 1) return;
+
+    // A maximized window cannot be moved by startDragging; restore it first.
+    if (isMaximized.value) {
+        await appWindow.unmaximize();
+        await nextTick();
+        checkMaximized();
+    }
+
+    try {
+        await appWindow.startDragging();
+    } catch (error) {
+        console.warn('startDragging failed', error);
+    }
 };
 
 const togglePin = async () => {
@@ -379,8 +391,10 @@ const toggleSettingsPage = () => {
 
 <template>
     <div ref="captionBarRef" class="caption-bar">
-        <!-- Drag region (window move; double-click toggles maximize) -->
-        <div class="caption-drag-region" data-tauri-drag-region @mousedown="startDrag" @dblclick="toggleMaximize"></div>
+        <!-- Drag region (window move; double-click toggles maximize).
+             Keep the manual startDragging path only: data-tauri-drag-region
+             would trigger a second drag request. -->
+        <div class="caption-drag-region" @mousedown="startDrag" @dblclick="toggleMaximize"></div>
 
         <!-- Game quick-switcher at the far left: current game icon, opens the game picker card -->
         <div class="game-switcher-root">
@@ -507,7 +521,7 @@ const toggleSettingsPage = () => {
              tabs and the window controls, and is always available for
              dragging the window even when tabs fill the bar.
              Double-click toggles maximize, like a native caption bar. -->
-        <div class="caption-spacer" data-tauri-drag-region @mousedown="startDrag" @dblclick="toggleMaximize"></div>
+        <div class="caption-spacer" @mousedown="startDrag" @dblclick="toggleMaximize"></div>
 
         <!-- Window controls (WinUI3 caption buttons) -->
         <div class="caption-controls">
@@ -597,7 +611,11 @@ const toggleSettingsPage = () => {
 .caption-drag-region {
     position: absolute;
     inset: 0;
-    cursor: default;
+    cursor: grab;
+}
+
+.caption-drag-region:active {
+    cursor: grabbing;
 }
 
 /* ═══════════ Game quick-switcher (far left of the caption bar) ═══════════ */
@@ -887,9 +905,14 @@ const toggleSettingsPage = () => {
 .caption-spacer {
     position: relative;
     flex: 1 1 auto;
-    min-width: 72px;
+    min-width: 140px;
     height: 100%;
     z-index: 1;
+    cursor: grab;
+}
+
+.caption-spacer:active {
+    cursor: grabbing;
 }
 
 .caption-controls {
