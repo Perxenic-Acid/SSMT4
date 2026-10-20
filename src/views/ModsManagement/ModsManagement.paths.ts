@@ -172,3 +172,32 @@ export const isDisabledGroup = (group: GroupInfo) => {
     const idTail = (group.id || '').split('/').pop()?.toLowerCase() || '';
     return !group.enabled || name.startsWith('disabled') || idTail.startsWith('disabled');
 };
+
+export const dedupeGroupsById = (groups: GroupInfo[]) => {
+    const deduped = new Map<string, GroupInfo>();
+
+    for (const group of groups) {
+        if (!group?.id) continue;
+        const existing = deduped.get(group.id);
+        if (!existing) {
+            deduped.set(group.id, { ...group });
+            continue;
+        }
+
+        const preferIncoming = group.enabled && !existing.enabled;
+        const preferred = preferIncoming ? group : existing;
+        const fallback = preferIncoming ? existing : group;
+        const modCount = group.enabled === existing.enabled
+            ? Math.max(existing.modCount ?? 0, group.modCount ?? 0)
+            : (preferred.modCount ?? 0);
+        deduped.set(group.id, {
+            ...fallback,
+            ...preferred,
+            iconPath: preferred.iconPath ?? fallback.iconPath,
+            modCount,
+            isDirectoryLink: Boolean(existing.isDirectoryLink || group.isDirectoryLink),
+        });
+    }
+
+    return Array.from(deduped.values());
+};
