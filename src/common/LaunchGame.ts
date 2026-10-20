@@ -570,6 +570,12 @@ export class LaunchGame {
             const useRunInjector = !pureMode || !launchTargetProgram;
             const useEfmiDirectWait = useRunInjector &&
                 (config.gamePreset || "").trim().toUpperCase() === "EFMI";
+            // 与 XXMI 的 EFMI DIRECT 链路一致：默认由 SSMT 直接启动 Endfield.exe，
+            // Run.exe 只等待进程并注入；Shell/手动启动保留为回退路径。
+            const launchEfmiTargetDirectly =
+                useEfmiDirectWait && launchTargetProgram && !useShell;
+            const efmiDirectLaunchArgs =
+                (config.launchArgs || "").trim() || "-force-d3d11";
 
             if (launchTargetProgram && useShell && !launcherExePath) {
                 ElMessage.warning(
@@ -578,9 +584,14 @@ export class LaunchGame {
                 return false;
             }
 
+            if (launchEfmiTargetDirectly && !launcherExePath) {
+                ElMessage.error(t("launchGame.messages.efmiDirectLauncherRequired"));
+                return false;
+            }
+
             if (
                 launchTargetProgram &&
-                useShell &&
+                (useShell || launchEfmiTargetDirectly) &&
                 launcherExePath &&
                 !(await exists(launcherExePath))
             ) {
@@ -779,6 +790,10 @@ export class LaunchGame {
                 }
                 if (useEfmiDirectWait) {
                     injectorArgs.push("--inject-mode direct --wait-for-target --process-timeout 120");
+                    if (launchEfmiTargetDirectly) {
+                        injectorArgs.push(`--launch-parent "${launcherExePath.replace(/"/g, '\\"')}"`);
+                        injectorArgs.push(`--target-args "${efmiDirectLaunchArgs.replace(/"/g, '\\"')}"`);
+                    }
                 }
                 // 1. Default flow launches Run.exe first.
                 programs.push({
@@ -798,7 +813,7 @@ export class LaunchGame {
                 }
             }
 
-            // 2. Pure mode launches the target directly; shell mode keeps existing behavior.
+            // 2. Pure mode, shell mode, and the EFMI direct launch start the target/launcher.
             if (launchTargetProgram && (pureMode || useShell)) {
                 const exePath = useShell ? launcherExePath : targetExe;
                 if (!exePath) {
