@@ -1,6 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { prepareDevResources, shouldPrepareDevResources } from './dev/prepare-resources.mjs';
 
 const repoRoot = process.cwd();
 const privateKeyPath = join(repoRoot, 'updater-signing.key');
@@ -21,6 +22,15 @@ const args = process.argv.slice(2);
 const isBuildLike = args.some((arg) => arg === 'build' || arg === 'signer');
 const shouldGenerateLatestJson = args.some((arg) => arg === 'build');
 const childEnv = { ...process.env };
+
+if (shouldPrepareDevResources(args)) {
+  try {
+    prepareDevResources(repoRoot);
+  } catch (error) {
+    console.error(`[dev-resources] ${error.message}`);
+    process.exit(1);
+  }
+}
 
 const hasProxyEnvironment = Object.keys(childEnv).some((name) =>
   ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'].includes(name.toUpperCase()),
