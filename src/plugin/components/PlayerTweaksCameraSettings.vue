@@ -118,8 +118,8 @@ const save = async () => {
             <el-switch v-model="camera.disableTransitionBlend" :aria-label="label('关闭镜头过渡混合', 'Disable camera transition blend')" />
           </div>
           <div class="tweak-row">
-            <div class="tweak-row-copy"><span>{{ label('关闭角色近镜头淡出', 'Disable character fade') }}</span><small>{{ label('镜头靠近时仍显示角色。', 'Keep the character visible near the camera.') }}</small></div>
-            <el-switch v-model="camera.disableCharacterFade" :aria-label="label('关闭角色靠近镜头时淡出', 'Disable character fade')" />
+            <div class="tweak-row-copy"><span>{{ label('关闭角色镜头淡出', 'Disable camera-driven character fade') }}</span><small>{{ label('镜头贴近或低角度观察时保持显示，包含角色界面。', 'Keep characters visible at close range or low camera angles, including the character screen.') }}</small></div>
+            <el-switch v-model="camera.disableCharacterFade" :aria-label="label('关闭角色镜头淡出', 'Disable camera-driven character fade')" />
           </div>
           <div class="tweak-row">
             <div class="tweak-row-copy"><span>{{ label('关闭事件镜头移动', 'Disable event camera movement') }}</span><small>{{ label('停用事件触发的自动镜头位移。', 'Disable automatic camera movement triggered by events.') }}</small></div>
