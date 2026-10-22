@@ -1,6 +1,5 @@
-use super::client::{self, ManifestInfo};
+use super::client::{self, Client, ManifestInfo};
 use prost::Message;
-use reqwest::blocking::Client;
 use std::{collections::HashSet, io::Read, path::PathBuf};
 
 #[derive(Clone, PartialEq, Message)]

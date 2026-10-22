@@ -1,7 +1,129 @@
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client as Transport, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{io::Read, time::Duration};
+use std::{collections::HashMap, error::Error, io::Read, sync::Mutex, time::Duration};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Route {
+    System,
+    Direct,
+}
+impl Route {
+    fn other(self) -> Self {
+        match self {
+            Self::System => Self::Direct,
+            Self::Direct => Self::System,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::System => "系统网络路径",
+            Self::Direct => "直连路径",
+        }
+    }
+}
+
+pub struct Client {
+    system: Transport,
+    direct: Transport,
+    routes: Mutex<HashMap<String, Route>>,
+}
+
+impl Client {
+    pub fn get(&self, raw: &str, offset: Option<u64>) -> Result<Response, String> {
+        self.get_validated(&validate_url(raw)?, offset)
+    }
+
+    fn get_validated(&self, url: &reqwest::Url, offset: Option<u64>) -> Result<Response, String> {
+        let host = url.host_str().unwrap_or_default();
+        let first = self
+            .routes
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get(host)
+            .copied()
+            .unwrap_or(Route::System);
+        let mut errors = vec![];
+        for route in [first, first.other()] {
+            let transport = match route {
+                Route::System => &self.system,
+                Route::Direct => &self.direct,
+            };
+            let mut request = transport
+                .get(url.clone())
+                .header(reqwest::header::ACCEPT_ENCODING, "identity");
+            if let Some(offset) = offset {
+                request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+            }
+            match request.send().and_then(|r| r.error_for_status()) {
+                Ok(response) => {
+                    // 只记本次客户端已连通的主机路径，避免每个分块都先撞一次故障代理。
+                    self.routes
+                        .lock()
+                        .map_err(|e| e.to_string())?
+                        .insert(host.into(), route);
+                    if route != first {
+                        eprintln!("[HoYoPlay] {host} 已切换至{}", route.label());
+                    }
+                    return Ok(response);
+                }
+                Err(error) => {
+                    let retry = retryable(&error);
+                    let reason = if error.is_timeout() {
+                        "连接或读取超时"
+                    } else if error.is_connect() {
+                        "连接失败（DNS、代理或 TLS 握手）"
+                    } else {
+                        "请求失败"
+                    };
+                    // Build 查询携带分支密码，不能让 reqwest 顶层 URL 泄露查询参数。
+                    errors.push(format!(
+                        "{}：{reason}：{}",
+                        route.label(),
+                        error_chain(&error.without_url())
+                    ));
+                    if !retry {
+                        break;
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "官方资源获取失败 [{}{}]：{}",
+            host,
+            url.path(),
+            errors.join("；")
+        ))
+    }
+}
+
+fn retryable(error: &reqwest::Error) -> bool {
+    if let Some(status) = error.status() {
+        return status.is_server_error()
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+    }
+    !error.is_builder()
+        && !error.is_redirect()
+        && (error.is_connect() || error.is_timeout() || error.is_request())
+}
+
+pub(super) fn error_chain(error: &(dyn Error + 'static)) -> String {
+    let mut reasons = vec![error.to_string()];
+    let mut source = error.source();
+    // 有界展开底层 socket / TLS 原因，不能只保留 error sending request。
+    for _ in 0..7 {
+        let Some(error) = source else {
+            break;
+        };
+        let reason = error.to_string();
+        if reasons.last() != Some(&reason) {
+            reasons.push(reason);
+        }
+        source = error.source();
+    }
+    reasons.join(" → ")
+}
 
 pub const AUDIO: &[&str] = &["zh-cn", "en-us", "ja-jp", "ko-kr"];
 
@@ -72,7 +194,15 @@ impl Server {
 }
 
 pub fn http() -> Result<Client, String> {
-    Client::builder()
+    Ok(Client {
+        system: transport(false)?,
+        direct: transport(true)?,
+        routes: Mutex::new(HashMap::new()),
+    })
+}
+
+fn transport(direct: bool) -> Result<Transport, String> {
+    let builder = Transport::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(90))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -82,9 +212,9 @@ pub fn http() -> Result<Client, String> {
                 attempt.follow()
             }
         }))
-        .user_agent("SSMT/HoYoPlay")
-        .build()
-        .map_err(|e| e.to_string())
+        .user_agent("SSMT/HoYoPlay");
+    let builder = if direct { builder.no_proxy() } else { builder };
+    builder.build().map_err(|e| error_chain(&e.without_url()))
 }
 
 pub fn validate_url(raw: &str) -> Result<reqwest::Url, String> {
@@ -115,12 +245,8 @@ pub fn validate_url(raw: &str) -> Result<reqwest::Url, String> {
 }
 
 pub fn get_bytes(client: &Client, url: &str, limit: u64) -> Result<Vec<u8>, String> {
-    validate_url(url)?;
-    let response = client
-        .get(url)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("官方资源获取失败：{e}"))?;
+    let url = validate_url(url)?;
+    let response = client.get_validated(&url, None)?;
     if response.content_length().is_some_and(|n| n > limit) {
         return Err("官方响应超出大小限制".into());
     }
@@ -128,7 +254,13 @@ pub fn get_bytes(client: &Client, url: &str, limit: u64) -> Result<Vec<u8>, Stri
     response
         .take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            format!(
+                "官方响应读取中断 [{}]：{}",
+                url.host_str().unwrap_or_default(),
+                error_chain(&e)
+            )
+        })?;
     if bytes.len() as u64 > limit {
         return Err("官方响应超出大小限制".into());
     }
@@ -342,3 +474,7 @@ pub fn launch_config(client: &Client, server: &Server) -> Result<Value, String> 
     }
     Ok(row.clone())
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

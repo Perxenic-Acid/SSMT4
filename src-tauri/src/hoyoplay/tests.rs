@@ -531,21 +531,23 @@ fn junction_paths_are_rejected_before_writing_outside_the_workspace() {
 }
 
 #[test]
-#[ignore = "只读下载一份官方资源清单，不下载客户端"]
+#[ignore = "只读下载三款游戏的本体清单，不下载客户端"]
 fn live_manifest_checksum_and_schema_match_the_current_game() {
     let http = client::http().unwrap();
-    let server = &client::servers("GIMI")[0];
-    let (main, _) = client::branches(&http, server).unwrap();
-    let info = client::build(&http, server, &main, &["zh-cn".into()]).unwrap();
-    let files = manifest::decode(
-        &http,
-        info.iter().find(|m| m.matching_field == "game").unwrap(),
-    )
-    .unwrap();
-    assert!(files.iter().any(|f| f.name == server.exe));
-    eprintln!(
-        "官方 {} 清单：{} 项，摘要与分块布局通过",
-        main.tag,
-        files.len()
-    );
+    for preset in ["GIMI", "SRMI", "ZZMI"] {
+        let server = &client::servers(preset)[0];
+        let (main, _) = client::branches(&http, server).unwrap();
+        let info = client::build(&http, server, &main, &["zh-cn".into()]).unwrap();
+        let files = manifest::decode(
+            &http,
+            info.iter().find(|m| m.matching_field == "game").unwrap(),
+        )
+        .unwrap();
+        assert!(files.iter().any(|f| f.name == server.exe));
+        eprintln!(
+            "官方 {preset}/{} 清单：{} 项，摘要与分块布局通过",
+            main.tag,
+            files.len()
+        );
+    }
 }

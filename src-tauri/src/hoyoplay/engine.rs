@@ -1,12 +1,11 @@
 use super::{
-    client::{self, Branch, Download, Server},
+    client::{self, Branch, Client, Download, Server},
     manifest::{self, Asset, Chunk},
     space,
     task::Task,
     transaction::{self, Change, Workspace},
     transfer, Context,
 };
-use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::json;
 use std::{

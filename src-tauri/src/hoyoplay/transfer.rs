@@ -1,10 +1,9 @@
 use super::{
-    client::{self, Download},
+    client::{self, Client, Download},
     manifest::{self, Chunk},
     task::Task,
     transaction,
 };
-use reqwest::blocking::Client;
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
@@ -180,13 +179,7 @@ fn download(
         fs::remove_file(part).map_err(|e| e.to_string())?;
         offset = 0;
     }
-    let mut request = http
-        .get(url)
-        .header(reqwest::header::ACCEPT_ENCODING, "identity");
-    if offset > 0 {
-        request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
-    }
-    let response = request.send().map_err(|e| format!("下载连接失败：{e}"))?;
+    let response = http.get(url, (offset > 0).then_some(offset))?;
     append_response(response, part, size, offset, task)
 }
 
@@ -227,7 +220,7 @@ pub(super) fn append_response(
         task.check()?;
         let count = response
             .read(&mut buffer)
-            .map_err(|e| format!("下载中断，可重试续传：{e}"))?;
+            .map_err(|e| format!("下载中断，可重试续传：{}", client::error_chain(&e)))?;
         if count == 0 {
             break;
         }
