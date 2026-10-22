@@ -10,7 +10,7 @@ function moduleAt(path, dependencies = {}) {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
   const exports = {};
-  vm.runInNewContext(code, { exports, require(name) {
+  vm.runInNewContext(code, { exports, setTimeout, clearTimeout, require(name) {
     assert.ok(name in dependencies, `未注入依赖 ${name}`); return dependencies[name];
   } });
   return exports;

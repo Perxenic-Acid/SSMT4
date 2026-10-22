@@ -10,7 +10,7 @@ function load(relative, mocks) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const exports = {};
-  vm.runInNewContext(compiled, { exports, console, require(name) {
+  vm.runInNewContext(compiled, { exports, console, setTimeout, clearTimeout, require(name) {
     assert.ok(name in mocks, `Unexpected import: ${name}`);
     return mocks[name];
   } });
@@ -26,6 +26,7 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
     '@tauri-apps/api/path': { join: async (...parts) => parts.join('/') },
     '@tauri-apps/plugin-fs': {
       exists: async () => true,
+      stat: async () => ({ isFile: true }),
       readTextFile: async () => ini,
       writeTextFile: async (_path, value) => { ini = value; },
     },
@@ -68,6 +69,8 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
         return;
       }
       if (command === 'launch_programs') return;
+      if (command === 'hoyoplay_check_launch') return;
+      if (command === 'find_game_executable') return null;
       assert.fail(`Unexpected IPC: ${command}`);
     } },
   };
@@ -79,12 +82,14 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
     './ResourceManager': mocks['../store/ResourceManager'],
   }).MigotoManager;
   migoto.check3DmigotoIntegrity = async () => true;
-  const launch = load('../../src/common/LaunchGame.ts', { ...mocks, '../store/MigotoManager': { MigotoManager: migoto } }).LaunchGame;
+  const launchPaths = load('../../src/common/LaunchPath.ts', mocks);
+  const versions = load('../../src/common/UpdateCheckUtils.ts', {});
+  const launch = load('../../src/common/LaunchGame.ts', { ...mocks, './LaunchPath': launchPaths, './UpdateCheckUtils': versions, '../store/MigotoManager': { MigotoManager: migoto } }).LaunchGame;
   launch.ensureSSMTRuntimeFiles = async () => {};
   launch.ensureSSMTPluginHostFile = async () => {};
   const preflight = launch.prepareLaunch.bind(launch);
   launch.prepareLaunch = async () => ({ migotoDir: 'C:/Migoto', config, targetExe: config.targetExePath, graphicsDecision: 'continue_this_launch' });
-  return { launch, migoto, preflight, calls, messages, ini: () => ini };
+  return { launch, migoto, preflight, calls, messages, files: mocks['@tauri-apps/plugin-fs'], ini: () => ini };
 }
 
 const base = { gamePreset: 'EFMI', targetExePath: 'C:/Game/Endfield.exe', launchArgs: '-force-d3d11', launchTargetProgram: true };
@@ -186,6 +191,31 @@ test('EFMI manual wait requires an explicit executable path', async () => {
   assert.equal(await h.preflight('EFMI', {}, false), null);
   assert.equal(h.messages[0].kind, 'warning');
   assert.equal(h.calls.length, 0);
+});
+
+test('通用启动预检拒绝存在的目录和失效路径，未知文件名的真实文件仍可启动', async () => {
+  for (const stat of [async () => ({ isFile: false }), async () => { throw Error('不存在'); }]) {
+    const h = harness({ ...base, gamePreset: 'Custom', targetExePath: 'D:/empty-folder' });
+    h.files.stat = stat;
+    assert.equal(await h.preflight('Custom', {}, true), null);
+    assert.equal(h.messages.at(-1).kind, 'error');
+    assert.ok(!h.calls.some(c => c.command === 'launch_programs'));
+  }
+  const h = harness({ ...base, gamePreset: 'ZZMIDX12', targetExePath: 'D:/custom/unknown-name.exe' });
+  const prepared = await h.preflight('Custom', {}, true);
+  assert.equal(prepared.targetExe, 'D:/custom/unknown-name.exe');
+  assert.ok(!h.calls.some(c => c.command === 'find_game_executable'));
+});
+
+test('绝区零两种预设在假路径时仅快速匹配，找不到时不会启动', async () => {
+  for (const gamePreset of ['ZZMI', 'ZZMIDX12']) {
+    const h = harness({ ...base, gamePreset, targetExePath: 'D:/missing.exe' });
+    h.files.stat = async () => ({ isFile: false });
+    assert.equal(await h.preflight(gamePreset, {}, true), null);
+    const discovery = h.calls.find(c => c.command === 'find_game_executable');
+    assert.equal(discovery.args.quickOnly, true);
+    assert.ok(!h.calls.some(c => c.command === 'launch_programs'));
+  }
 });
 
 const hotPlan = {

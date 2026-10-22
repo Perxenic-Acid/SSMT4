@@ -12,6 +12,8 @@ import type { AppSettings } from "../store/AppSettings";
 import { debugLog, debugWarn } from "../utils/debugLog";
 import { serializePlayerTweaksCamera } from '../plugin/playerTweaksCamera';
 import { serializePlayerTweaksGameplay } from '../plugin/playerTweaksGameplay';
+import { isExistingLaunchFile } from './LaunchPath';
+import { withTimeout } from './UpdateCheckUtils';
 
 const t = i18n.global.t;
 
@@ -368,11 +370,11 @@ export class LaunchGame {
         const launchTargetProgram = migotoCfg.launchTargetProgram !== false;
         let targetExe = (migotoCfg.targetExePath || "").trim();
         const isConfiguredTargetValid =
-            targetExe.length > 0 && (await exists(targetExe));
+            await isExistingLaunchFile(targetExe);
         const useShell = launchTargetProgram && !!migotoCfg.useShell;
         const configuredLauncher = (migotoCfg.launcherExePath || "").trim();
         const isConfiguredLauncherValid = !useShell || (
-            configuredLauncher.length > 0 && (await exists(configuredLauncher))
+            await isExistingLaunchFile(configuredLauncher)
         );
         const gamePreset = (migotoCfg.gamePreset || "").trim().toUpperCase();
         if (["GIMI", "SRMI", "ZZMI", "ZZMIDX12"].includes(gamePreset)) {
@@ -382,6 +384,7 @@ export class LaunchGame {
             "GIMI",
             "SRMI",
             "ZZMI",
+            "ZZMIDX12",
             "NTEMI",
             "WWMI",
         ].includes(gamePreset);
@@ -398,11 +401,14 @@ export class LaunchGame {
                 "GameLauncher",
                 `${gamePreset} target is missing or invalid; starting silent discovery.`,
             );
-            const discovered = await invoke<DiscoveredGamePaths | null>(
+            const quickOnly = ["GIMI", "SRMI", "ZZMI", "ZZMIDX12"].includes(gamePreset);
+            const discovery = invoke<DiscoveredGamePaths | null>(
                 "find_game_executable",
-                { gamePreset },
+                { gamePreset, quickOnly },
             );
-            if (discovered) {
+            const discovered = quickOnly ? await withTimeout(discovery, 2500) : await discovery;
+            if (discovered && await isExistingLaunchFile(discovered.targetExePath)
+                && (!useShell || await isExistingLaunchFile(discovered.launcherExePath))) {
                 targetExe = discovered.targetExePath;
                 migotoCfg.targetExePath = discovered.targetExePath;
                 migotoCfg.launcherExePath = discovered.launcherExePath;
@@ -434,7 +440,7 @@ export class LaunchGame {
             return null;
         }
 
-        if (requiresTargetPath && !(await exists(targetExe))) {
+        if (requiresTargetPath && !(await isExistingLaunchFile(targetExe))) {
             ElMessage.error(t("launchGame.messages.targetProcessFileNotFound"));
             return null;
         }

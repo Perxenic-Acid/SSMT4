@@ -7,7 +7,7 @@ import ts from 'typescript';
 const source = readFileSync(new URL('../../src/features/gameMaintenance/entry.ts', import.meta.url), 'utf8');
 const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 const exports = {};
-vm.runInNewContext(code, { exports });
+vm.runInNewContext(code, { exports, setTimeout, clearTimeout });
 const { resolveClientEntry, supportsGameMaintenance } = exports;
 
 test('首批仅三个米家游戏，两个绝区零预设共享入口', () => {
@@ -24,6 +24,13 @@ test('可用的手动进程路径优先，不触发匹配和安装', async () =>
   });
   assert.equal(result.needsInstallation, false); assert.equal(result.discovered, undefined);
 });
+
+test('未知文件名只要是真实文件就可使用，不因预设名称不同而扫描或安装', async () => {
+  const result = await resolveClientEntry({ gamePreset: 'ZZMI', targetExePath: 'D:/custom/start-custom.exe' }, {
+    isFile: async () => true, discover: () => { throw Error('不应匹配'); },
+  });
+  assert.equal(result.needsInstallation, false);
+});
 test('空路径或已失效路径优先复用自动匹配到的现有客户端', async () => {
   for (const targetExePath of ['', 'D:/removed/StarRail.exe']) {
     let queried = '';
@@ -39,4 +46,27 @@ test('未匹配、匹配结果已失效或匹配报错时进入安装入口', as
   for (const discover of [async () => null, async () => ({ targetExePath: 'missing.exe' }), async () => { throw Error('扫描失败'); }]) {
     assert.equal((await resolveClientEntry({ gamePreset: 'ZZMIDX12' }, { isFile: async () => false, discover })).needsInstallation, true);
   }
+});
+
+test('路径无法访问时仍进入安装，目录不会被当成游戏程序', async () => {
+  for (const isFile of [async () => false, async () => { throw Error('访问被拒绝'); }]) {
+    assert.equal((await resolveClientEntry({ gamePreset: 'ZZMI', targetExePath: 'D:/empty-folder' }, {
+      isFile, discover: async () => null,
+    })).needsInstallation, true);
+  }
+});
+
+test('扫描或文件检查不返回时仍及时进入安装，迟到发现不能回写结果', async () => {
+  let complete;
+  const result = await resolveClientEntry({ gamePreset: 'ZZMI', targetExePath: '' }, {
+    isFile: async () => true,
+    discover: () => new Promise(resolve => { complete = resolve; }),
+  }, 5);
+  assert.equal(result.needsInstallation, true);
+  complete({ targetExePath: 'D:/late/ZenlessZoneZero.exe' });
+  await Promise.resolve();
+  assert.equal(result.needsInstallation, true);
+  assert.equal((await resolveClientEntry({ gamePreset: 'ZZMI', targetExePath: 'D:/slow.exe' }, {
+    isFile: () => new Promise(() => {}), discover: async () => null,
+  }, 5)).needsInstallation, true);
 });

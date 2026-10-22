@@ -31,8 +31,13 @@ SophonBuildClient / GameServerConverter / GameChannelSdkService。
 
 ## 入口与操作
 
-- 没有可用的游戏进程路径时，主页点击“启动游戏”先自动匹配现有客户端。仍未找到则
-  进入安装界面；主按钮下方“已安装? 点击此处手动指定”可以直接选取 exe。
+- 配置路径须指向可访问的真实文件；空白、目录、失效链接及已删除文件都不可用。
+  不要求手动配置的程序名称在已知游戏名称列表内。
+- 没有可用的游戏进程路径时，主页主按钮显示“安装游戏”，点击先快速匹配现有客户端。
+  自动匹配只检查常见安装位置与固定磁盘的浅层目录，不在启动链中递归扫描全盘。
+  后端限制扫描时间、条目和深度，前端为整个入口检查提供 3.5 秒兜底；超时或找不到即
+  进入安装界面，迟到结果不保存。主按钮下方“已安装? 点击此处手动指定”可以直接选取 exe。
+  游戏设置中由用户主动点击的“自动匹配”仍保留完整搜索。
 - 查询到本地正式版本落后时，主按钮变成“更新游戏”，点击直接开始后台更新。
   网络检查失败时保留普通启动，不伪造“必须更新”。
 - 官方提供预下载分支时，主按钮左侧显示无背景的“预下载”按钮。点击直接开始，
@@ -80,7 +85,9 @@ SophonBuildClient / GameServerConverter / GameChannelSdkService。
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib hoyoplay:: -- --nocapture
-node --test scripts/tests/test-game-maintenance-entry.mjs scripts/tests/test-home-maintenance.mjs
+node --test scripts/tests/test-game-maintenance-entry.mjs scripts/tests/test-home-maintenance.mjs scripts/tests/test-launch-path.mjs scripts/tests/test-efmi-launch.mjs
+node --test scripts/tests/test-runtime-sync.mjs
+cargo test --manifest-path src-tauri/Cargo.toml --lib commands::game_discovery::tests -- --nocapture
 bunx vue-tsc --noEmit
 ```
 
@@ -88,6 +95,7 @@ bunx vue-tsc --noEmit
 原文件变化、文件占用后的回滚、中断恢复、配置合并、SDK 路径越界、已有目录归属和目录锁。
 还覆盖 junction 拒绝、已卸载资源类别和黑名单保留。前端覆盖已配置 / 自动匹配 /
 未找到的入口选择，预下载不阻止启动，以及跨游戏和任务启动前的迟到响应。
+路径回归覆盖已存在的目录、已删除文件、未知程序名和不返回的文件检查 / 自动扫描。
 
 联网只读验证（不执行安装）：
 

@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -125,6 +126,150 @@ fn available_drive_roots() -> Vec<PathBuf> {
 #[cfg(not(windows))]
 fn available_drive_roots() -> Vec<PathBuf> {
     Vec::new()
+}
+
+// 自动启动只检查本机固定磁盘；断开的网络映射盘不能拖住安装入口。
+#[cfg(windows)]
+fn local_drive_roots() -> Vec<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    let mask = unsafe { GetLogicalDrives() };
+    (0..26)
+        .filter(|index| mask & (1 << index) != 0)
+        .filter_map(|index| {
+            let letter = b'A' + index as u8;
+            let wide = [letter as u16, b':' as u16, b'\\' as u16, 0];
+            // Win32 DRIVE_FIXED = 3；不访问网络盘或无介质的可移动设备。
+            (unsafe { GetDriveTypeW(wide.as_ptr()) } == 3)
+                .then(|| PathBuf::from(format!("{}:\\", letter as char)))
+        })
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn local_drive_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+struct QuickScan {
+    deadline: Instant,
+    entries_left: usize,
+    directories_left: usize,
+}
+impl QuickScan {
+    fn new() -> Self {
+        Self {
+            deadline: Instant::now() + Duration::from_secs(2),
+            entries_left: 4096,
+            directories_left: 128,
+        }
+    }
+    fn exhausted(&self) -> bool {
+        Instant::now() >= self.deadline || self.entries_left == 0 || self.directories_left == 0
+    }
+    fn scan(
+        &mut self,
+        roots: Vec<PathBuf>,
+        exe_names: &[&str],
+        max_depth: usize,
+    ) -> Option<PathBuf> {
+        let mut pending: VecDeque<_> = roots.into_iter().map(|root| (root, 0)).collect();
+        while let Some((directory, depth)) = pending.pop_front() {
+            if self.exhausted() {
+                return None;
+            }
+            self.directories_left -= 1;
+            let Ok(entries) = fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries {
+                if Instant::now() >= self.deadline || self.entries_left == 0 {
+                    return None;
+                }
+                self.entries_left -= 1;
+                let Ok(entry) = entry else {
+                    continue;
+                };
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                let path = entry.path();
+                if kind.is_file() && is_game_executable(&path, exe_names) {
+                    return Some(path);
+                }
+                if !kind.is_dir() || kind.is_symlink() || depth >= max_depth {
+                    continue;
+                }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if entry
+                        .metadata()
+                        .map_or(true, |m| m.file_attributes() & 0x400 != 0)
+                    {
+                        continue;
+                    }
+                }
+                let name = entry.file_name().to_string_lossy().to_lowercase();
+                if !SKIPPED_SCAN_DIRS.contains(&name.as_str()) {
+                    pending.push_back((path, depth + 1));
+                }
+            }
+        }
+        None
+    }
+}
+
+fn find_game_executable_quick(spec: &GameDiscoverySpec) -> Option<PathBuf> {
+    let mut scan = QuickScan::new();
+    for path in spec.known_paths {
+        if scan.exhausted() {
+            return None;
+        }
+        if Path::new(path).is_file() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    let drives = local_drive_roots();
+    let mut roots = Vec::new();
+    for drive in &drives {
+        for folder in [
+            "HoYoPlay",
+            "Program Files/HoYoPlay",
+            "mihoyo launcher",
+            "Program Files/mihoyo launcher",
+            "hoyoverse launcher",
+            "Program Files/hoyoverse launcher",
+        ] {
+            roots.push(drive.join(folder));
+        }
+        for folder in spec.install_dir_names {
+            roots.push(drive.join(folder));
+        }
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        if let Ok(entries) = fs::read_dir(PathBuf::from(profile).join("Desktop")) {
+            for entry in entries {
+                if scan.exhausted() {
+                    break;
+                }
+                scan.entries_left -= 1;
+                let Ok(entry) = entry else {
+                    continue;
+                };
+                let name = entry.file_name().to_string_lossy().to_lowercase();
+                if spec
+                    .desktop_prefixes
+                    .iter()
+                    .any(|prefix| name.starts_with(&prefix.to_lowercase()))
+                {
+                    roots.push(entry.path());
+                }
+            }
+        }
+    }
+    // 只递归常见安装位置；磁盘根目录只检查自身及一级子目录。
+    scan.scan(roots, spec.exe_names, 4)
+        .or_else(|| scan.scan(drives, spec.exe_names, 1))
 }
 
 fn scan_tree(root: &Path, exe_names: &[&str], skip_system_dirs: bool) -> Option<PathBuf> {
@@ -340,6 +485,7 @@ fn find_ntemi_executables_sync() -> Option<(PathBuf, PathBuf)> {
 #[tauri::command]
 pub async fn find_game_executable(
     game_preset: String,
+    quick_only: Option<bool>,
 ) -> Result<Option<GameDiscoveryResult>, String> {
     let normalized_preset = game_preset.trim().to_uppercase();
     tauri::async_runtime::spawn_blocking(move || {
@@ -350,7 +496,13 @@ pub async fn find_game_executable(
             return find_wwmi_executables_sync();
         }
         spec_for_preset(&normalized_preset)
-            .and_then(find_game_executable_sync)
+            .and_then(|spec| {
+                if quick_only.unwrap_or(false) {
+                    find_game_executable_quick(spec)
+                } else {
+                    find_game_executable_sync(spec)
+                }
+            })
             .map(|path| (path.clone(), path))
     })
     .await
@@ -365,7 +517,7 @@ pub async fn find_game_executable(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_game_executable, spec_for_preset};
+    use super::{is_game_executable, spec_for_preset, QuickScan};
     use std::path::Path;
 
     #[test]
@@ -386,5 +538,41 @@ mod tests {
             Path::new("launcher.exe"),
             &["StarRail.exe"]
         ));
+    }
+
+    #[test]
+    fn quick_scan_obeys_depth_and_work_limits_and_never_matches_a_directory() {
+        let parent = std::env::temp_dir().canonicalize().unwrap();
+        let root = parent.join(format!(
+            "SSMT-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("a/b/c")).unwrap();
+        std::fs::create_dir(root.join("ZenlessZoneZero.exe")).unwrap();
+        let target = root.join("a/b/c/ZenlessZoneZero.exe");
+        std::fs::write(&target, b"fixture; never executed").unwrap();
+        let names = &["ZenlessZoneZero.exe"];
+        assert!(QuickScan::new()
+            .scan(vec![root.clone()], names, 2)
+            .is_none());
+        assert_eq!(
+            QuickScan::new().scan(vec![root.clone()], names, 3),
+            Some(target)
+        );
+        let mut exhausted = QuickScan::new();
+        exhausted.entries_left = 0;
+        assert!(exhausted.scan(vec![root.clone()], names, 99).is_none());
+        let mut expired = QuickScan::new();
+        expired.deadline = std::time::Instant::now();
+        assert!(expired.scan(vec![root.clone()], names, 99).is_none());
+        assert_eq!(
+            root.canonicalize().unwrap().parent(),
+            Some(parent.as_path())
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

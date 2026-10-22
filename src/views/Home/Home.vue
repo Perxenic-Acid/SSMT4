@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 import { AppStateManager, BGType } from '../../store/AppStateManager'
 
 import { openPath, openUrl } from '@tauri-apps/plugin-opener'
-import { mkdir, stat } from '@tauri-apps/plugin-fs'
+import { mkdir } from '@tauri-apps/plugin-fs'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -22,6 +22,7 @@ import ReleaseNotesMarkdown from '../../components/ReleaseNotesMarkdown.vue'
 import { LaunchMonitor } from '../../store/LaunchMonitor'
 
 import { LaunchGame } from '../../common/LaunchGame';
+import { isExistingLaunchFile as isUsableClient } from '../../common/LaunchPath';
 import { resolveClientEntry, supportsGameMaintenance, type DiscoveredClient } from '../../features/gameMaintenance/entry';
 import { useHomeMaintenance } from '../../features/gameMaintenance/useHomeMaintenance';
 import { pickNewerUpdate, UPDATE_CHECK_TIMEOUT_MS } from '../../common/UpdateCheckUtils';
@@ -42,9 +43,6 @@ const appVersion = ref('')
 const clientMissing = ref(false)
 const checkingClient = ref(false)
 let configRequest = 0
-const isUsableClient = async (path: string) => {
-  try { return !!path && (await stat(path)).isFile } catch { return false }
-}
 
 const loadCurrentGameConfig = async () => {
   const request = ++configRequest
@@ -270,8 +268,10 @@ const showPreload = computed(() => canPreload.value || (maintenanceTask.value?.o
 const preloadCompleted = computed(() => maintenanceTask.value?.operation === 'preload' && maintenanceTask.value.state === 'completed'
   && maintenanceTask.value.targetVersion === maintenanceStatus.value?.preDownloadVersion);
 const mainButtonText = computed(() => {
+  if (checkingClient.value) return locale.value.startsWith('zh') ? '查找游戏…' : 'Finding game…';
   if (maintenanceBusy.value) return locale.value.startsWith('zh') ? '正在处理…' : 'Working…';
   if (maintenanceStatus.value?.recoveryPending) return locale.value.startsWith('zh') ? '恢复客户端' : 'Restore client';
+  if (clientMissing.value) return locale.value.startsWith('zh') ? '安装游戏' : 'Install game';
   return gameNeedsUpdate.value ? (locale.value.startsWith('zh') ? '更新游戏' : 'Update game') : t('home.actions.startGame');
 });
 const isStartButtonDisabled = computed(() => (
@@ -293,7 +293,10 @@ const specifyInstalledClient = async () => {
   try {
     const path = await open({ multiple: false, filters: [{ name: locale.value.startsWith('zh') ? '游戏程序' : 'Game executable', extensions: ['exe'] }] });
     if (typeof path !== 'string' || gameName !== appSettings.CurrentGameName) return;
-    if (!(await isUsableClient(path))) return;
+    if (!(await isUsableClient(path))) {
+      ElMessage.warning(locale.value.startsWith('zh') ? '所选路径不是可访问的文件，请重新选择游戏程序。' : 'The selected file is unavailable. Select the game executable again.');
+      return;
+    }
     ++configRequest;
     const config = await ResourceManager.loadGameConfig(gameName);
     if (gameName !== appSettings.CurrentGameName) return;
@@ -405,7 +408,7 @@ const launchGame = async (event?: MouseEvent) => {
     const config = await ResourceManager.loadGameConfig(gameName);
     const entry = await resolveClientEntry(config, {
       isFile: isUsableClient,
-      discover: gamePreset => invoke<DiscoveredClient | null>('find_game_executable', { gamePreset }),
+      discover: gamePreset => invoke<DiscoveredClient | null>('find_game_executable', { gamePreset, quickOnly: true }),
     });
     if (gameName !== appSettings.CurrentGameName) return;
     if (entry.discovered) {
@@ -420,7 +423,7 @@ const launchGame = async (event?: MouseEvent) => {
     currentGameConfig.value = config;
     clientMissing.value = entry.needsInstallation;
     if (entry.needsInstallation) { await openGameMaintenance(); return; }
-    if (entry.discovered) { await nextTick(); await refreshMaintenance(); }
+    if (entry.discovered) void refreshMaintenance();
     if (gameName !== appSettings.CurrentGameName) return;
     if (maintenanceStatus.value?.recoveryPending) { await openGameMaintenance(); return; }
     if (gameNeedsUpdate.value) {

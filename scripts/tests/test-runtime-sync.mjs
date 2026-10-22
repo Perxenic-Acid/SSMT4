@@ -14,7 +14,7 @@ function load(relative, mocks) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const exports = {};
-  vm.runInNewContext(compiled, { exports, console: { ...console, warn() {} }, require(name) {
+  vm.runInNewContext(compiled, { exports, setTimeout, clearTimeout, console: { ...console, warn() {} }, require(name) {
     assert.ok(name in mocks, `Unexpected import: ${name}`);
     return mocks[name];
   } });
@@ -48,6 +48,7 @@ async function harness(t, options = {}) {
   const writes = [];
   const fsMocks = {
     exists: async file => fs.access(file).then(() => true, () => false),
+    stat: async file => ({ isFile: (await fs.stat(file)).isFile() }),
     mkdir: fs.mkdir,
     readTextFile: file => fs.readFile(file, 'utf8'),
     writeFile: fs.writeFile,
@@ -75,6 +76,7 @@ async function harness(t, options = {}) {
     '@tauri-apps/plugin-fs': fsMocks,
     '@tauri-apps/api/core': { invoke: async (command, args) => {
       calls.push({ command, args });
+      if (command === 'hoyoplay_check_launch') return null;
       if (command === 'resolve_ssmt_runtime_source') {
         if (options.resolveError) throw new Error(options.resolveError);
         return { sourcePath: options.keepNewer ? target : source, version: '1.2.2.24',
@@ -153,7 +155,9 @@ async function harness(t, options = {}) {
   const migoto = load('../../src/store/MigotoManager.ts', {
     ...mocks, './ResourceManager': { ResourceManager: resource }, './D3dxIniManager': ini,
   }).MigotoManager;
-  const launch = load('../../src/common/LaunchGame.ts', { ...mocks, '../store/MigotoManager': { MigotoManager: migoto } }).LaunchGame;
+  const launchPaths = load('../../src/common/LaunchPath.ts', mocks);
+  const versions = load('../../src/common/UpdateCheckUtils.ts', {});
+  const launch = load('../../src/common/LaunchGame.ts', { ...mocks, './LaunchPath': launchPaths, './UpdateCheckUtils': versions, '../store/MigotoManager': { MigotoManager: migoto } }).LaunchGame;
   return { root, source, target, resourceDir, migotoDir, config, calls, messages, dialogs, writes, migoto, launch, resourceManager };
 }
 
@@ -332,7 +336,8 @@ test('pure launch does not read or deploy runtime or plugin resources', async t 
   assert.equal(h.writes.length, 0);
   assert.equal(h.dialogs.length, 0);
   assert.equal(h.messages.some(({ kind }) => kind === 'warning'), false);
-  assert.deepEqual(h.calls.map(call => call.command), ['launch_programs']);
+  // 纯净启动同样检查未完成的客户端事务，但不准备 Runtime 或插件资源。
+  assert.deepEqual(h.calls.map(call => call.command), ['hoyoplay_check_launch', 'launch_programs']);
 });
 
 test('GIMI configuration follows the saved switch before injection', async t => {
