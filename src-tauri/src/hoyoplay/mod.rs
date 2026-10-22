@@ -1,6 +1,7 @@
 mod client;
 mod engine;
 mod manifest;
+mod space;
 pub(crate) mod task;
 mod transaction;
 mod transfer;
@@ -158,6 +159,13 @@ pub fn detect_server(preset: &str, root: &Path) -> Result<Option<String>, String
         }
     }
     Ok(None)
+}
+
+#[tauri::command]
+pub async fn hoyoplay_estimate(request: engine::Request) -> Result<space::Estimate, String> {
+    tokio::task::spawn_blocking(move || space::estimate(request))
+        .await
+        .map_err(|e| format!("空间预估任务失败：{e}"))?
 }
 
 #[tauri::command]

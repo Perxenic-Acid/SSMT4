@@ -245,6 +245,8 @@ pub struct ManifestInfo {
     pub url: String,
     pub chunks: Download,
     pub matching_field: String,
+    pub download_size: u64,
+    pub install_size: u64,
 }
 
 pub fn build(
@@ -291,6 +293,8 @@ pub fn build(
             url: download.url(id)?,
             chunks,
             matching_field: field.into(),
+            download_size: number(&row["stats"], "compressed_size")?,
+            install_size: number(&row["stats"], "uncompressed_size")?,
         });
     }
     if !manifests.iter().any(|m| m.matching_field == "game")

@@ -25,3 +25,19 @@ export interface GameMaintenanceTask {
   filesDone: number;
   filesTotal: number;
 }
+
+export interface InstallSpaceRequest {
+  gameName: string;
+  serverId: string;
+  operation: 'install';
+  directory: string;
+  audioLanguages: string[];
+}
+export interface InstallSpaceEstimate {
+  targetVersion: string;
+  downloadBytes: number;
+  gameBytes: number;
+  requiredBytes: number;
+  availableBytes: number;
+  sufficient: boolean;
+}

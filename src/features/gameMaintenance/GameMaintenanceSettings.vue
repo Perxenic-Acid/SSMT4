@@ -7,6 +7,7 @@ import { ElMessageBox } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import type { GameMaintenanceStatus as Status, GameMaintenanceTask as Task } from './types';
 import referenceNotices from './NOTICE.md?raw';
+import { useInstallSpace } from './useInstallSpace';
 
 const props = defineProps<{ gameName: string; gamePreset: string; targetExePath: string }>();
 const emit = defineEmits<{ (e: 'completed'): void }>();
@@ -25,6 +26,11 @@ const ownTask = computed(() => task.value?.gameName === props.gameName ? task.va
 const switching = computed(() => !!status.value?.currentServer && status.value.currentServer !== server.value);
 const percent = computed(() => ownTask.value?.bytesTotal ? Math.min(100, Math.floor(ownTask.value.bytesDone / ownTask.value.bytesTotal * 100)) : 0);
 const voiceNames = [['zh-cn', '中文', 'Chinese'], ['en-us', '英语', 'English'], ['ja-jp', '日语', 'Japanese'], ['ko-kr', '韩语', 'Korean']];
+const installSpace = useInstallSpace(() => status.value && !status.value.clientFound && !loading.value && !active.value && directory.value && languages.value.length
+  ? { gameName: props.gameName, serverId: server.value, operation: 'install', directory: directory.value, audioLanguages: [...languages.value] }
+  : null);
+const { estimate: spaceEstimate, loading: spaceLoading, error: spaceError } = installSpace;
+const gib = (bytes: number) => `${(bytes / 1073741824).toFixed(2)} GiB`;
 let revision = 0;
 let disposed = false;
 let polling = false;
@@ -74,6 +80,7 @@ function toggleLanguage(value: string) {
 }
 async function start(operation: string) {
   if (starting.value || active.value) return;
+  starting.value = true;
   const gameName = props.gameName;
   const selectedServer = server.value;
   const selectedDirectory = directory.value;
@@ -84,6 +91,13 @@ async function start(operation: string) {
     switch: text('切换原神客户端', 'Convert Genshin client'), recover: text('恢复原客户端', 'Restore original client'),
   };
   try {
+    let spaceInfo = '';
+    if (operation === 'install') {
+      const space = await installSpace.refresh();
+      if (!space) return;
+      if (!space.sufficient) throw text('磁盘空间不足，请更换安装目录或释放空间。', 'Insufficient disk space. Choose another folder or free some space.');
+      spaceInfo = `\n${text('预计需要可用空间', 'Estimated free space required')}: ${gib(space.requiredBytes)} · ${text('可用', 'Available')}: ${gib(space.availableBytes)}`;
+    }
     const info = operation === 'preload'
       ? text('仅下载到缓存，不替换当前客户端。', 'Download to cache without replacing the current client.')
       : operation === 'recover'
@@ -91,11 +105,11 @@ async function start(operation: string) {
         : text('请先关闭游戏。文件校验完成后才会提交；下载期间可暂停，下次继续。', 'Close the game first. Files are committed after verification; downloads can be paused and resumed.');
     const confirmChannel = !!status.value?.clientFound && !status.value?.currentServer;
     const channelWarning = confirmChannel ? text('\n当前客户端未声明渠道，请确认你选择的渠道与它一致。', '\nThe existing client does not declare its channel. Confirm that your selection matches it.') : '';
-    await ElMessageBox.confirm(`${info}${channelWarning}\n\n${directory.value}\n${server.value} · ${status.value?.latestVersion ?? ''}`, labels[operation], {
+    await ElMessageBox.confirm(`${info}${channelWarning}\n\n${selectedDirectory}\n${selectedServer} · ${status.value?.latestVersion ?? ''}${spaceInfo}`, labels[operation], {
       confirmButtonText: labels[operation], cancelButtonText: text('取消', 'Cancel'), type: 'info',
     });
-    if (disposed || props.gameName !== gameName) return;
-    starting.value = true;
+    if (disposed || props.gameName !== gameName || directory.value !== selectedDirectory || server.value !== selectedServer
+      || JSON.stringify(languages.value) !== JSON.stringify(selectedLanguages)) return;
     const started = await invoke<Task>('hoyoplay_start', { request: {
       gameName, serverId: selectedServer, operation, directory: selectedDirectory, audioLanguages: selectedLanguages, confirmUnrecognizedChannel: confirmChannel,
     } });
@@ -154,10 +168,26 @@ onBeforeUnmount(() => { disposed = true; ++revision; if (timer) clearTimeout(tim
         :disabled="active || starting" :aria-pressed="languages.includes(voice[0])" @click="toggleLanguage(voice[0])">{{ text(voice[1], voice[2]) }}</button></div>
     </div>
     <p class="hint">{{ text('已安装的语音会一并更新；取消选择不会卸载语音。预下载缓存位于游戏目录，需要额外磁盘空间。', 'Installed voices are also updated; deselecting does not uninstall them. Pre-download cache uses extra space in the game folder.') }}</p>
+    <div v-if="status && !status.clientFound && directory && languages.length && !active" class="space-card" aria-live="polite" :aria-busy="spaceLoading">
+      <div class="progress-heading"><strong>{{ text('安装空间预估', 'Installation space estimate') }}</strong>
+        <el-button text :loading="spaceLoading" :disabled="starting || loading" @click="installSpace.refresh()">{{ text('重新估算', 'Recalculate') }}</el-button></div>
+      <p v-if="spaceLoading">{{ text('正在读取官方资源大小与磁盘可用空间…', 'Checking official resource sizes and available disk space…') }}</p>
+      <p v-else-if="spaceError" class="space-warning">{{ spaceError }}</p>
+      <template v-else-if="spaceEstimate">
+        <div class="space-values">
+          <div><span>{{ text('游戏与所选语音', 'Game & selected voices') }}</span><strong>{{ gib(spaceEstimate.gameBytes) }}</strong></div>
+          <div><span>{{ text('预计下载', 'Estimated download') }}</span><strong>{{ gib(spaceEstimate.downloadBytes) }}</strong></div>
+          <div><span>{{ text('预计需要可用空间', 'Estimated free space required') }}</span><strong>{{ gib(spaceEstimate.requiredBytes) }}</strong></div>
+          <div><span>{{ text('磁盘可用', 'Disk available') }}</span><strong :class="{ 'space-warning': !spaceEstimate.sufficient }">{{ gib(spaceEstimate.availableBytes) }}</strong></div>
+        </div>
+        <p v-if="!spaceEstimate.sufficient" class="space-warning">{{ text('空间不足，请更换目录或释放磁盘空间。', 'Insufficient space. Choose another folder or free disk space.') }}</p>
+        <p class="hint">{{ text('分块下载、校验并解压，不保留完整压缩包。空间估算包含临时缓存、渠道组件和安全余量；续装会复用已有数据，实际需求可能更少。', 'Chunks are downloaded, verified and extracted as they arrive. The estimate includes temporary cache, channel components and a safety margin; resuming can reuse existing data.') }}</p>
+      </template>
+    </div>
     <div v-if="switching" class="notice">{{ gamePreset === 'GIMI' ? text('换服会转换客户端文件与渠道 SDK，不迁移账号或存档。请先把原客户端更新到目标正式版本。', 'Conversion changes client files and channel SDK, not accounts or saves. Update the original client to the target release first.') : text('当前游戏首批支持安装更新，暂不支持已有客户端换服。', 'Installation and updates are available; conversion of an existing client is not supported yet.') }}</div>
     <div class="actions">
       <el-button v-if="switching && gamePreset === 'GIMI'" type="primary" :disabled="active || starting || loading || !languages.length" @click="start('switch')">{{ text('切换客户端', 'Convert client') }}</el-button>
-      <el-button v-else type="primary" :disabled="active || starting || loading || !status || !directory || !languages.length || switching || status.recoveryPending" @click="start(status?.clientFound ? 'update' : 'install')">
+      <el-button v-else type="primary" :loading="starting" :disabled="active || starting || loading || !status || !directory || !languages.length || switching || status.recoveryPending || (!status.clientFound && (spaceLoading || !spaceEstimate?.sufficient))" @click="start(status?.clientFound ? 'update' : 'install')">
         {{ status?.clientFound ? text('更新 / 修复', 'Update / repair') : text('安装游戏', 'Install game') }}
       </el-button>
       <el-button :disabled="active || starting || loading || !status?.preDownloadVersion || !status?.clientFound || switching || !languages.length || status?.recoveryPending" @click="start('preload')">{{ text('预下载', 'Pre-download') }}</el-button>
@@ -194,6 +224,12 @@ p { margin: 0; color: var(--text-secondary, #a9adba); font-size: 13px; line-heig
 .reference-notices { font-size: 12px; color: var(--text-secondary); }.reference-notices summary { cursor: pointer; }.reference-notices pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; line-height: 1.6; }
 .notice, .progress-card { padding: 16px; border: 1px solid var(--el-border-color); border-radius: 12px; font-size: 13px; line-height: 1.6; }
 .notice { border-color: var(--el-color-warning); }
+.space-card { padding: 16px; border: 1px solid var(--el-border-color); border-radius: 12px; }
+.space-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 12px; }
+.space-values > div { display: flex; flex-direction: column; gap: 6px; }
+.space-values span { font-size: 12px; color: var(--text-secondary); }
+.space-values strong { font-size: 17px; }
+.space-warning { color: var(--el-color-warning); }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }.actions .el-button { margin: 0; }
 .progress-heading { margin-bottom: 12px; }.progress-heading strong { overflow-wrap: anywhere; min-width: 0; }
 @media (max-width: 760px) { .section-heading, .folder-row { flex-wrap: wrap; }.versions { grid-template-columns: 1fr; } }

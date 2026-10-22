@@ -111,6 +111,15 @@ fn live_official_branches_and_builds_match_requested_channels() {
                 pre.is_some()
             );
             assert!(info.iter().any(|m| m.matching_field == "game"));
+            let installed = super::space::sum(info.iter().map(|m| m.install_size)).unwrap();
+            let download = super::space::sum(info.iter().map(|m| m.download_size)).unwrap();
+            assert!(installed > 0 && download > 0);
+            eprintln!(
+                "  游戏与中文语音 {:.2} GiB，下载 {:.2} GiB，流式空间 {:.2} GiB（另计清单）",
+                installed as f64 / 1073741824.,
+                download as f64 / 1073741824.,
+                super::space::streaming_required(installed).unwrap() as f64 / 1073741824.
+            );
         }
     }
 }

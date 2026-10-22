@@ -6,10 +6,63 @@ use super::{
 };
 use reqwest::blocking::Client;
 use std::{
+    collections::HashMap,
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
+
+// 只在还有消费者时保留共享块，并限制驻留量；大量共享资源也不能撑成第二份完整下载包。
+pub struct StreamingCache {
+    usage: Mutex<(HashMap<PathBuf, (usize, bool)>, u64)>,
+}
+impl StreamingCache {
+    pub fn new<'a>(cache: &Path, chunks: impl Iterator<Item = &'a Chunk>) -> Result<Self, String> {
+        let mut counts = HashMap::new();
+        for chunk in chunks {
+            let entry = counts
+                .entry(cache_path(cache, chunk)?)
+                .or_insert((0usize, false));
+            entry.0 = entry.0.checked_add(1).ok_or("共享分块计数溢出")?;
+        }
+        Ok(Self {
+            usage: Mutex::new((counts, 0)),
+        })
+    }
+
+    pub fn consumed(&self, cache: &Path, chunk: &Chunk, task: &Task) -> Result<(), String> {
+        let path = cache_path(cache, chunk)?;
+        // 与下载共用条带锁，不能在另一线程读缓存或重命名时删除。
+        let bucket = md5::compute(chunk.id.as_bytes()).0[0] as usize % task.cache_locks.len();
+        let _lock = task.cache_locks[bucket].lock().map_err(|e| e.to_string())?;
+        let mut usage = self.usage.lock().map_err(|e| e.to_string())?;
+        let (entries, retained) = &mut *usage;
+        let (remaining, held) = entries.get_mut(&path).ok_or("共享分块未登记")?;
+        *remaining = remaining.checked_sub(1).ok_or("共享分块重复消费")?;
+        if *remaining > 0
+            && !*held
+            && path.is_file()
+            && fs::metadata(&path).map_err(|e| e.to_string())?.len() == chunk.compressed_size
+            && *retained + chunk.compressed_size <= super::space::SHARED_CACHE
+        {
+            *retained += chunk.compressed_size;
+            *held = true;
+        }
+        if *remaining == 0 || !*held {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("无法释放已落盘分块缓存：{e}")),
+            }
+            if *held {
+                *retained -= chunk.compressed_size;
+                *held = false;
+            }
+        }
+        Ok(())
+    }
+}
 
 // 分块采用压缩数据摘要命名，避免同名块或不同渠道污染续传缓存。
 pub fn cache_path(cache: &Path, chunk: &Chunk) -> Result<PathBuf, String> {

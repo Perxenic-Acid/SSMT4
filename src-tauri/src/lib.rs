@@ -138,6 +138,7 @@ pub fn run() {
         // 从各个子模块中注册命令
         .invoke_handler(tauri::generate_handler![
             hoyoplay::hoyoplay_status,
+            hoyoplay::hoyoplay_estimate,
             hoyoplay::hoyoplay_start,
             hoyoplay::task::hoyoplay_task,
             hoyoplay::task::hoyoplay_cancel,

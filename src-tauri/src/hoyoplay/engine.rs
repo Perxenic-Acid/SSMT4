@@ -1,6 +1,7 @@
 use super::{
     client::{self, Branch, Download, Server},
-    manifest::{self, Asset},
+    manifest::{self, Asset, Chunk},
+    space,
     task::Task,
     transaction::{self, Change, Workspace},
     transfer, Context,
@@ -10,7 +11,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
@@ -144,37 +145,6 @@ pub fn ensure_stopped(root: &Path, preset: &str) -> Result<(), String> {
             }) {
                 return Err("请先关闭这个目录中的游戏，再维护客户端".into());
             }
-        }
-    }
-    Ok(())
-}
-
-fn disk_space(root: &Path, needed: u64) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let path: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut available = 0;
-        if unsafe {
-            windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
-                path.as_ptr(),
-                &mut available,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        } == 0
-        {
-            return Err(format!(
-                "无法读取磁盘剩余空间：{}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        if available < needed {
-            return Err(format!(
-                "磁盘空间不足：本次还需约 {:.1} GiB，可用 {:.1} GiB",
-                needed as f64 / 1073741824.,
-                available as f64 / 1073741824.
-            ));
         }
     }
     Ok(())
@@ -374,7 +344,7 @@ fn assemble(
     source_name: &str,
     http: &Client,
     task: &Task,
-    preload: bool,
+    streaming: Option<&transfer::StreamingCache>,
 ) -> Result<(), String> {
     let asset = &resource.asset;
     let source = transaction::safe(&work.root, source_name)?;
@@ -385,31 +355,41 @@ fn assemble(
         .map(|c| ((c.md5.as_str(), c.size), c.offset))
         .collect();
     let stage = transaction::safe(&work.stage, &asset.name)?;
-    let mut output = if preload {
+    let mut output = if streaming.is_none() {
         None
     } else {
         fs::create_dir_all(stage.parent().ok_or("暂存路径无效")?).map_err(|e| e.to_string())?;
-        if stage.exists() {
-            fs::remove_file(&stage).map_err(|e| e.to_string())?;
-        }
-        Some(File::create(&stage).map_err(|e| e.to_string())?)
+        Some(
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&stage)
+                .map_err(|e| e.to_string())?,
+        )
     };
+    let staged_size = output
+        .as_ref()
+        .map(|f| f.metadata().map(|m| m.len()))
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0);
     for chunk in &asset.chunks {
         task.check()?;
-        let mut reused = None;
-        if let Some(file) = &mut previous {
-            let offset = offsets
-                .get(&(chunk.md5.as_str(), chunk.size))
-                .copied()
-                .unwrap_or(chunk.offset);
-            let mut bytes = vec![0u8; chunk.size as usize];
-            if file
-                .seek(SeekFrom::Start(offset))
-                .and_then(|_| file.read_exact(&mut bytes))
-                .is_ok()
-                && format!("{:x}", md5::compute(&bytes)) == chunk.md5
-            {
-                reused = Some(bytes);
+        // 中断后先校验暂存块，绝不截断重建已经解压的数据。压缩缓存释放后仍可续装。
+        let mut reused = output
+            .as_mut()
+            .filter(|_| staged_size >= chunk.offset + chunk.size)
+            .and_then(|file| reuse_chunk(file, chunk.offset, chunk));
+        let staged = reused.is_some();
+        if reused.is_none() {
+            if let Some(file) = &mut previous {
+                let offset = offsets
+                    .get(&(chunk.md5.as_str(), chunk.size))
+                    .copied()
+                    .unwrap_or(chunk.offset);
+                reused = reuse_chunk(file, offset, chunk);
             }
         }
         let bytes = match reused {
@@ -417,7 +397,15 @@ fn assemble(
             None => transfer::chunk(http, &resource.download, chunk, cache, task)?,
         };
         if let Some(output) = &mut output {
-            output.write_all(&bytes).map_err(|e| e.to_string())?;
+            if !staged {
+                output
+                    .seek(SeekFrom::Start(chunk.offset))
+                    .and_then(|_| output.write_all(&bytes))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some(streaming) = streaming {
+            streaming.consumed(cache, chunk, task)?;
         }
         task.snapshot
             .lock()
@@ -425,6 +413,7 @@ fn assemble(
             .bytes_done += chunk.size;
     }
     if let Some(file) = output {
+        file.set_len(asset.size).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         drop(file);
         if transaction::hash(&stage)?.as_ref() != Some(&asset.md5) {
@@ -432,6 +421,14 @@ fn assemble(
         }
     }
     Ok(())
+}
+
+fn reuse_chunk(file: &mut File, offset: u64, chunk: &Chunk) -> Option<Vec<u8>> {
+    let mut bytes = vec![0u8; chunk.size as usize];
+    file.seek(SeekFrom::Start(offset))
+        .and_then(|_| file.read_exact(&mut bytes))
+        .ok()?;
+    (format!("{:x}", md5::compute(&bytes)) == chunk.md5).then_some(bytes)
 }
 
 pub fn run(request: Request, task: &Task) -> Result<(), String> {
@@ -598,7 +595,8 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
     );
     let mut changes = BTreeMap::new();
     let mut pending = vec![];
-    let mut needed = 512 * 1024 * 1024u64;
+    let mut stage_bytes_needed = 0u64;
+    let mut missing_cache = HashMap::new();
     for (index, resource) in files.values().enumerate() {
         task.check()?;
         task.phase(
@@ -631,18 +629,34 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
             continue;
         }
         if !preload {
-            needed = needed.checked_add(asset.size).ok_or("磁盘需求溢出")?;
+            // 已有暂存数据会逐块重验并原位写回；其当前长度无需再次申请磁盘空间。
+            let present = space::staged_credit(&stage, asset.size)?;
+            stage_bytes_needed = space::sum([stage_bytes_needed, asset.size - present])?;
         }
         for chunk in &asset.chunks {
-            if !transfer::cache_path(&cache, chunk)?.exists() {
-                needed = needed
-                    .checked_add(chunk.compressed_size)
-                    .ok_or("磁盘需求溢出")?;
+            if preload {
+                let path = transfer::cache_path(&cache, chunk)?;
+                if !path.exists() {
+                    missing_cache.insert(path, chunk.compressed_size);
+                }
             }
         }
         pending.push(resource);
     }
-    disk_space(&work.root, needed)?;
+    let needed = if preload {
+        space::sum([space::sum(missing_cache.into_values())?, space::RESERVE])?
+    } else {
+        space::streaming_required(stage_bytes_needed)?
+    };
+    space::check(&work.root, needed)?;
+    let streaming = if preload {
+        None
+    } else {
+        Some(transfer::StreamingCache::new(
+            &cache,
+            pending.iter().flat_map(|r| &r.asset.chunks),
+        )?)
+    };
     {
         let mut s = task.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         s.bytes_total = pending.iter().map(|r| r.asset.size).sum();
@@ -655,7 +669,7 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
     let next = AtomicUsize::new(0);
     let errors = Mutex::new(Vec::<String>::new());
     std::thread::scope(|scope| {
-        for _ in 0..4 {
+        for _ in 0..space::WORKERS {
             scope.spawn(|| loop {
                 if task.check().is_err() || !errors.lock().unwrap().is_empty() {
                     break;
@@ -671,7 +685,16 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
                     &server.id,
                 );
                 let old = old_files.get(&key(&source));
-                match assemble(resource, old, &work, &cache, &source, &http, task, preload) {
+                match assemble(
+                    resource,
+                    old,
+                    &work,
+                    &cache,
+                    &source,
+                    &http,
+                    task,
+                    streaming.as_ref(),
+                ) {
                     Ok(()) => {
                         task.snapshot
                             .lock()
@@ -886,7 +909,7 @@ mod tests {
             &source,
             &client::http().unwrap(),
             &task,
-            false,
+            Some(&transfer::StreamingCache::new(&cache, new.asset.chunks.iter()).unwrap()),
         )
         .unwrap();
         assert_eq!(
@@ -922,11 +945,14 @@ mod tests {
             "StarRail.exe",
             &http,
             &task,
-            true,
+            None,
         )
         .unwrap();
         assert!(!work.stage.join("StarRail.exe").exists());
         assert_eq!(fs::read(work.root.join("StarRail.exe")).unwrap(), b"old");
+        assert!(transfer::cache_path(&cache, &new.asset.chunks[0])
+            .unwrap()
+            .is_file());
         assemble(
             &new,
             None,
@@ -935,7 +961,7 @@ mod tests {
             "StarRail.exe",
             &http,
             &task,
-            false,
+            Some(&transfer::StreamingCache::new(&cache, new.asset.chunks.iter()).unwrap()),
         )
         .unwrap();
         assert_eq!(
@@ -943,6 +969,94 @@ mod tests {
             b"new program"
         );
         assert_eq!(fs::read(work.root.join("StarRail.exe")).unwrap(), b"old");
+        assert!(!transfer::cache_path(&cache, &new.asset.chunks[0])
+            .unwrap()
+            .exists());
+    }
+
+    #[test]
+    fn streaming_resume_validates_partial_stage_and_frees_only_consumed_chunks() {
+        let temp = Temp::new();
+        let work = Workspace::open(&temp.0.join("game")).unwrap();
+        let cache = work.work.join("cache");
+        fs::create_dir(&cache).unwrap();
+        let new = resource("game.exe", &[b"AB", b"CD", b"EF"]);
+        let task = Task::new("fixture".into(), String::new());
+        let http = client::http().unwrap();
+        // 第一个块已落盘，第二个块暂存损坏但有预下载缓存，第三块暂时无法下载。
+        fs::write(work.stage.join("game.exe"), b"ABxx").unwrap();
+        let second = transfer::cache_path(&cache, &new.asset.chunks[1]).unwrap();
+        fs::write(&second, b"CD").unwrap();
+        let usage = transfer::StreamingCache::new(&cache, new.asset.chunks.iter()).unwrap();
+        assert!(assemble(
+            &new,
+            None,
+            &work,
+            &cache,
+            "game.exe",
+            &http,
+            &task,
+            Some(&usage)
+        )
+        .is_err());
+        assert_eq!(fs::read(work.stage.join("game.exe")).unwrap(), b"ABCD");
+        assert!(!second.exists());
+        assert!(!work.root.join("game.exe").exists());
+        // 重启任务后前两块只能从暂存复用，不能要求下载过的压缩块仍存在。
+        fs::write(
+            transfer::cache_path(&cache, &new.asset.chunks[2]).unwrap(),
+            b"EF",
+        )
+        .unwrap();
+        let usage = transfer::StreamingCache::new(&cache, new.asset.chunks.iter()).unwrap();
+        assemble(
+            &new,
+            None,
+            &work,
+            &cache,
+            "game.exe",
+            &http,
+            &task,
+            Some(&usage),
+        )
+        .unwrap();
+        assert_eq!(fs::read(work.stage.join("game.exe")).unwrap(), b"ABCDEF");
+        assert_eq!(fs::read_dir(&cache).unwrap().count(), 0);
+        assert!(!work.root.join("game.exe").exists());
+    }
+
+    #[test]
+    fn shared_chunk_survives_until_all_concurrent_consumers_have_staged_it() {
+        let temp = Temp::new();
+        let work = Workspace::open(&temp.0.join("game")).unwrap();
+        let cache = work.work.join("cache");
+        fs::create_dir(&cache).unwrap();
+        let first = resource("first", &[b"shared"]);
+        let second = resource("second", &[b"shared"]);
+        let path = transfer::cache_path(&cache, &first.asset.chunks[0]).unwrap();
+        fs::write(&path, b"shared").unwrap();
+        let task = Task::new("fixture".into(), String::new());
+        let http = client::http().unwrap();
+        let usage = transfer::StreamingCache::new(
+            &cache,
+            first.asset.chunks.iter().chain(&second.asset.chunks),
+        )
+        .unwrap();
+        std::thread::scope(|scope| {
+            for r in [&first, &second] {
+                let usage = &usage;
+                let http = &http;
+                let task = &task;
+                let work = &work;
+                let cache = &cache;
+                scope.spawn(move || {
+                    assemble(r, None, work, cache, &r.asset.name, http, task, Some(usage)).unwrap()
+                });
+            }
+        });
+        assert!(!path.exists());
+        assert_eq!(fs::read(work.stage.join("first")).unwrap(), b"shared");
+        assert_eq!(fs::read(work.stage.join("second")).unwrap(), b"shared");
     }
 
     #[test]

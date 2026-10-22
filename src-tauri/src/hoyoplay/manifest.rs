@@ -106,25 +106,39 @@ pub fn cached(
     info: &ManifestInfo,
     directory: &std::path::Path,
 ) -> Result<Vec<Asset>, String> {
+    if let Some(files) = read_cached(info, directory)? {
+        return Ok(files);
+    }
+    let bytes = client::get_bytes(client, &info.url, info.size)?;
+    let files = decode_bytes(&bytes, info)?;
+    std::fs::write(cache_path(info, directory)?, bytes).map_err(|e| e.to_string())?;
+    Ok(files)
+}
+
+fn cache_path(info: &ManifestInfo, directory: &std::path::Path) -> Result<PathBuf, String> {
     client::validate_md5(&info.checksum)?;
     if info.size > 64 * 1024 * 1024 {
         return Err("清单压缩大小超出限制".into());
     }
-    let path = super::transaction::safe(
+    super::transaction::safe(
         directory,
         &format!("{}-{}.manifest", info.checksum, info.size),
-    )?;
+    )
+}
+
+pub fn read_cached(
+    info: &ManifestInfo,
+    directory: &std::path::Path,
+) -> Result<Option<Vec<Asset>>, String> {
+    let path = cache_path(info, directory)?;
     if path.is_file() {
         if let Ok(cached) = super::transaction::read_limited(&path, info.size) {
             if let Ok(files) = decode_bytes(&cached, info) {
-                return Ok(files);
+                return Ok(Some(files));
             }
         }
     }
-    let bytes = client::get_bytes(client, &info.url, info.size)?;
-    let files = decode_bytes(&bytes, info)?;
-    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
-    Ok(files)
+    Ok(None)
 }
 
 fn decode_bytes(bytes: &[u8], info: &ManifestInfo) -> Result<Vec<Asset>, String> {
