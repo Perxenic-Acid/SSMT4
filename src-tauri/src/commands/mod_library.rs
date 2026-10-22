@@ -51,6 +51,32 @@ pub struct ScanResult {
     pub groups: Vec<GroupInfo>,
 }
 
+fn upsert_group(groups: &mut Vec<GroupInfo>, group: GroupInfo) {
+    // 启用与禁用目录会归一成同一个逻辑 ID；视图只保留启用版本，避免节点重复。
+    let Some(existing) = groups.iter_mut().find(|item| item.id == group.id) else {
+        groups.push(group);
+        return;
+    };
+
+    let is_directory_link = existing.is_directory_link || group.is_directory_link;
+    if group.enabled && !existing.enabled {
+        let icon_path = group.icon_path.clone().or_else(|| existing.icon_path.clone());
+        *existing = GroupInfo {
+            icon_path,
+            is_directory_link,
+            ..group
+        };
+    } else {
+        if group.enabled == existing.enabled {
+            existing.mod_count = existing.mod_count.max(group.mod_count);
+        }
+        existing.is_directory_link = is_directory_link;
+        if existing.icon_path.is_none() {
+            existing.icon_path = group.icon_path;
+        }
+    }
+}
+
 fn normalize_slashes(value: &str) -> String {
     value.replace('\\', "/")
 }
@@ -202,6 +228,20 @@ fn open_db(install_dir: &str) -> Result<Connection, String> {
             DELETE FROM groups;
             DELETE FROM scan_state;
             PRAGMA user_version = 3;
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    if user_version < 6 {
+        // Mod counts now count visible top-level entries instead of every
+        // internal INI directory inside modular Mods. Rebuild once more so
+        // enabled groups do not inherit counts from DISABLED_ duplicates.
+        conn.execute_batch(
+            r#"
+            DELETE FROM mods;
+            DELETE FROM groups;
+            DELETE FROM scan_state;
+            PRAGMA user_version = 6;
             "#,
         )
         .map_err(|error| error.to_string())?;
@@ -360,8 +400,8 @@ struct DirAnalysis {
     icon_path: Option<String>,
 }
 
-/// Lightweight analysis: only reads ONE level to determine if this directory is a mod or a group.
-/// Does NOT recursively read subdirectories — that's deferred to `count_leaf_mods`.
+/// Lightweight analysis: only reads one level to determine if this directory is
+/// a Mod or a group. Group entry counts are handled separately.
 fn analyze_directory(path: &Path) -> DirAnalysis {
     let t0 = Instant::now();
     let mut images = Vec::new();
@@ -445,9 +485,9 @@ fn is_leaf_mod_dir_from_analysis(analysis: &DirAnalysis) -> bool {
         || (!analysis.has_subdirs && analysis.has_content_images)
 }
 
-/// Count direct child leaf-mod directories (one read_dir per child).
-/// Only called lazily when a group's mod_count is needed (e.g. on tree expand).
-fn count_leaf_mods(path: &Path) -> u64 {
+/// Count visible Mod entries directly below a group. A modular Mod can contain
+/// many internal INI directories, but it is still one entry for its category.
+fn count_group_entries(path: &Path) -> u64 {
     let mut count = 0u64;
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
@@ -459,36 +499,7 @@ fn count_leaf_mods(path: &Path) -> u64 {
             if name.starts_with('.') || name.starts_with('$') || is_managed_backup_name(&name) {
                 continue;
             }
-            // Quick check: does the subdirectory have INI files?
-            if let Ok(sub_entries) = fs::read_dir(&sub_path) {
-                let mut has_ini = false;
-                let mut has_content_images = false;
-                let mut has_subdirs = false;
-                for sub_entry in sub_entries.flatten() {
-                    let p = sub_entry.path();
-                    if p.is_dir() {
-                        let sn = p.file_name().unwrap_or_default().to_string_lossy();
-                        if !sn.starts_with('.')
-                            && !sn.starts_with('$')
-                            && !is_managed_backup_name(&sn)
-                        {
-                            has_subdirs = true;
-                        }
-                    } else if p.is_file() {
-                        if let Some(sn) = p.file_name().and_then(|v| v.to_str()) {
-                            let lower = sn.to_lowercase();
-                            if lower.ends_with(".ini") {
-                                has_ini = true;
-                            } else if is_content_image_file(&lower) {
-                                has_content_images = true;
-                            }
-                        }
-                    }
-                }
-                if has_ini || (!has_subdirs && has_content_images) {
-                    count += 1;
-                }
-            }
+            count += 1;
         }
     }
     count
@@ -629,15 +640,18 @@ fn scan_group_from_disk(install_dir: &str, group_path: &str) -> Result<ScanResul
                 analysis.has_subdirs,
                 analysis.has_content_images
             );
-            groups.push(GroupInfo {
-                id: entry_group_id,
-                name: clean_name,
-                icon_path: analysis.icon_path,
-                path: entry_physical_path,
-                enabled,
-                mod_count: 0, // lazy: filled by mod_library_get_mod_count
-                is_directory_link,
-            });
+            upsert_group(
+                &mut groups,
+                GroupInfo {
+                    id: entry_group_id,
+                    name: clean_name,
+                    icon_path: analysis.icon_path,
+                    path: entry_physical_path,
+                    enabled,
+                    mod_count: count_group_entries(&path),
+                    is_directory_link,
+                },
+            );
         }
     }
 
@@ -674,13 +688,7 @@ fn index_group(
         game_name,
         group_label
     );
-    let mut result = scan_group_from_disk(install_dir, &group_id)?;
-    // Compute mod_count for each group (lazy: only when indexing, not during streaming)
-    let root = mods_root(install_dir);
-    for group in &mut result.groups {
-        let group_dir = root.join(&group.path);
-        group.mod_count = count_leaf_mods(&group_dir);
-    }
+    let result = scan_group_from_disk(install_dir, &group_id)?;
     let scan_ms = t0.elapsed().as_millis();
     let now = chrono::Utc::now().timestamp_millis();
     let tx = conn.transaction().map_err(|error| error.to_string())?;
@@ -1021,15 +1029,18 @@ pub async fn mod_library_stream_scan(
                     is_directory_link,
                 });
             } else {
-                chunk_groups.push(GroupInfo {
-                    id: entry_group_id,
-                    name: clean_name,
-                    icon_path: analysis.icon_path,
-                    path: entry_physical_path,
-                    enabled,
-                    mod_count: 0, // lazy
-                    is_directory_link,
-                });
+                upsert_group(
+                    &mut chunk_groups,
+                    GroupInfo {
+                        id: entry_group_id,
+                        name: clean_name,
+                        icon_path: analysis.icon_path,
+                        path: entry_physical_path,
+                        enabled,
+                        mod_count: count_group_entries(&path),
+                        is_directory_link,
+                    },
+                );
             }
         }
 
@@ -1045,7 +1056,9 @@ pub async fn mod_library_stream_scan(
         }
 
         all_mods.extend(chunk_mods);
-        all_groups.extend(chunk_groups);
+        for group in chunk_groups {
+            upsert_group(&mut all_groups, group);
+        }
     }
 
     all_mods.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
@@ -1462,4 +1475,104 @@ fn find_ini_recursive(dir: &Path, prefix: &str, results: &mut Vec<String>) -> st
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod group_dedupe_tests {
+    use super::{count_group_entries, upsert_group, GroupInfo};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn group(id: &str, path: &str, enabled: bool, mod_count: u64) -> GroupInfo {
+        GroupInfo {
+            id: id.to_string(),
+            name: id.rsplit('/').next().unwrap_or(id).to_string(),
+            icon_path: None,
+            path: path.to_string(),
+            enabled,
+            mod_count,
+            is_directory_link: false,
+        }
+    }
+
+    #[test]
+    fn enabled_group_replaces_disabled_duplicate_and_keeps_count() {
+        let mut groups = Vec::new();
+        let mut disabled = group("Characters", "DISABLED_Characters", false, 2);
+        disabled.icon_path = Some("C:/icon.png".to_string());
+        upsert_group(&mut groups, disabled);
+        upsert_group(
+            &mut groups,
+            group("Characters", "Characters", true, 5),
+        );
+
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].enabled);
+        assert_eq!(groups[0].path, "Characters");
+        assert_eq!(groups[0].mod_count, 5);
+        assert_eq!(groups[0].icon_path.as_deref(), Some("C:/icon.png"));
+    }
+
+    #[test]
+    fn repeated_enabled_group_keeps_single_entry_and_largest_count() {
+        let mut groups = Vec::new();
+        upsert_group(&mut groups, group("Characters", "Characters", true, 1));
+        upsert_group(&mut groups, group("Characters", "Characters", true, 3));
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].mod_count, 3);
+    }
+
+    #[test]
+    fn enabled_empty_group_does_not_inherit_disabled_duplicate_count() {
+        let mut groups = Vec::new();
+        upsert_group(
+            &mut groups,
+            group("SSMTGeneratedMod", "DISABLED_SSMTGeneratedMod", false, 11),
+        );
+        upsert_group(
+            &mut groups,
+            group("SSMTGeneratedMod", "SSMTGeneratedMod", true, 0),
+        );
+
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].enabled);
+        assert_eq!(groups[0].mod_count, 0);
+    }
+
+    #[test]
+    fn group_count_treats_each_top_level_entry_as_one_mod() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-mod-count-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        let first_mod = root.join("FirstMod");
+        let second_mod = root.join("SecondMod");
+        let modular_mod = root.join("ModularMod");
+        fs::create_dir_all(first_mod.join("textures")).unwrap();
+        fs::create_dir_all(&second_mod).unwrap();
+        fs::create_dir_all(modular_mod.join("Modules").join("PartA")).unwrap();
+        fs::create_dir_all(modular_mod.join("Modules").join("PartB")).unwrap();
+        fs::write(first_mod.join("mod.ini"), "[TextureOverride_Test]\n").unwrap();
+        fs::write(second_mod.join("mod.ini"), "[TextureOverride_Test2]\n").unwrap();
+        fs::write(
+            modular_mod.join("Modules").join("PartA").join("Menu.ini"),
+            "[TextureOverride_A]\n",
+        )
+        .unwrap();
+        fs::write(
+            modular_mod.join("Modules").join("PartB").join("Menu.ini"),
+            "[TextureOverride_B]\n",
+        )
+        .unwrap();
+
+        assert_eq!(count_group_entries(&root), 3);
+        assert_eq!(count_group_entries(&root.join("EmptyGroup")), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
