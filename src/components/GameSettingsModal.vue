@@ -21,7 +21,7 @@ import ReleaseNotesMarkdown from './ReleaseNotesMarkdown.vue';
 const appSettings = AppStateManager.appSettings;
 const gamesList = AppStateManager.gamesList;
 const loadGames = AppStateManager.loadGames.bind(AppStateManager);
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const props = defineProps<{
   modelValue: boolean;
@@ -38,6 +38,9 @@ let loadConfigRequestId = 0;
 
 const Dlss5GraphicsSettings = defineAsyncComponent(
   () => import('../plugin/components/Dlss5GraphicsSettings.vue'),
+);
+const GameMaintenanceSettings = defineAsyncComponent(
+  () => import('../features/gameMaintenance/GameMaintenanceSettings.vue'),
 );
 const dlss5IntegrationEnabled = ref(false);
 let pluginAvailabilityRequestId = 0;
@@ -110,6 +113,8 @@ const packageVisibleCount = ref(PACKAGE_RELEASE_PAGE_SIZE);
 const activeTab = ref('basic');
 const tabs = computed(() => [
   { id: 'basic', label: t('gameSettingsModal.tabs.basic') },
+  ...(['GIMI', 'SRMI', 'ZZMI', 'ZZMIDX12'].includes((config.gamePreset || '').toUpperCase())
+    ? [{ id: 'gameMaintenance', label: locale.value.startsWith('zh') ? '游戏管理' : 'Game management' }] : []),
   { id: '3dmigoto', label: t('gameSettingsModal.tabs.migoto') },
   { id: 'dllUpdate', label: t('gameSettingsModal.tabs.dllUpdate') },
   { id: 'packageUpdate', label: t('gameSettingsModal.tabs.packageUpdate') },
@@ -880,6 +885,11 @@ const close = () => {
 
 // Expose methods to parent
 defineExpose({
+  openGameMaintenance: async () => {
+    const gameName = props.gameName;
+    await loadConfig();
+    if (props.modelValue && gameName === props.gameName) activeTab.value = 'gameMaintenance';
+  },
   switchTab: (tabId: string) => {
     activeTab.value = tabId;
   },
@@ -1333,6 +1343,10 @@ defineExpose({
                 </div>
               </div>
 
+            </div>
+
+            <div v-if="activeTab === 'gameMaintenance'" class="tab-pane">
+              <GameMaintenanceSettings :game-name="gameName" :game-preset="(config.gamePreset || '').toUpperCase()" :target-exe-path="config.targetExePath || ''" @completed="loadConfig" />
             </div>
 
             <div v-if="activeTab === 'dllUpdate'" class="tab-pane">

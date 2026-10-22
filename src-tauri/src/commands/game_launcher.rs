@@ -650,6 +650,7 @@ fn execute_external_program_blocking(
 
 #[tauri::command]
 pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunch>) -> Result<(), String> {
+    crate::hoyoplay::task::assert_launch_allowed(None)?;
     for prog in programs {
         let wait_only = prog.wait_only.unwrap_or(false);
         let args_str = prog.args.as_deref().unwrap_or_default();

@@ -27,13 +27,14 @@ pub struct GameDiscoveryResult {
 }
 
 const GIMI_SPEC: GameDiscoverySpec = GameDiscoverySpec {
-    exe_names: &["YuanShen.exe", "Genshin.exe"],
+    exe_names: &["YuanShen.exe", "GenshinImpact.exe", "Genshin.exe"],
     desktop_prefixes: &["原神", "gi", "genshin", "genshin impact", "yuanshen"],
     install_dir_names: &["Genshin Impact Game"],
     known_paths: &[
         r"C:\Program Files\Genshin Impact bilibili\games\Genshin Impact Game\YuanShen.exe",
         r"C:\Program Files\mihoyo launcher\Genshin Impact\games\Genshin Impact Game\YuanShen.exe",
         r"C:\Program Files\hoyoverse launcher\Genshin Impact\Genshin Impact Game\Genshin.exe",
+        r"C:\Program Files\HoYoPlay\games\Genshin Impact Game\GenshinImpact.exe",
     ],
 };
 
@@ -74,7 +75,7 @@ fn spec_for_preset(preset: &str) -> Option<&'static GameDiscoverySpec> {
     match preset.trim().to_uppercase().as_str() {
         "GIMI" => Some(&GIMI_SPEC),
         "SRMI" => Some(&SRMI_SPEC),
-        "ZZMI" => Some(&ZZMI_SPEC),
+        "ZZMI" | "ZZMIDX12" => Some(&ZZMI_SPEC),
         _ => None,
     }
 }
@@ -372,8 +373,10 @@ mod tests {
         let cases = [
             ("GIMI", "YuanShen.exe"),
             ("GIMI", "GENSHIN.EXE"),
+            ("GIMI", "GENSHINIMPACT.EXE"),
             ("SRMI", "STARRAIL.EXE"),
             ("ZZMI", "zenlesszonezero.exe"),
+            ("ZZMIDX12", "zenlesszonezero.exe"),
         ];
         for (preset, exe) in cases {
             let spec = spec_for_preset(preset).unwrap();

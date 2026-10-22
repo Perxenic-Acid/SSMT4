@@ -5,6 +5,7 @@ pub mod constants;
 pub mod extract_new;
 pub mod gametype;
 pub mod helper;
+mod hoyoplay;
 pub mod ini_container;
 pub mod plugin;
 pub mod utils;
@@ -136,6 +137,11 @@ pub fn run() {
         })
         // 从各个子模块中注册命令
         .invoke_handler(tauri::generate_handler![
+            hoyoplay::hoyoplay_status,
+            hoyoplay::hoyoplay_start,
+            hoyoplay::task::hoyoplay_task,
+            hoyoplay::task::hoyoplay_cancel,
+            hoyoplay::hoyoplay_check_launch,
             set_show_window_shortcut_enabled,
             commands::launch_shortcut::set_launch_console_shortcut,
             plugin::commands::plugin_registry_snapshot,

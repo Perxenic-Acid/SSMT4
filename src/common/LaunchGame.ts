@@ -375,6 +375,9 @@ export class LaunchGame {
             configuredLauncher.length > 0 && (await exists(configuredLauncher))
         );
         const gamePreset = (migotoCfg.gamePreset || "").trim().toUpperCase();
+        if (["GIMI", "SRMI", "ZZMI", "ZZMIDX12"].includes(gamePreset)) {
+            await invoke("hoyoplay_check_launch", { gameName });
+        }
         const supportsGameDiscovery = [
             "GIMI",
             "SRMI",

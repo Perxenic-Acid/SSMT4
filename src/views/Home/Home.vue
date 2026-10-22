@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown, ArrowUp, Picture, VideoCamera, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { AppStateManager, BGType } from '../../store/AppStateManager'
 
 import { openPath, openUrl } from '@tauri-apps/plugin-opener'
-import { mkdir } from '@tauri-apps/plugin-fs'
+import { mkdir, stat } from '@tauri-apps/plugin-fs'
+import { open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useRouter } from 'vue-router'
 import { ResourceManager, type UpdateInfo, type BackgroundEntry, type GameNewsContent } from '../../store/ResourceManager'
@@ -20,6 +22,8 @@ import ReleaseNotesMarkdown from '../../components/ReleaseNotesMarkdown.vue'
 import { LaunchMonitor } from '../../store/LaunchMonitor'
 
 import { LaunchGame } from '../../common/LaunchGame';
+import { resolveClientEntry, supportsGameMaintenance, type DiscoveredClient } from '../../features/gameMaintenance/entry';
+import { useHomeMaintenance } from '../../features/gameMaintenance/useHomeMaintenance';
 import { pickNewerUpdate, UPDATE_CHECK_TIMEOUT_MS } from '../../common/UpdateCheckUtils';
 
 import { GameConfig, GameConfigManager } from '../../store/GameConfig';
@@ -30,22 +34,35 @@ import {
 } from '../../common/AppSelfUpdate'
 
 const appSettings = AppStateManager.appSettings;
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const router = useRouter()
 let unlistenNativeDrop: UnlistenFn | null = null;
 const currentGameConfig = ref<GameConfig>(GameConfigManager.defaultGameConfig())
 const appVersion = ref('')
+const clientMissing = ref(false)
+const checkingClient = ref(false)
+let configRequest = 0
+const isUsableClient = async (path: string) => {
+  try { return !!path && (await stat(path)).isFile } catch { return false }
+}
 
 const loadCurrentGameConfig = async () => {
+  const request = ++configRequest
   const gameName = appSettings.CurrentGameName?.trim()
   if (!gameName || gameName === 'Default') {
     currentGameConfig.value = GameConfigManager.defaultGameConfig()
+    clientMissing.value = false
     return
   }
 
   try {
-    currentGameConfig.value = await ResourceManager.loadGameConfig(gameName)
+    const config = await ResourceManager.loadGameConfig(gameName)
+    const missing = supportsGameMaintenance(config.gamePreset) && !(await isUsableClient((config.targetExePath || '').trim()))
+    if (request !== configRequest || gameName !== appSettings.CurrentGameName?.trim()) return
+    currentGameConfig.value = config
+    clientMissing.value = missing
   } catch (error) {
+    if (request !== configRequest) return
     console.error('Failed to load current game config:', error)
     currentGameConfig.value = GameConfigManager.defaultGameConfig()
   }
@@ -244,10 +261,47 @@ const openD3dxIni = async () => {
 const showSettings = ref(false);
 const settingsModalRef = ref<InstanceType<typeof GameSettingsModal> | null>(null);
 const isUpdatingPackage = ref(false);
+const {
+  status: maintenanceStatus, ownTask: maintenanceTask, running: maintenanceRunning, busy: maintenanceBusy,
+  needsUpdate: gameNeedsUpdate, canPreload, progress: maintenanceProgress, error: maintenanceError,
+  start: startMaintenance, pause: pauseMaintenance, refresh: refreshMaintenance, poll: pollMaintenance,
+} = useHomeMaintenance(() => appSettings.CurrentGameName, () => currentGameConfig.value, () => { void loadCurrentGameConfig(); });
+const showPreload = computed(() => canPreload.value || (maintenanceTask.value?.operation === 'preload' && maintenanceRunning.value));
+const preloadCompleted = computed(() => maintenanceTask.value?.operation === 'preload' && maintenanceTask.value.state === 'completed'
+  && maintenanceTask.value.targetVersion === maintenanceStatus.value?.preDownloadVersion);
+const mainButtonText = computed(() => {
+  if (maintenanceBusy.value) return locale.value.startsWith('zh') ? '正在处理…' : 'Working…';
+  if (maintenanceStatus.value?.recoveryPending) return locale.value.startsWith('zh') ? '恢复客户端' : 'Restore client';
+  return gameNeedsUpdate.value ? (locale.value.startsWith('zh') ? '更新游戏' : 'Update game') : t('home.actions.startGame');
+});
 const isStartButtonDisabled = computed(() => (
   isLaunching.value
   || isUpdatingPackage.value
+  || checkingClient.value
+  || maintenanceBusy.value
 ));
+
+const openGameMaintenance = async () => {
+  showSettings.value = true;
+  await nextTick();
+  await settingsModalRef.value?.openGameMaintenance();
+};
+
+const specifyInstalledClient = async () => {
+  const gameName = appSettings.CurrentGameName;
+  if (!gameName || isStartButtonDisabled.value) return;
+  try {
+    const path = await open({ multiple: false, filters: [{ name: locale.value.startsWith('zh') ? '游戏程序' : 'Game executable', extensions: ['exe'] }] });
+    if (typeof path !== 'string' || gameName !== appSettings.CurrentGameName) return;
+    if (!(await isUsableClient(path))) return;
+    ++configRequest;
+    const config = await ResourceManager.loadGameConfig(gameName);
+    if (gameName !== appSettings.CurrentGameName) return;
+    config.targetExePath = path;
+    await ResourceManager.saveGameConfig(gameName, config);
+    await loadCurrentGameConfig();
+  } catch (error) { ElMessage.error(String(error)); }
+};
 
 type StartGameUpdateCheckResult = {
   packageUpdate: UpdateInfo | null;
@@ -345,6 +399,37 @@ const launchGame = async (event?: MouseEvent) => {
     return;
   }
 
+  // 安装入口在更新 Runtime、检查插件和展开启动控制台之前处理。
+  checkingClient.value = true;
+  try {
+    const config = await ResourceManager.loadGameConfig(gameName);
+    const entry = await resolveClientEntry(config, {
+      isFile: isUsableClient,
+      discover: gamePreset => invoke<DiscoveredClient | null>('find_game_executable', { gamePreset }),
+    });
+    if (gameName !== appSettings.CurrentGameName) return;
+    if (entry.discovered) {
+      const latest = await ResourceManager.loadGameConfig(gameName);
+      if (gameName !== appSettings.CurrentGameName) return;
+      if ((latest.targetExePath || '') !== (config.targetExePath || '')) { await loadCurrentGameConfig(); return; }
+      latest.targetExePath = entry.discovered.targetExePath;
+      latest.launcherExePath ||= entry.discovered.launcherExePath;
+      await ResourceManager.saveGameConfig(gameName, latest);
+      Object.assign(config, latest);
+    }
+    currentGameConfig.value = config;
+    clientMissing.value = entry.needsInstallation;
+    if (entry.needsInstallation) { await openGameMaintenance(); return; }
+    if (entry.discovered) { await nextTick(); await refreshMaintenance(); }
+    if (gameName !== appSettings.CurrentGameName) return;
+    if (maintenanceStatus.value?.recoveryPending) { await openGameMaintenance(); return; }
+    if (gameNeedsUpdate.value) {
+      if (!(await startMaintenance('update'))) await openGameMaintenance();
+      return;
+    }
+  } catch (error) { ElMessage.error(String(error)); return; }
+  finally { checkingClient.value = false; }
+
   let result: Awaited<ReturnType<typeof LaunchGame.launch>> = false;
   try {
     await LaunchMonitor.begin();
@@ -420,10 +505,13 @@ watch(
 )
 
 watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
+watch(showSettings, visible => {
+  if (!visible) { void loadCurrentGameConfig(); void refreshMaintenance(); void pollMaintenance(); }
+})
 </script>
 
 <template>
-  <div class="home-container">
+  <div class="home-container" :style="{ '--action-bar-width': showPreload ? '460px' : '310px' }">
     <div class="content-area">
     </div>
 
@@ -544,13 +632,31 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
     <GameSettingsModal ref="settingsModalRef" v-model="showSettings" :game-name="appSettings.CurrentGameName" />
 
     <div class="action-bar">
+      <div v-if="showPreload" class="home-preload-area">
+        <button class="home-preload-button" type="button" :disabled="maintenanceRunning || preloadCompleted" @click="startMaintenance('preload')">
+          <el-icon><ArrowDown /></el-icon>
+          {{ preloadCompleted ? (locale.startsWith('zh') ? '预下载完成' : 'Ready') : (locale.startsWith('zh') ? '预下载' : 'Pre-download') }}
+          <span v-if="maintenanceRunning && maintenanceTask?.operation === 'preload' && maintenanceTask.bytesTotal">{{ maintenanceProgress }}%</span>
+        </button>
+        <progress v-if="maintenanceRunning && maintenanceTask?.operation === 'preload' && maintenanceTask.bytesTotal" :value="maintenanceProgress" max="100" :title="maintenanceTask.message" />
+      </div>
+      <div v-if="maintenanceTask?.state === 'running' || maintenanceTask?.state === 'failed' || maintenanceError" class="home-maintenance-progress" role="status">
+        <span :title="maintenanceTask?.message">{{ maintenanceError || maintenanceTask?.message }}</span>
+        <span v-if="maintenanceRunning && maintenanceTask?.bytesTotal">{{ maintenanceProgress }}%</span>
+        <button v-if="maintenanceRunning" type="button" :disabled="maintenanceTask?.phase === 'commit'" @click="pauseMaintenance">{{ locale.startsWith('zh') ? '暂停' : 'Pause' }}</button>
+      </div>
       <!-- Start Game Button -->
+      <div class="start-game-area">
       <div class="start-game-btn" @click="launchGame" :class="{ 'disabled': isStartButtonDisabled }">
         <div class="icon-wrapper">
-          <div v-if="isUpdatingPackage" class="loading-spinner"></div>
+          <div v-if="isUpdatingPackage || checkingClient || maintenanceBusy" class="loading-spinner"></div>
           <div v-else class="play-triangle"></div>
         </div>
-        <span class="btn-text">{{ t('home.actions.startGame') }}</span>
+        <span class="btn-text">{{ mainButtonText }}</span>
+      </div>
+      <button v-if="clientMissing" type="button" class="specify-installed-client" :disabled="isStartButtonDisabled" @click="specifyInstalledClient">
+        {{ locale.startsWith('zh') ? '已安装? 点击此处手动指定' : 'Already installed? Select the executable' }}
+      </button>
       </div>
 
       <!-- Settings Menu -->
@@ -1090,6 +1196,18 @@ watch(() => appSettings.bgVideo, () => { backgroundVideoPaused.value = false })
 }
 
 /* --- Start Game Button (Glass Card) --- */
+.start-game-area { position: relative; display: flex; }
+.home-preload-area { width: 132px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; }
+.home-preload-button { border: none; background: none; padding: 6px 3px; color: rgba(255,255,255,.84); display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
+.home-preload-button:hover { color: var(--theme-accent); }.home-preload-button:disabled { cursor: default; opacity: .6; }
+.home-preload-area progress { width: 108px; height: 3px; accent-color: var(--theme-accent); }
+.home-maintenance-progress { position: absolute; right: 0; bottom: calc(100% + 12px); display: flex; align-items: center; gap: 10px; max-width: min(460px, 75vw); padding: 8px 12px; border-radius: 10px; background: var(--t-material-bg, rgba(15,18,26,.9)); color: var(--theme-text-primary, #eee); font-size: 12px; }
+.home-maintenance-progress > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-maintenance-progress button { border: none; background: none; color: var(--theme-accent); white-space: nowrap; cursor: pointer; }
+.home-maintenance-progress button:disabled { opacity: .4; cursor: default; }
+.specify-installed-client { position: absolute; top: calc(100% + 7px); right: 0; left: 0; padding: 0; background: none; border: none; color: rgba(255,255,255,.7); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.specify-installed-client:hover { color: var(--theme-accent); }
+.specify-installed-client:disabled { opacity: .45; cursor: default; }
 .start-game-btn {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);

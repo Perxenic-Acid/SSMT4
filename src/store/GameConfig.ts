@@ -89,6 +89,8 @@ export type GameConfig = {
     includePrereleaseUpdates?: boolean;
     installDir?: string;
     targetExePath?: string;
+    hoyoplayServer?: string;
+    hoyoplayAudioLanguages?: string[];
     launcherExePath?: string;
     launchTargetProgram?: boolean;
     launchArgs?: string;
