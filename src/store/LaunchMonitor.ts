@@ -31,7 +31,10 @@ export function createLaunchMonitor() {
     const waitingForNative = (nativeExpected && !nativeLaunches.size) || [...nativeLaunches.values()].some(done => !done);
     if (!state.failure && waitingForNative) return;
     state.launching = false;
-    if (!state.failure) state.collapsed = true;
+    if (!state.failure) {
+      state.collapsed = true;
+      state.visible = false;
+    }
   };
   const handleEvent = (event: LaunchEvent) => {
     const source = event.consoleSessionId;
