@@ -43,6 +43,29 @@ type GithubRelease = {
     assets?: GithubReleaseAsset[];
 };
 
+type HypergryphEndfieldInfo = {
+    imagePath: string;
+    imageUrl: string;
+    imageMd5: string;
+    imageSha256: string;
+    imageBytes: number;
+    videoPath?: string | null;
+    videoUrl?: string | null;
+    videoSha256?: string | null;
+    videoBytes?: number | null;
+    profileId: string;
+    sourceLeveldb: string;
+    changed: boolean;
+};
+
+const ENDFIELD_MANAGED_BACKGROUND_PREFIX = 'Background-Endfield-';
+const ENDFIELD_IMAGE_ENTRY_ID = 'hypergryph-endfield-image';
+const ENDFIELD_VIDEO_ENTRY_ID = 'hypergryph-endfield-video';
+
+function localPathKey(path: string): string {
+    return path.replace(/[\\/]+/g, '\\').replace(/\\+$/g, '').toLowerCase();
+}
+
 type FixedBackgroundSource = {
     imageUrl?: string;
     videoUrl?: string;
@@ -240,7 +263,8 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
     }
 
     function supportsAutoUpdateBackground(gamePreset: string): boolean {
-        return Object.prototype.hasOwnProperty.call(fixedBackgroundSources, gamePreset)
+        return gamePreset.trim().toUpperCase() === 'EFMI'
+            || Object.prototype.hasOwnProperty.call(fixedBackgroundSources, gamePreset)
             || Object.prototype.hasOwnProperty.call(hypPresetToGameId, gamePreset);
     }
 
@@ -459,6 +483,96 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         await copyFile(sourcePath, targetPath);
     }
 
+    function previousEndfieldAsset(
+        entries: Array<{ type: 'Image' | 'Video'; imagePath?: string; videoPath?: string; imageUrl?: string; videoUrl?: string }>,
+        kind: 'image' | 'video',
+    ) {
+        const expectedType = kind === 'image' ? 'Image' : 'Video';
+        return entries.find(entry =>
+            entry.type === expectedType
+            && (kind === 'image' ? entry.imageUrl && entry.imagePath : entry.videoUrl && entry.videoPath)
+        ) || entries.find(entry => kind === 'image' ? entry.imagePath : entry.videoPath);
+    }
+
+    async function updateEndfieldBackground(
+        gameName: string,
+        bgType: 'Image' | 'Video',
+    ): Promise<{ path: string; url: string; changed: boolean }> {
+        const conf = await loadGameConfig(gameName);
+        const previousEntries = Array.isArray(conf.backgroundEntries) ? conf.backgroundEntries : [];
+        const previousImage = previousEndfieldAsset(previousEntries, 'image');
+        const previousVideo = previousEndfieldAsset(previousEntries, 'video');
+        const info = await invoke<HypergryphEndfieldInfo>('sync_endfield_background', {
+            gameName,
+            previousImagePath: previousImage?.imagePath,
+            previousVideoUrl: previousVideo?.videoUrl,
+            previousVideoPath: previousVideo?.videoPath,
+        });
+        const videoPath = info.videoPath || undefined;
+
+        const imageEntry: BackgroundEntry = {
+            id: ENDFIELD_IMAGE_ENTRY_ID,
+            type: 'Image' as const,
+            imagePath: info.imagePath,
+            imageUrl: info.imageUrl,
+        };
+        const entries: BackgroundEntry[] = [
+            imageEntry,
+            ...(videoPath ? [{
+                id: ENDFIELD_VIDEO_ENTRY_ID,
+                type: 'Video' as const,
+                imagePath: info.imagePath,
+                videoPath,
+                imageUrl: info.imageUrl,
+                videoUrl: info.videoUrl || undefined,
+            }] : []),
+        ];
+        const selected = bgType === 'Video' && videoPath ? entries[1] : imageEntry;
+        conf.backgroundEntries = entries;
+        conf.selectedBackgroundId = selected.id;
+        conf.backgroundType = selected.type;
+        conf.lastBackgroundUrl = [info.imageUrl, info.videoUrl || ''].filter(Boolean).join('|');
+
+        const retainedPathKeys = new Set(
+            entries.flatMap(entry => [entry.imagePath, entry.videoPath])
+                .filter((path): path is string => Boolean(path))
+                .map(localPathKey),
+        );
+        const previousPathKeys = new Set(
+            previousEntries.flatMap(entry => [entry.imagePath, entry.videoPath])
+                .filter((path): path is string => Boolean(path))
+                .map(localPathKey),
+        );
+        try {
+            await saveGameConfig(gameName, conf);
+        } catch (error) {
+            for (const entry of entries) {
+                for (const path of [entry.imagePath, entry.videoPath]) {
+                    if (!path) continue;
+                    const fileName = path.split(/[\\/]/).pop() || '';
+                    if (previousPathKeys.has(localPathKey(path))) continue;
+                    if (!fileName.startsWith(ENDFIELD_MANAGED_BACKGROUND_PREFIX)) continue;
+                    await remove(path).catch(() => {});
+                }
+            }
+            throw error;
+        }
+
+        const gamesRoot = await GlobalConfig.GlobalGamesFolder();
+        const dirPath = await SSMTFileUtils.JoinPath(gamesRoot, gameName);
+        for (const child of await readDir(dirPath).catch(() => [])) {
+            if (child.isDirectory || !child.name?.startsWith(ENDFIELD_MANAGED_BACKGROUND_PREFIX)) continue;
+            const path = await SSMTFileUtils.JoinPath(dirPath, child.name);
+            if (!retainedPathKeys.has(localPathKey(path))) await remove(path).catch(() => {});
+        }
+
+        return {
+            path: selected.type === 'Video' ? selected.videoPath || selected.imagePath || '' : selected.imagePath || '',
+            url: selected.type === 'Video' ? selected.videoUrl || selected.imageUrl || '' : selected.imageUrl || '',
+            changed: info.changed,
+        };
+    }
+
     async function setGameBackground(gameName: string, sourcePath: string, bgType: 'Image' | 'Video'): Promise<void> {
         const gamesRoot = await GlobalConfig.GlobalGamesFolder();
         const dirPath = await SSMTFileUtils.JoinPath(gamesRoot, gameName);
@@ -500,6 +614,9 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
     }
 
     async function updateGameBackground(gameName: string, gamePreset: string, bgType: 'Image' | 'Video', lastUrl?: string): Promise<{ path: string; url: string; changed: boolean }> {
+        if (gamePreset.trim().toUpperCase() === 'EFMI') {
+            return updateEndfieldBackground(gameName, bgType);
+        }
         if (!supportsAutoUpdateBackground(gamePreset)) {
             throw new Error(t('resourceManager.messages.unsupportedPresetForAutoUpdate'));
         }

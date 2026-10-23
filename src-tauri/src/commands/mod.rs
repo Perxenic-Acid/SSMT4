@@ -7,6 +7,7 @@ pub mod extract_textures;
 pub mod file_locks;
 pub mod game_discovery;
 pub mod game_launcher;
+pub mod hypergryph_background;
 pub mod launch_console;
 pub mod launch_logs;
 pub mod launch_shortcut;

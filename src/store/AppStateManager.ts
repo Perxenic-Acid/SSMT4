@@ -56,6 +56,8 @@ const launchConsoleShortcutError = ref('')
 
 export const useAppStateStore = defineStore('appState', () => {
   const autoUpdateInFlight = new Set<string>()
+  let backgroundFocusRefreshRegistered = false
+  let lastBackgroundFocusRefresh = Date.now()
 
   let initialStateLoaded = false
   let isInitialized = false
@@ -474,6 +476,21 @@ export const useAppStateStore = defineStore('appState', () => {
     }
   }
 
+  function registerBackgroundFocusRefresh() {
+    if (backgroundFocusRefreshRegistered) return
+    backgroundFocusRefreshRegistered = true
+    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (!focused || Date.now() - lastBackgroundFocusRefresh < 60_000) return
+      const game = gamesList.find(item => item.name === appSettings.CurrentGameName)
+      if (!game) return
+      lastBackgroundFocusRefresh = Date.now()
+      void autoUpdateBackgroundIfNeeded(game)
+    }).catch(error => {
+      // 窗口焦点事件仅是自动更新补充触发点，失败不能影响应用启动。
+      console.warn('Failed to register background focus refresh:', error)
+    })
+  }
+
   async function initAppState() {
     await loadSettings()
     if (await GlobalConfig.EnsureFirstRunMarker()) {
@@ -485,6 +502,7 @@ export const useAppStateStore = defineStore('appState', () => {
     // 所有游戏配置均复制到全局配置，全部功能开放。
     gamesDir.value = await ResourceManager.CopyGamesToGlobalConfig(true)
     await loadGames()
+    registerBackgroundFocusRefresh()
     initialStateLoaded = true
   }
 

@@ -185,6 +185,7 @@ pub fn run() {
             commands::ccswitch::import_ccswitch_providers,
             commands::clipboard::clipboard_write_text,
             commands::background::sign_wwmi_background_url,
+            commands::hypergryph_background::sync_endfield_background,
             commands::game_discovery::find_game_executable,
             commands::game_launcher::configure_zzmi_launch_settings,
             commands::gimi_settings::configure_gimi_launch_settings,

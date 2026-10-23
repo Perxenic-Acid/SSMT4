@@ -127,6 +127,7 @@ export const AUTO_UPDATE_SUPPORTED_PRESETS = [
   'NTEMI',
   'WWMI',
   'CAMI',
+  'EFMI',
 ] as const
 
 export const AUTO_UPDATE_SUPPORTED_PRESET_SET: ReadonlySet<string> =
