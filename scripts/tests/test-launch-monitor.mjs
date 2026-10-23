@@ -40,8 +40,8 @@ test('监听在启动之前就绪，输入发给所选会话，完成和隐藏�
   h.emit('started');
   h.emit('stdout', 'prompt>');
   h.emit('log_path', 'C:/Logs/launch.log');
-  h.finish();
-  assert.equal(h.state.visible, true);
+  h.finish(true);
+  assert.equal(h.state.visible, false);
   h.state.visible = false;
   h.emit('stdout', 'still running');
   assert.equal(h.state.visible, false);
@@ -60,7 +60,7 @@ test('监听在启动之前就绪，输入发给所选会话，完成和隐藏�
 
 test('上一次启动的进程继续输出，但其启动事件不会覆盖新启动状态', async () => {
   const h = monitor();
-  await h.begin(); h.emit('started'); h.finish();
+  await h.begin(); h.emit('started'); h.finish(true);
   await h.begin(); h.emit('started', '', 'b');
   h.handleEvent({ event: 'inject_complete', consoleSessionId: 'b' });
   h.handleEvent({ event: 'launch_error', consoleSessionId: 'a' });
@@ -83,12 +83,16 @@ test('超量输出和历史记录有界，未知会话输出被忽略，文本�
   assert.ok(h.state.sessions.some(item => item.id === 'a' && item.running));
 });
 
-test('无控制台路径启动完成后保留阶段提示，由用户空闲时关闭', async () => {
-  const h = monitor(); await h.begin(); h.finish();
-  assert.equal(h.state.visible, true);
+test('无控制台路径正常启动完成后直接隐藏，历史仍可手动打开', async () => {
+  const h = monitor(); await h.begin(); h.finish(true);
+  assert.equal(h.state.visible, false);
+  assert.equal(h.state.collapsed, true);
   assert.equal(h.state.launching, false);
   assert.equal(h.state.sessions.length, 0);
   assert.equal(h.hasActiveLoad(), false);
+  h.open();
+  assert.equal(h.state.visible, true);
+  assert.equal(h.state.collapsed, false);
   assert.equal(h.dismiss(), true);
   assert.equal(h.state.visible, false);
 });
@@ -97,8 +101,8 @@ test('启动未结束或任意来源运行时不可关闭，不以所选来源�
   const h = monitor(); await h.begin();
   assert.equal(h.hasActiveLoad(), true);
   assert.equal(h.dismiss(), false);
-  h.emit('started'); h.finish();
-  await h.begin(); h.emit('started', '', 'b'); h.emit('exit', '', 'b'); h.finish();
+  h.emit('started'); h.finish(true);
+  await h.begin(); h.emit('started', '', 'b'); h.emit('exit', '', 'b'); h.finish(true);
   assert.equal(h.state.selectedId, 'b');
   assert.equal(h.dismiss(), false); // 上一代 a 仍在运行。
   h.emit('log_started', 'a', 'reshade');
@@ -106,8 +110,8 @@ test('启动未结束或任意来源运行时不可关闭，不以所选来源�
   assert.equal(h.dismiss(), false); // Run.exe 退出不代表 ReShade 跟随结束。
   h.emit('exit', '', 'reshade');
   assert.equal(h.hasActiveLoad(), false);
-  assert.equal(h.state.visible, true); // 空闲不会自行隐藏。
-  assert.equal(h.dismiss(), true);
+  assert.equal(h.state.visible, false); // 成功启动后不保留阶段提示。
+  assert.equal(h.dismiss(), true); // 隐藏状态仍可内部清理。
   assert.equal(h.state.visible, false);
 });
 
@@ -115,7 +119,9 @@ test('启动失败仍等待流程释放，来源错误后空闲可关闭且记�
   const h = monitor(); await h.begin();
   h.handleEvent({ event: 'launch_error', message: 'failed' });
   assert.equal(h.dismiss(), false);
-  h.emit('started'); h.emit('error', 'read failed'); h.finish();
+  h.emit('started'); h.emit('error', 'read failed'); h.finish(true);
+  assert.equal(h.state.visible, true);
+  assert.equal(h.state.collapsed, false);
   assert.equal(h.hasActiveLoad(), false);
   assert.equal(h.dismiss(), true);
   assert.equal(h.state.sessions[0].error, 'read failed');
@@ -124,7 +130,7 @@ test('启动失败仍等待流程释放，来源错误后空闲可关闭且记�
 
 test('关闭后迟到输出不重新打开，下一次启动重新展开面板并保留历史', async () => {
   const h = monitor(); await h.begin();
-  h.emit('started'); h.emit('stdout', 'retained'); h.emit('exit'); h.finish();
+  h.emit('started'); h.emit('stdout', 'retained'); h.emit('exit'); h.finish(true);
   h.state.collapsed = false;
   assert.equal(h.dismiss(), true);
   assert.equal(h.state.collapsed, true);
@@ -144,7 +150,7 @@ test('监听失败不阻断游戏启动，并清理已经成功注册的监听�
   await h.begin();
   assert.equal(h.state.launching, true);
   assert.equal(h.stopped.length, 1);
-  h.finish();
+  h.finish(true);
   assert.equal(h.state.launching, false);
 });
 
@@ -168,7 +174,7 @@ test('日志来源不重新展开已收起的浮窗、不抢所选会话，并�
   h.emit('error', '具体读取错误', 'reshade');
   h.emit('exit', '', 'reshade');
   assert.equal(h.state.sessions[1].error, '具体读取错误');
-  h.finish();
+  h.finish(true);
   await h.begin();
   h.emit('started', '', 'new-run');
   h.emit('log_started', 'a', 'old-shade');
@@ -191,7 +197,7 @@ test('监听尚未就绪时立即展开，并在开始新代次前清空旧错�
   release(); await pending;
 });
 
-test('启动队列返回或进程出现不代表注入完成，成功事件后收起且日志继续', async () => {
+test('启动队列返回或进程出现不代表注入完成，成功事件后隐藏且日志继续', async () => {
   const h = monitor(); await h.begin(); h.emit('started');
   h.handleEvent({ event: 'launch_started', consoleSessionId: 'a' });
   h.handleEvent({ event: 'target_created', consoleSessionId: 'a' });
@@ -200,22 +206,26 @@ test('启动队列返回或进程出现不代表注入完成，成功事件后�
   assert.equal(h.state.launching, true);
   h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
   assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.visible, false);
   assert.equal(h.state.launching, false);
   assert.equal(h.state.sessions[0].running, true);
   h.open();
+  assert.equal(h.state.visible, true);
   h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
-  assert.equal(h.state.collapsed, false); // 重复完成事件不收起手动打开的面板。
+  assert.equal(h.state.visible, true);
+  assert.equal(h.state.collapsed, false); // 重复完成事件不隐藏手动打开的面板。
 });
 
 test('完成事件早于队列返回时仍等待队列，晚于队列且尚无事件时仍等待注入', async () => {
   const h = monitor(); await h.begin(); h.emit('started');
   h.handleEvent({ event: 'launch_complete', consoleSessionId: 'a' });
   assert.equal(h.state.collapsed, false);
-  h.finish(true, true); assert.equal(h.state.collapsed, true);
+  h.finish(true, true); assert.equal(h.state.collapsed, true); assert.equal(h.state.visible, false);
   await h.begin(); h.emit('started', '', 'b');
   h.finish(true, true); assert.equal(h.state.launching, true);
   h.handleEvent({ event: 'launch_complete', consoleSessionId: 'b' });
   assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.visible, false);
 });
 
 test('失败不收起且后续进度不覆盖错误，取消与无控制台成功分别处理', async () => {
@@ -224,6 +234,7 @@ test('失败不收起且后续进度不覆盖错误，取消与无控制台成�
   h.handleEvent({ event: 'launch_error', message: 'late channel error' });
   h.handleEvent({ event: 'target_created' }); h.finish(true, true);
   assert.equal(h.state.collapsed, false);
+  assert.equal(h.state.visible, true);
   assert.equal(h.state.failure.message, 'injection failed');
   assert.equal(h.state.launching, false);
   await h.begin(); h.finish(false);
@@ -231,6 +242,7 @@ test('失败不收起且后续进度不覆盖错误，取消与无控制台成�
   assert.equal(h.state.currentEvent.event, 'launch_cancelled');
   await h.begin(); h.finish(true);
   assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.visible, false);
   assert.equal(h.state.currentEvent.event, 'launch_complete');
 });
 
@@ -242,6 +254,7 @@ test('未收到完成事件的进程退出或通道错误不永远等待，也�
     if (!late) h.finish(true, true);
     assert.equal(h.state.launching, false);
     assert.equal(h.state.collapsed, false);
+    assert.equal(h.state.visible, true);
     assert.equal(h.state.failure.event, 'launch_status_unavailable');
   }
 });
@@ -270,5 +283,6 @@ test('注入已确认完成后控制台断线仅保留来源错误，不反向�
   assert.equal(h.state.failure, null);
   assert.equal(h.state.currentEvent.event, 'launch_complete');
   assert.equal(h.state.collapsed, true);
+  assert.equal(h.state.visible, false);
   assert.equal(h.state.sessions[0].error, 'socket disconnected');
 });
