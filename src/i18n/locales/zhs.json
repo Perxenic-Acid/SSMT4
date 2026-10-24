@@ -317,6 +317,8 @@
     },
     "selectGame": "快捷切换游戏",
     "switchToGameLibrary": "切换到游戏库",
+    "pinGamesToSidebar": "固定到主页侧栏",
+    "unpinGamesFromSidebar": "移回标题栏",
     "favoriteGames": "常用游戏",
     "otherGames": "其它游戏",
     "settings": "设置",

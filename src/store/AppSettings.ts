@@ -297,6 +297,7 @@ export class AppSettings {
 	CurrentWorkSpace: string = 'Default'
 	CurrentWorkSpaceByGame: Record<string, string> = {}
 	sidebarGameOrder: string[] = []
+	homeGameSidebarPinned: boolean = false
 	/** @deprecated Read only while migrating older settings. */
 	modsManagementBlurNsfw?: boolean
 	/** @deprecated Read only while migrating older settings. */
@@ -400,6 +401,7 @@ export class AppSettings {
 		this.CurrentWorkSpace = init?.CurrentWorkSpace ?? this.CurrentWorkSpace
 		this.CurrentWorkSpaceByGame = normalizeWorkspaceByGame(init?.CurrentWorkSpaceByGame)
 		this.sidebarGameOrder = normalizeSidebarGameOrder(init?.sidebarGameOrder)
+		this.homeGameSidebarPinned = init?.homeGameSidebarPinned === true
 		this.modsManagementBlurMode = normalizeImageBlurMode(init?.modsManagementBlurMode, init?.modsManagementBlurNsfw)
 		this.gamebananaBlurMode = normalizeImageBlurMode(init?.gamebananaBlurMode ?? init?.gamebananaNsfwMode, init?.gamebananaNsfwBlur)
 		this.gamebananaShowNsfw = init?.gamebananaShowNsfw ?? !(init?.gamebananaHideNsfw ?? init?.gamebananaNsfwMode === 'hide')
@@ -532,6 +534,7 @@ export class AppSettings {
 			CurrentWorkSpace: this.CurrentWorkSpace,
 			CurrentWorkSpaceByGame: this.CurrentWorkSpaceByGame,
 			sidebarGameOrder: this.sidebarGameOrder,
+			homeGameSidebarPinned: this.homeGameSidebarPinned,
 			modsManagementBlurMode: this.modsManagementBlurMode,
 			gamebananaBlurMode: this.gamebananaBlurMode,
 			gamebananaShowNsfw: this.gamebananaShowNsfw,

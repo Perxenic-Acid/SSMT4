@@ -18,6 +18,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { PathHelper } from '../../helper/PathHelper'
 import GameSettingsModal from '../../components/GameSettingsModal.vue'
 import SettingsMenu from '../../components/SettingsMenu.vue'
+import HomeGameSidebar from '../../components/HomeGameSidebar.vue'
 import ReleaseNotesMarkdown from '../../components/ReleaseNotesMarkdown.vue'
 import { LaunchMonitor } from '../../store/LaunchMonitor'
 
@@ -514,7 +515,14 @@ watch(showSettings, visible => {
 </script>
 
 <template>
-  <div class="home-container" :style="{ '--action-bar-width': showPreload ? '460px' : '310px' }">
+  <div class="home-container" :class="{ 'has-game-sidebar': appSettings.homeGameSidebarPinned }"
+    :style="{ '--action-bar-width': showPreload ? '460px' : '310px' }">
+    <div class="home-sidebar-slot" :inert="!appSettings.homeGameSidebarPinned">
+      <Transition name="home-game-sidebar">
+        <HomeGameSidebar v-if="appSettings.homeGameSidebarPinned" />
+      </Transition>
+    </div>
+    <div class="home-main">
     <div class="content-area">
     </div>
 
@@ -631,9 +639,6 @@ watch(showSettings, visible => {
       </aside>
     </div>
 
-    <!-- Settings Modal -->
-    <GameSettingsModal ref="settingsModalRef" v-model="showSettings" :game-name="appSettings.CurrentGameName" />
-
     <div class="action-bar">
       <div v-if="showPreload" class="home-preload-area">
         <button class="home-preload-button" type="button" :disabled="maintenanceRunning || preloadCompleted" @click="startMaintenance('preload')">
@@ -673,10 +678,25 @@ watch(showSettings, visible => {
 
 
 
+    </div>
+    <!-- 保持全屏设置弹窗在响应式内容容器之外。 -->
+    <GameSettingsModal ref="settingsModalRef" v-model="showSettings" :game-name="appSettings.CurrentGameName" />
   </div>
 </template>
 
 <style scoped>
+.home-game-sidebar-enter-active, .home-game-sidebar-leave-active {
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-out),
+    transform var(--motion-duration-layout) var(--motion-ease-layout);
+}
+.home-game-sidebar-enter-active { transition-delay: var(--motion-delay-handoff); }
+.home-game-sidebar-enter-from, .home-game-sidebar-leave-to {
+  opacity: 0; transform: translateX(-28px) scale(.94); pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-game-sidebar-enter-active, .home-game-sidebar-leave-active, .home-sidebar-slot { transition: none !important; }
+}
+
 .home-container {
   --version-panel-gap: 24px;
   --bottom-ui-gap: 40px;
@@ -688,6 +708,28 @@ watch(showSettings, visible => {
   padding: 0;
   box-sizing: border-box;
   position: relative;
+}
+
+.home-sidebar-slot {
+  width: 0;
+  flex: 0 0 auto;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  transition: width var(--motion-duration-layout) var(--motion-ease-layout);
+}
+
+.has-game-sidebar > .home-sidebar-slot { width: 96px; }
+
+.home-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  position: relative;
+  container: home-main / inline-size;
 }
 
 .content-area {
@@ -730,7 +772,7 @@ watch(showSettings, visible => {
 }
 
 .home-news-panel {
-  width: min(360px, 34vw);
+  width: min(360px, 34cqw);
   height: min(410px, 54vh);
   min-height: 300px;
   padding: 0 14px 10px;
@@ -1172,14 +1214,14 @@ watch(showSettings, visible => {
   z-index: 3;
 }
 
-@media (max-width: 900px) {
+@container home-main (max-width: 900px) {
   .home-launcher-links {
     left: 20px;
     bottom: 92px;
   }
 
   .home-news-panel {
-    width: min(360px, calc(100vw - 56px));
+    width: min(360px, calc(100cqw - 56px));
     height: min(410px, 54vh);
   }
 
@@ -1334,11 +1376,13 @@ watch(showSettings, visible => {
 
 /* Settings button styles are now in SettingsMenu.vue */
 
-@media (max-width: 980px) {
-  .home-container {
+@container home-main (max-width: 980px) {
+  .content-area, .version-info-panel, .home-launcher-links, .action-bar {
     --bottom-ui-gap: 28px;
     --version-panel-gap: 18px;
   }
+
+  .home-launcher-links { bottom: 140px; }
 
   .version-info-panel {
     bottom: calc(var(--bottom-ui-gap) + 72px);
@@ -1350,7 +1394,7 @@ watch(showSettings, visible => {
   }
 }
 
-@media (max-width: 720px) {
+@container home-main (max-width: 720px) {
   .version-info-panel {
     right: 18px;
     max-width: none;

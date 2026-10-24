@@ -21,6 +21,17 @@ function load(name) {
 }
 const { AppSettings } = load('AppSettings');
 
+test('主页游戏侧栏默认关闭，固定状态独立持久化', () => {
+  assert.equal(new AppSettings({}).homeGameSidebarPinned, false);
+  assert.equal(new AppSettings({ homeGameSidebarPinned: 'true' }).homeGameSidebarPinned, false);
+  for (const homeGameSidebarPinned of [true, false]) {
+    const settings = new AppSettings({ homeGameSidebarPinned, sidebarGameOrder: ['SRMI', 'GIMI'] });
+    const restored = new AppSettings(JSON.parse(JSON.stringify(settings)));
+    assert.equal(restored.homeGameSidebarPinned, homeGameSidebarPinned);
+    assert.deepEqual([...restored.sidebarGameOrder], ['SRMI', 'GIMI']);
+  }
+});
+
 test('旧配置迁移为默认控制台快捷键与自动叠加层语言', () => {
   const settings = new AppSettings({});
   assert.equal(settings.launchConsoleShortcut, 'Ctrl+Shift+L');

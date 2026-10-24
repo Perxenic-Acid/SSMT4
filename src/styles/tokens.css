@@ -7,6 +7,14 @@
    ═══════════════════════════════════════════════ */
 
 :root {
+  /* 动效：短反馈、普通位移及布局重排分开控制，交接延迟用于入口切换。 */
+  --motion-duration-fast: 160ms;
+  --motion-duration-standard: 240ms;
+  --motion-duration-layout: 280ms;
+  --motion-delay-handoff: 90ms;
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-layout: cubic-bezier(0.2, 0.8, 0.2, 1);
+
   /* ── Border Radii ── */
   --radius-modal: 24px;
   --radius-card: 16px;
@@ -51,4 +59,13 @@
   --red-text: var(--t-danger-text, rgba(var(--theme-danger-rgb), 0.85));
   --red-hover-bg: rgba(var(--theme-danger-rgb), 0.14);
   --red-hover-border: rgba(var(--theme-danger-rgb), 0.30);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-fast: 0ms;
+    --motion-duration-standard: 0ms;
+    --motion-duration-layout: 0ms;
+    --motion-delay-handoff: 0ms;
+  }
 }

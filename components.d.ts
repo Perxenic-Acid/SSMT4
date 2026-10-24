@@ -49,6 +49,8 @@ declare module 'vue' {
     ElTree: typeof import('element-plus/es')['ElTree']
     GamesDrawer: typeof import('./src/components/GamesDrawer.vue')['default']
     GameSettingsModal: typeof import('./src/components/GameSettingsModal.vue')['default']
+    GameSwitcherPin: typeof import('./src/components/GameSwitcherPin.vue')['default']
+    HomeGameSidebar: typeof import('./src/components/HomeGameSidebar.vue')['default']
     LaunchEventOverlay: typeof import('./src/components/LaunchEventOverlay.vue')['default']
     PageLoading: typeof import('./src/components/PageLoading.vue')['default']
     ReleaseNotesMarkdown: typeof import('./src/components/ReleaseNotesMarkdown.vue')['default']

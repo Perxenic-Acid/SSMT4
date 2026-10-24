@@ -318,6 +318,8 @@
     },
     "selectGame": "Switch game",
     "switchToGameLibrary": "Switch to Game Library",
+    "pinGamesToSidebar": "Pin to home sidebar",
+    "unpinGamesFromSidebar": "Move back to title bar",
     "favoriteGames": "Favorite games",
     "otherGames": "Other games",
     "settings": "Settings",

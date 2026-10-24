@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, onMounted, onUnmounted } from 'vue';
+import { computed, nextTick, reactive, ref, onMounted, onUnmounted, watch } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
@@ -8,6 +8,8 @@ import { getAlwaysOnTop, setAlwaysOnTop } from '../store/WindowPinStore';
 import { AppStateManager, type GameInfo } from '../store/AppStateManager';
 import { getGamePresetDisplayName } from '../store/GamePreset';
 import { calculateContextMenuPosition } from '../utils/ContextMenuPosition';
+import { orderedFavoriteGames } from '../common/GameSwitcher';
+import GameSwitcherPin from './GameSwitcherPin.vue';
 
 const appWindow = getCurrentWindow();
 const route = useRoute();
@@ -25,23 +27,27 @@ const gamesList = AppStateManager.gamesList;
 const currentGame = computed(() => gamesList.find(g => g.name === appSettings.CurrentGameName));
 
 /** Favorite games (formerly the sidebar strip), honoring the user's manual order. */
-const favoriteGames = computed(() => {
-    const orderIndex = new Map(appSettings.sidebarGameOrder.map((name, index) => [name, index]));
-    return gamesList
-        .filter(g => g.showSidebar)
-        .sort((left, right) => {
-            const leftIndex = orderIndex.get(left.name) ?? Number.MAX_SAFE_INTEGER;
-            const rightIndex = orderIndex.get(right.name) ?? Number.MAX_SAFE_INTEGER;
-            return leftIndex - rightIndex;
-        });
-});
+const favoriteGames = computed(() => orderedFavoriteGames(gamesList, appSettings.sidebarGameOrder));
+const isHome = computed(() => route.path === '/');
+const isGameSwitcherHidden = computed(() => isHome.value && appSettings.homeGameSidebarPinned);
 
 const otherGames = computed(() => gamesList.filter(g => !g.showSidebar));
 
 const isGameSwitcherOpen = ref(false);
 
 const toggleGameSwitcher = () => {
+    if (isGameSwitcherHidden.value) return;
     isGameSwitcherOpen.value = !isGameSwitcherOpen.value;
+};
+
+watch(() => route.path, () => { isGameSwitcherOpen.value = false; });
+
+const pinGameSidebar = async () => {
+    if (!isHome.value) return;
+    isGameSwitcherOpen.value = false;
+    appSettings.homeGameSidebarPinned = true;
+    await nextTick();
+    document.querySelector<HTMLButtonElement>('.home-game-sidebar .game-switcher-pin')?.focus({ preventScroll: true });
 };
 
 const closeGameSwitcher = () => {
@@ -355,15 +361,11 @@ const startDrag = async (event: MouseEvent) => {
     // handler (maximize toggle) can fire instead of restarting the drag.
     if (event.button !== 0 || event.detail > 1) return;
 
-    // A maximized window cannot be moved by startDragging; restore it first.
-    if (isMaximized.value) {
-        await appWindow.unmaximize();
-        await nextTick();
-        checkMaximized();
-    }
-
     try {
+        // 直接交给系统的标题栏拖动，保留 Windows 的拖动还原和贴靠行为。
+        // 不要先异步还原：会丢失原始拖动手势，还可能因权限缺失中断。
         await appWindow.startDragging();
+        await checkMaximized();
     } catch (error) {
         console.warn('startDragging failed', error);
     }
@@ -397,7 +399,8 @@ const toggleSettingsPage = () => {
         <div class="caption-drag-region" @mousedown="startDrag" @dblclick="toggleMaximize"></div>
 
         <!-- Game quick-switcher at the far left: current game icon, opens the game picker card -->
-        <div class="game-switcher-root">
+        <div class="game-switcher-root" :class="{ 'is-home-sidebar': isGameSwitcherHidden }"
+            :inert="isGameSwitcherHidden" :aria-hidden="isGameSwitcherHidden || undefined">
             <el-tooltip :content="t('titlebar.selectGame')" placement="bottom" :show-after="250" :disabled="isGameSwitcherOpen">
                 <button
                     type="button"
@@ -426,6 +429,10 @@ const toggleSettingsPage = () => {
 
             <transition name="game-switcher-pop">
                 <div v-if="isGameSwitcherOpen" class="game-switcher-card" role="menu" :aria-label="t('titlebar.selectGame')">
+                    <div v-if="isHome" class="game-switcher-pin-row">
+                        <span>{{ t('titlebar.selectGame') }}</span>
+                        <GameSwitcherPin @click="pinGameSidebar" />
+                    </div>
                     <div v-if="favoriteGames.length > 0" class="game-switcher-group">
                         <div class="game-switcher-group-title">{{ t('titlebar.favoriteGames') }}</div>
                         <button
@@ -625,6 +632,25 @@ const toggleSettingsPage = () => {
     align-items: stretch;
     height: 100%;
     z-index: 1;
+    transition: opacity var(--motion-duration-fast) var(--motion-ease-out) var(--motion-delay-handoff),
+        transform var(--motion-duration-standard) var(--motion-ease-out) var(--motion-delay-handoff), visibility 0s;
+}
+
+.game-switcher-root.is-home-sidebar {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translate(-8px, 12px) scale(.85);
+    transition-delay: 0s, 0s, var(--motion-duration-standard);
+}
+
+.game-switcher-pin-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 0 4px 6px; font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .game-switcher-root { transition: none; }
 }
 
 .game-switcher-button.active {
@@ -730,7 +756,7 @@ const toggleSettingsPage = () => {
 /* Card open/close animation */
 .game-switcher-pop-enter-active,
 .game-switcher-pop-leave-active {
-    transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1), transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity var(--motion-duration-fast) var(--motion-ease-out), transform var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 .game-switcher-pop-enter-from,

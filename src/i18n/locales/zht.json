@@ -247,6 +247,8 @@
     },
     "switchToGameLibrary": "切換到遊戲庫",
     "selectGame": "切換遊戲",
+    "pinGamesToSidebar": "固定至首頁側欄",
+    "unpinGamesFromSidebar": "移回標題列",
     "favoriteGames": "常用遊戲",
     "otherGames": "其它遊戲",
     "settings": "設定",
