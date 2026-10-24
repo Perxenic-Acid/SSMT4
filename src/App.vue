@@ -192,14 +192,55 @@ const clamp = (value: number, min: number, max: number) => {
 
 const globalDimLayerBackground = computed(() => {
   const strength = clamp(Number(appSettings.globalDimMaskStrength ?? 1), 0, 4);
-  const center = clamp(0.12 * strength, 0, 0.48).toFixed(3);
-  const middle = clamp(0.24 * strength, 0, 0.86).toFixed(3);
-  const edge = clamp(0.34 * strength, 0, 0.96).toFixed(3);
+  // 内容页面需要稳定的最低对比度，不能因为用户把首页背景遮罩设为 0
+  // 就让亮色游戏背景透过半透明面板冲淡文字。
+  const contentFloor = shouldShowGlobalDimLayer.value;
+  const center = clamp(Math.max(0.12 * strength, contentFloor ? 0.50 : 0), 0, 0.62).toFixed(3);
+  const middle = clamp(Math.max(0.24 * strength, contentFloor ? 0.62 : 0), 0, 0.88).toFixed(3);
+  const edge = clamp(Math.max(0.34 * strength, contentFloor ? 0.72 : 0), 0, 0.96).toFixed(3);
 
   return `radial-gradient(circle at 50% 50%, rgba(0, 0, 0, ${center}) 0%, rgba(0, 0, 0, ${middle}) 52%, rgba(0, 0, 0, ${edge}) 100%)`;
 });
 
 const appUiScale = computed(() => normalizeAppUiScale(appSettings.uiScale));
+const isEndfieldBackground = computed(() => appSettings.CurrentGameName === 'EFMI');
+const ENDFIELD_ART_WIDTH = 1503;
+const ENDFIELD_ART_HEIGHT = 900;
+const backgroundViewport = ref({ width: 0, height: 0 });
+let backgroundResizeFrame: number | null = null;
+let backgroundResizeObserver: ResizeObserver | null = null;
+
+const backgroundLayerStyle = computed(() => ({
+  '--background-viewport-width': backgroundViewport.value.width
+    ? `${backgroundViewport.value.width}px`
+    : '100vw',
+  '--background-viewport-height': backgroundViewport.value.height
+    ? `${backgroundViewport.value.height}px`
+    : '100vh',
+  '--endfield-art-scale': String(Math.max(
+    1,
+    backgroundViewport.value.width / ENDFIELD_ART_WIDTH,
+    backgroundViewport.value.height / ENDFIELD_ART_HEIGHT,
+  )),
+}));
+
+const syncBackgroundViewport = () => {
+  const width = document.documentElement.clientWidth;
+  const height = document.documentElement.clientHeight;
+  // 最小化/切换桌面时窗口可能短暂报告 0，保留上一帧有效尺寸避免背景塌陷。
+  if (width <= 0 || height <= 0) return;
+  if (backgroundViewport.value.width === width && backgroundViewport.value.height === height) return;
+  backgroundViewport.value = { width, height };
+};
+
+const scheduleBackgroundViewportSync = () => {
+  if (backgroundResizeFrame !== null) return;
+  backgroundResizeFrame = requestAnimationFrame(() => {
+    backgroundResizeFrame = null;
+    syncBackgroundViewport();
+  });
+};
+
 watch(appUiScale, scale => {
   document.documentElement.style.setProperty('--app-caption-height', `${32 * scale}px`);
 }, { immediate: true });
@@ -248,11 +289,24 @@ const preventContextMenu = (event: Event) => {
 
 onMounted(() => {
   document.addEventListener('contextmenu', preventContextMenu);
+  syncBackgroundViewport();
+  window.addEventListener('resize', scheduleBackgroundViewportSync, { passive: true });
+  window.visualViewport?.addEventListener('resize', scheduleBackgroundViewportSync, { passive: true });
+  if (typeof ResizeObserver !== 'undefined') {
+    backgroundResizeObserver = new ResizeObserver(scheduleBackgroundViewportSync);
+    backgroundResizeObserver.observe(document.documentElement);
+  }
   void LaunchMonitor.connect().catch(error => console.warn('[LaunchMonitor]', error));
 });
 
 onUnmounted(() => {
   document.removeEventListener('contextmenu', preventContextMenu);
+  window.removeEventListener('resize', scheduleBackgroundViewportSync);
+  window.visualViewport?.removeEventListener('resize', scheduleBackgroundViewportSync);
+  backgroundResizeObserver?.disconnect();
+  backgroundResizeObserver = null;
+  if (backgroundResizeFrame !== null) cancelAnimationFrame(backgroundResizeFrame);
+  backgroundResizeFrame = null;
   LaunchMonitor.dispose();
 });
 
@@ -261,15 +315,17 @@ onUnmounted(() => {
 
 <template>
   <!-- Background Layer -->
-  <div class="bg-layer">
+  <div class="bg-layer" :style="backgroundLayerStyle">
     <transition-group name="bg-trans">
       <!-- Image Background -->
-      <div v-if="appSettings.bgType === BGType.Image && appSettings.bgImage" :key="appSettings.bgImage" class="bg-item"
+      <div v-if="appSettings.bgType === BGType.Image && appSettings.bgImage" :key="appSettings.bgImage"
+        class="bg-item" :class="{ 'bg-endfield-art': isEndfieldBackground }"
         :style="{ backgroundImage: `url(${appSettings.bgImage})` }"></div>
 
       <!-- Video Background -->
       <BackgroundVideo v-if="appSettings.bgType === BGType.Video && appSettings.bgVideo" :key="appSettings.bgVideo"
         :src="appSettings.bgVideo" :poster="appSettings.bgImage" class="bg-item"
+        :class="{ 'bg-endfield-art': isEndfieldBackground }"
         @failed="AppStateManager.fallbackBackgroundVideo" />
       <div v-if="appSettings.bgType === BGType.Video && appSettings.bgTheme" :key="appSettings.bgTheme" class="bg-item bg-video-theme"
         :style="{ backgroundImage: `url(${appSettings.bgTheme})` }"></div>
@@ -579,10 +635,9 @@ textarea {
 
 .bg-layer {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
+  width: var(--background-viewport-width, 100vw);
+  height: var(--background-viewport-height, 100vh);
   z-index: 0;
   overflow: hidden;
   background-color: #050505;
@@ -591,14 +646,30 @@ textarea {
 /* Background Transition Items */
 .bg-item {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   object-fit: cover;
   background-size: cover;
   background-position: center;
-  will-change: opacity;
+}
+
+/* 终末地原画左上角自带 Logo。常见窗口下固定缩放基准，只有窗口超过基准
+   尺寸时才按铺满所需比例放大，避免出现模糊填充区域。 */
+.bg-endfield-art {
+  inset: auto;
+  top: 0;
+  left: 0;
+  width: var(--endfield-art-width, 1503px);
+  height: var(--endfield-art-height, 900px);
+  background-size: 100% 100%;
+  background-position: left top;
+  background-repeat: no-repeat;
+  object-position: left top;
+  transform: scale(var(--endfield-art-scale, 1));
+  transform-origin: left top;
 }
 .bg-video-theme {
   z-index: 1;
@@ -612,6 +683,7 @@ textarea {
 .bg-trans-leave-active {
   transition: opacity 0.6s ease;
   /* Smooth 0.6s fade */
+  will-change: opacity;
 }
 
 .bg-trans-enter-from,

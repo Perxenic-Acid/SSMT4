@@ -381,7 +381,9 @@ onBeforeUnmount(stopModelRowDrag);
 }
 
 .inner-panel {
-  background: rgba(var(--theme-surface-tint-rgb), 0.022);
+  background:
+    linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), 0.055), rgba(var(--theme-surface-tint-rgb), 0.018)),
+    var(--work-readable-inner, rgba(6, 10, 16, 0.50));
   border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.10);
   border-radius: 8px;
   padding: 14px;

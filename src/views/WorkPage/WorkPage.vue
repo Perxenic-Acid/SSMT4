@@ -3567,7 +3567,10 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 </script>
 
 <template>
-  <div class="work-page-container" :class="{ 'is-video-background': appSettings.bgType === BGType.Video }">
+  <div class="work-page-container" :class="{
+    'is-video-background': appSettings.bgType === BGType.Video,
+    'is-static-background': appSettings.bgType === BGType.Image,
+  }">
     <div class="work-layout">
       <div class="main-column">
         <div class="panel-stack glass-scrollbar">
@@ -3809,6 +3812,9 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 }
 
 .work-page-container {
+  --work-readable-panel: rgba(7, 11, 18, 0.76);
+  --work-readable-inner: rgba(6, 10, 16, 0.50);
+  --work-readable-control: rgba(5, 9, 15, 0.68);
   --work-crystal: var(--theme-accent);
   --work-crystal-rgb: var(--theme-accent-rgb);
   --work-crystal-soft: rgba(var(--theme-surface-tint-rgb), 0.08);
@@ -3833,6 +3839,9 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
   gap: 16px;
   color: #e8ecf5;
   overflow: hidden;
+}
+
+.work-page-container.is-video-background {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -4040,8 +4049,8 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 
 .workspace-tabs-shell :deep(.el-input__wrapper),
 .workspace-tabs-shell :deep(.el-select__wrapper) {
-  background: rgba(255, 255, 255, 0.045) !important;
-  box-shadow: 0 0 0 1px rgba(var(--theme-surface-tint-rgb), 0.10) inset !important;
+  background: var(--work-readable-control) !important;
+  box-shadow: 0 0 0 1px rgba(var(--theme-surface-tint-rgb), 0.16) inset !important;
 }
 
 .workspace-tabs-shell :deep(.el-input__wrapper:hover),
@@ -4052,10 +4061,10 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 }
 
 .workspace-tabs-shell :deep(.glass-table.el-table) {
-  border-color: rgba(var(--theme-surface-tint-rgb), 0.10) !important;
+  border-color: rgba(var(--theme-surface-tint-rgb), 0.14) !important;
   border-radius: 8px !important;
   overflow: hidden !important;
-  background: rgba(var(--theme-surface-tint-rgb), 0.022) !important;
+  background: var(--work-readable-inner) !important;
   box-shadow: none !important;
 }
 
@@ -4070,8 +4079,8 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 }
 
 .workspace-tabs-shell :deep(.glass-table.el-table th.el-table__cell) {
-  background: rgba(var(--theme-surface-tint-rgb), 0.055) !important;
-  color: rgba(var(--theme-text-secondary-rgb), 0.80) !important;
+  background: rgba(5, 9, 15, 0.72) !important;
+  color: rgba(var(--theme-text-secondary-rgb), 0.90) !important;
 }
 
 .workspace-tabs-shell :deep(.glass-table.el-table::before),
@@ -4168,8 +4177,8 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
      backgrounds even when the global dim mask is turned down */
   background:
     linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), 0.045), rgba(var(--theme-surface-tint-rgb), 0.018)),
-    rgba(8, 12, 19, 0.38);
-  border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.09);
+    var(--work-readable-panel);
+  border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.14);
   border-radius: 8px;
   padding: 18px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
@@ -4177,6 +4186,11 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
   position: relative;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+.work-page-container.is-static-background .panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .panel::before {
@@ -4212,9 +4226,8 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
 
 .muted {
   border-style: dashed;
-  border-color: rgba(255, 255, 255, 0.10);
-  /* 更透明的 muted 背景以减少灰蓝感 */
-  background: rgba(15, 18, 28, 0.45);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(8, 12, 19, 0.64);
 }
 
 :deep(.workspace-access-dialog) {

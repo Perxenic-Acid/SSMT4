@@ -313,15 +313,13 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
   width: 100%;
   min-height: max-content;
   overflow: visible;
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
 }
 
 .side-drawer {
   flex: 0 0 auto;
   border-radius: 10px;
-  border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.14);
-  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.18);
+  background: var(--work-readable-panel, rgba(7, 11, 18, 0.76));
   overflow: hidden;
 }
 
@@ -333,7 +331,7 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
   gap: 8px;
   padding: 0 12px;
   border: 0;
-  background: transparent;
+  background: rgba(6, 10, 17, 0.48);
   color: rgba(var(--theme-text-primary-rgb), 0.92);
   font-size: 13px;
   font-weight: 700;
@@ -342,7 +340,7 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
 }
 
 .side-drawer-head:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--theme-surface-tint-rgb), 0.10);
 }
 
 .side-drawer-arrow {
@@ -430,8 +428,8 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
 .workspace-inline-input :deep(.el-input__wrapper) {
   min-height: 34px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
-  box-shadow: 0 0 0 1px rgba(var(--theme-surface-tint-rgb), 0.10) inset;
+  background: var(--work-readable-control, rgba(5, 9, 15, 0.68));
+  box-shadow: 0 0 0 1px rgba(var(--theme-surface-tint-rgb), 0.16) inset;
 }
 
 .workspace-inline-input :deep(.el-input__wrapper:hover),
@@ -616,7 +614,7 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
   padding: 8px 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(6, 10, 17, 0.48);
   color: rgba(232, 236, 245, 0.82);
   font: inherit;
   font-size: 12px;
@@ -635,7 +633,7 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
 }
 
 .workspace-list-item:hover {
-  background: rgba(255, 255, 255, 0.075);
+  background: rgba(var(--theme-surface-tint-rgb), 0.12);
   border-color: rgba(var(--theme-surface-tint-rgb), 0.40);
   color: rgba(var(--theme-text-primary-rgb), 0.94);
 }
