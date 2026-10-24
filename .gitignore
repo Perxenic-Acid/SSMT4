@@ -56,6 +56,7 @@ github_app.env
 .codegraph/
 
 # 构建产物与调试文件（不提交）
+*.[dD][lL][lL]
 portable/
 tauri-build.log.err
 app_uib_real.png
