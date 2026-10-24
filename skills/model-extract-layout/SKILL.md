@@ -1,10 +1,16 @@
 ---
 name: model-extract-layout
-description: 排查 SSMT 模型提取的 GameType 误匹配、实例数据误读和 buffer 越界；不用于客户端更新或注入故障。
+description: 排查 SSMT 模型提取的 GameType 误匹配、实例数据误读、buffer 越界及 Blender 导入角色标记缺失；不用于客户端更新或注入故障。
 ---
 
 先阅读 [帧分析解析说明](../../docs/frame-analysis-dump-resolution.md)，重点核对
 `src-tauri/src/extract_new/srmi.rs` 的类型发现与分类导出调用链。
+
+若问题是 Blender 未识别面部、脖颈或眼部，先按
+[角色标记诊断](../../docs/blender-submesh-role-diagnostics.md) 对照页面记忆与实际导入
+JSON 的 `SubMeshRole`。别名、贴图标记和 UI 勾选不能证明角色字段已写入。
+角色恢复以模型 JSON 为准，仅用旧记忆补齐缺失值；`null` 是明确清除记录，不能用旧记忆覆盖。
+涉及该流程时运行文档中的页面回归和 Rust 重新提取保留角色测试。
 
 - 从日志找到实际解析到的 deduped TXT 和 BUF；不要仅凭 hash 猜数据来源。
 - stride 和 TXT 的 vertex count 不足以证明逐顶点布局。CPU/GPU trianglelist

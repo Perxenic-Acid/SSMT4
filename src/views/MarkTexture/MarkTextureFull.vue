@@ -44,7 +44,9 @@ import {
 	readDrawCallIndexesMatchedByPersistedSubMeshMarks,
 	readPersistedSubMeshDrawCallIndexes,
 	updateCurrentSubMeshTextureMarkupStyle,
-	writeSubMeshRoleMetadata,
+	writeSubMeshRoleMetadataBatch,
+	type SubMeshRoleChange,
+	restoreSubMeshRoleMetadata,
 	type SubMeshRole,
 } from './MarkTextureFull';
 
@@ -838,8 +840,22 @@ const getCurrentGameFolderName = (): string => {
 	return gameName;
 };
 
+let selectionMemoryReady = false;
+let roleMetadataPending = 0;
+let roleMetadataQueue: Promise<unknown> = Promise.resolve();
+const queueRoleMetadata = async <T,>(operation: () => Promise<T>): Promise<T> => {
+	roleMetadataPending += 1;
+	const task = roleMetadataQueue.then(operation);
+	roleMetadataQueue = task.catch(() => undefined);
+	try { return await task; }
+	finally { roleMetadataPending -= 1; }
+};
+const selectionMemoryContext = (): string => JSON.stringify([
+	appSettings.DBMTWorkFolder, appSettings.CurrentGameName, appSettings.CurrentWorkSpace,
+]);
+
 const getSelectionMemoryConfigPath = async (): Promise<string | undefined> => {
-	const workspaceBaseDir = await getWorkspaceBaseDir();
+	const workspaceBaseDir = await getWorkspacePath();
 	if (!workspaceBaseDir) {
 		return undefined;
 	}
@@ -853,12 +869,27 @@ const getGlobalUiConfigPath = async (): Promise<string> => {
 };
 
 const loadSelectionMemory = async () => {
+	const context = selectionMemoryContext();
+	selectionMemoryReady = false;
+	if (selectionMemorySaveTimer) clearTimeout(selectionMemorySaveTimer);
+	faceSubMeshes.value = [];
+	neckSubMesh.value = '';
+	eyeSubMeshes.value = [];
+	faceNeckAlignmentEnabled.value = false;
+	drawCallSelectionBySubMesh.value = {};
+	pendingRestoreSubMesh.value = '';
+	pendingRestoreDrawCall.value = '';
 	try {
 		const configPath = await getSelectionMemoryConfigPath();
 		if (!configPath) {
 			return;
 		}
-		const content = await readTextFile(configPath);
+		// 旧版本按游戏共用记忆；仅在当前工作空间没有记忆时迁移。
+		const legacyDir = await getWorkspaceBaseDir();
+		const sourcePath = await exists(configPath) ? configPath
+			: legacyDir ? await join(legacyDir, 'MarkTextureConfig.json') : configPath;
+		const content = await readTextFile(sourcePath);
+		if (context !== selectionMemoryContext()) return;
 		const parsed = JSON.parse(content) as MarkTextureSelectionMemory;
 
 		if (typeof parsed.subMesh === 'string') {
@@ -1041,6 +1072,8 @@ const loadWorkspaceMarkTextureSource = async (
 };
 
 const saveSelectionMemory = async () => {
+	if (!selectionMemoryReady) return;
+	const context = selectionMemoryContext();
 	try {
 		const configPath = await getSelectionMemoryConfigPath();
 		if (!configPath) {
@@ -1048,6 +1081,7 @@ const saveSelectionMemory = async () => {
 		}
 		const configDir = await dirname(configPath);
 		await mkdir(configDir, { recursive: true });
+		if (context !== selectionMemoryContext() || !selectionMemoryReady) return;
 		const payload: MarkTextureSelectionMemory = {
 			subMesh: selectedSubMesh.value,
 			drawCall: selectedDrawCall.value,
@@ -1058,8 +1092,9 @@ const saveSelectionMemory = async () => {
 			faceNeckAlignmentEnabled: faceNeckAlignmentEnabled.value,
 		};
 		await writeTextFile(configPath, JSON.stringify(payload, null, 2));
-	} catch {
-		// Silent failure: do not affect interaction flow.
+	} catch (error) {
+		debugError('MarkTextureFull', '保存后处理记忆失败', error);
+		ElMessage.error('保存后处理记忆失败，模型角色标记已保存在模型 JSON 中');
 	}
 };
 
@@ -1083,8 +1118,9 @@ const scheduleSaveSelectionMemory = () => {
 		clearTimeout(selectionMemorySaveTimer);
 	}
 
+	const context = selectionMemoryContext();
 	selectionMemorySaveTimer = setTimeout(() => {
-		void saveSelectionMemory();
+		if (context === selectionMemoryContext()) void saveSelectionMemory();
 	}, 200);
 };
 
@@ -1160,6 +1196,8 @@ const loadSubMeshOptions = async () => {
 		if (loadToken !== subMeshOptionsLoadToken) return;
 
 		workspaceSources.value = sources;
+		await queueRoleMetadata(() => restoreWorkspaceSubMeshRoles(sources, loadToken));
+		if (loadToken !== subMeshOptionsLoadToken) return;
 		void hydrateWorkspaceSourceDrawCalls(sources, loadToken);
 		const nextSubMeshOptions = sources
 			.flatMap(source => {
@@ -2525,66 +2563,83 @@ const openSubMeshContextMenu = (event: MouseEvent, selectionValue: string): void
 	subMeshContextMenu.value = { subMesh: selectionValue, x: position.x, y: position.y };
 };
 
-const persistSubMeshRoleMetadata = async (
-	selectionValue: string,
-	role?: SubMeshRole,
-): Promise<void> => {
-	const selection = parseSubMeshSelection(selectionValue);
-	const source = selection
-		? workspaceSources.value.find(candidate => candidate.tabId === selection.tabId)
-		: undefined;
-	if (!selection || !source) return;
-
-	await writeSubMeshRoleMetadata({
-		workspacePath: source.workspacePath,
-		subMesh: selection.subMeshName,
-		role,
-	});
-};
-
-const markSubMeshRole = async (role: 'face' | 'neck' | 'eye'): Promise<void> => {
-	const selectionValue = subMeshContextMenu.value?.subMesh;
-	if (!selectionValue) return;
-	if (role === 'face') {
-		if (!faceSubMeshes.value.includes(selectionValue)) {
-			faceSubMeshes.value = [...faceSubMeshes.value, selectionValue];
+const restoreWorkspaceSubMeshRoles = async (sources: WorkspaceMarkTextureSource[], loadToken: number): Promise<void> => {
+	if (loadToken !== subMeshOptionsLoadToken) return;
+	selectionMemoryReady = false;
+	const rememberedFaces = new Set(faceSubMeshes.value);
+	const rememberedEyes = new Set(eyeSubMeshes.value);
+	const rememberedNeck = neckSubMesh.value;
+	faceSubMeshes.value = [];
+	neckSubMesh.value = '';
+	eyeSubMeshes.value = [];
+	let failures = 0;
+	for (const source of sources) {
+		for (const subMesh of Object.keys(source.subMeshDrawCallMap)) {
+			if (loadToken !== subMeshOptionsLoadToken) return;
+			const selection = serializeSubMeshSelection(source.tabId, subMesh);
+			const rememberedRole = rememberedFaces.has(selection) ? 'Face'
+				: rememberedNeck === selection ? 'Neck' : rememberedEyes.has(selection) ? 'Eye' : undefined;
+			try {
+				const role = await restoreSubMeshRoleMetadata({ workspacePath: source.workspacePath, subMesh, rememberedRole });
+				if (loadToken !== subMeshOptionsLoadToken) return;
+				if (role === 'Face') faceSubMeshes.value.push(selection);
+				if (role === 'Eye') eyeSubMeshes.value.push(selection);
+				if (role === 'Neck') {
+					if (neckSubMesh.value) throw new Error('工作空间存在多个脖颈角色标记');
+					neckSubMesh.value = selection;
+				}
+			} catch (error) {
+				failures += 1;
+				debugError('MarkTextureFull', `恢复 SubMesh 角色失败: ${subMesh}`, error);
+			}
 		}
-		if (neckSubMesh.value === selectionValue) neckSubMesh.value = '';
-		eyeSubMeshes.value = eyeSubMeshes.value.filter(value => value !== selectionValue);
-	} else if (role === 'eye') {
-		if (!eyeSubMeshes.value.includes(selectionValue)) eyeSubMeshes.value = [...eyeSubMeshes.value, selectionValue];
-		faceSubMeshes.value = faceSubMeshes.value.filter(value => value !== selectionValue);
-		if (neckSubMesh.value === selectionValue) neckSubMesh.value = '';
-	} else {
-		neckSubMesh.value = selectionValue;
-		faceSubMeshes.value = faceSubMeshes.value.filter(value => value !== selectionValue);
-		eyeSubMeshes.value = eyeSubMeshes.value.filter(value => value !== selectionValue);
 	}
-	subMeshContextMenu.value = undefined;
-	scheduleSaveSelectionMemory();
-	try {
-		await persistSubMeshRoleMetadata(selectionValue, role === 'face' ? 'Face' : role === 'neck' ? 'Neck' : 'Eye');
-	} catch (error) {
-		debugError('MarkTextureFull', 'failed to persist SubMeshRole metadata', error);
-		ElMessage.error('写入 SubMesh 角色元数据失败');
+	if (failures) {
+		ElMessage.error('部分 SubMesh 角色同步失败，请检查模型 JSON；未同步的标记不会显示为已完成');
+	} else {
+		selectionMemoryReady = true;
+		scheduleSaveSelectionMemory();
 	}
 };
 
-const clearSubMeshRole = async (): Promise<void> => {
+const subMeshRoleChange = (selectionValue: string, role?: SubMeshRole): SubMeshRoleChange => {
+	const selection = parseSubMeshSelection(selectionValue);
+	const source = selection && workspaceSources.value.find(candidate => candidate.tabId === selection.tabId);
+	if (!selection || !source) throw new Error('找不到当前 SubMesh 所属工作空间');
+	return { workspacePath: source.workspacePath, subMesh: selection.subMeshName, role };
+};
+
+const updateSubMeshRole = async (role?: SubMeshRole): Promise<void> => {
 	const selectionValue = subMeshContextMenu.value?.subMesh;
-	if (!selectionValue) return;
-	faceSubMeshes.value = faceSubMeshes.value.filter(value => value !== selectionValue);
-	if (neckSubMesh.value === selectionValue) neckSubMesh.value = '';
-	eyeSubMeshes.value = eyeSubMeshes.value.filter(value => value !== selectionValue);
-	subMeshContextMenu.value = undefined;
-	scheduleSaveSelectionMemory();
+	if (!selectionValue || roleMetadataPending) return;
+	const context = selectionMemoryContext();
 	try {
-		await persistSubMeshRoleMetadata(selectionValue);
+		const changes = [subMeshRoleChange(selectionValue, role)];
+		if (role === 'Neck' && neckSubMesh.value && neckSubMesh.value !== selectionValue) {
+			changes.push(subMeshRoleChange(neckSubMesh.value));
+		}
+		await queueRoleMetadata(async () => {
+			await writeSubMeshRoleMetadataBatch(changes);
+			if (context !== selectionMemoryContext()) return;
+			faceSubMeshes.value = faceSubMeshes.value.filter(value => value !== selectionValue);
+			eyeSubMeshes.value = eyeSubMeshes.value.filter(value => value !== selectionValue);
+			if (neckSubMesh.value === selectionValue) neckSubMesh.value = '';
+			if (role === 'Face') faceSubMeshes.value.push(selectionValue);
+			if (role === 'Eye') eyeSubMeshes.value.push(selectionValue);
+			if (role === 'Neck') neckSubMesh.value = selectionValue;
+			subMeshContextMenu.value = undefined;
+			scheduleSaveSelectionMemory();
+		});
 	} catch (error) {
-		debugError('MarkTextureFull', 'failed to clear SubMeshRole metadata', error);
-		ElMessage.error('清除 SubMesh 角色元数据失败');
+		debugError('MarkTextureFull', 'failed to update SubMeshRole metadata', error);
+		ElMessage.error('写入 SubMesh 角色元数据失败，页面标记未更新');
 	}
 };
+
+const markSubMeshRole = (role: 'face' | 'neck' | 'eye'): Promise<void> =>
+	updateSubMeshRole(role === 'face' ? 'Face' : role === 'neck' ? 'Neck' : 'Eye');
+
+const clearSubMeshRole = (): Promise<void> => updateSubMeshRole();
 
 const subMeshRoleLabel = (selectionValue: string): string => {
 	if (faceSubMeshes.value.includes(selectionValue)) return 'Face';
@@ -3112,7 +3167,7 @@ onActivated(() => {
 		hasSeenInitialActivation = true;
 		return;
 	}
-	void loadSubMeshOptions();
+	void loadSelectionMemory().then(() => loadSubMeshOptions());
 });
 
 onDeactivated(() => {

@@ -134,7 +134,27 @@ impl SubMeshJson {
     }
 
     pub fn save_to_file<P: AsRef<Path>>(&self, save_path: P) -> Result<(), String> {
-        let content = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let save_path = save_path.as_ref();
+        let mut output = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        // 重新提取只更新几何元数据，保留同一模型上用户已有的角色标记。
+        // null 是前端明确清除角色的记录，也必须保留，避免旧记忆重新补回。
+        if self.sub_mesh_role.is_none() && save_path.exists() {
+            let previous: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(save_path).map_err(|e| e.to_string())?)
+                    .map_err(|e| {
+                        format!("无法读取已有 SubMesh 元数据 {}: {}", save_path.display(), e)
+                    })?;
+            if previous["GamePreset"] == self.game_preset
+                && previous["WorkGameType"] == self.work_game_type
+            {
+                if let Some(role) = previous.get("SubMeshRole") {
+                    serde_json::from_value::<Option<SubMeshRole>>(role.clone())
+                        .map_err(|e| format!("已有 SubMesh 角色无效: {}", e))?;
+                    output["SubMeshRole"] = role.clone();
+                }
+            }
+        }
+        let content = serde_json::to_string_pretty(&output).map_err(|e| e.to_string())?;
         fs::write(save_path, content).map_err(|e| e.to_string())
     }
 }
@@ -228,4 +248,44 @@ pub enum SubMeshRole {
     Face,
     Neck,
     Eye,
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn reextract_preserves_roles_and_explicit_clear_while_updating_geometry() {
+        let dir = std::env::temp_dir().join(format!(
+            "ssmt-submesh-roles-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mesh.json");
+        for role in ["Face", "Neck", "Eye", "null"] {
+            let value = if role == "null" {
+                serde_json::Value::Null
+            } else {
+                role.into()
+            };
+            let mut old = serde_json::to_value(SubMeshJson::default()).unwrap();
+            old["SubMeshRole"] = value.clone();
+            fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+            let mut extracted = SubMeshJson::default();
+            extracted.vertex_count = 1382;
+            extracted.save_to_file(&path).unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(saved["SubMeshRole"], value);
+            assert_eq!(saved["VertexCount"], 1382);
+            let decoded: SubMeshJson = serde_json::from_value(saved).unwrap();
+            assert_eq!(decoded.sub_mesh_role.is_none(), role == "null");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

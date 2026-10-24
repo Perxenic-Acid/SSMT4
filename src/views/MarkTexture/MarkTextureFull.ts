@@ -59,7 +59,7 @@ type SubMeshJsonObject = {
 	CategoryBufferList?: unknown
 	TextureMarkUpInfoList?: unknown
 	DiffuseMap?: string[]
-	SubMeshRole?: SubMeshRole
+	SubMeshRole?: SubMeshRole | null
 	[key: string]: unknown
 }
 
@@ -176,7 +176,8 @@ const readSubMeshJsonFile = async (jsonPath: string): Promise<SubMeshJsonObject 
 
 const getSubMeshTargetEntries = async (
 	workspacePath: string,
-	subMesh: string
+	subMesh: string,
+	strict = false
 ): Promise<SubMeshTargetEntry[]> => {
 	const subMeshFolder = await join(workspacePath, subMesh)
 	if (!(await exists(subMeshFolder))) {
@@ -202,6 +203,7 @@ const getSubMeshTargetEntries = async (
 			const jsonPath = await join(folderPath, folderEntry.name)
 			const parsed = await readSubMeshJsonFile(jsonPath)
 			if (!parsed) {
+				if (strict && folderEntry.name === `${subMesh}.json`) throw new Error(`无效的 SubMesh 元数据: ${jsonPath}`)
 				continue
 			}
 
@@ -278,34 +280,72 @@ const writeMarkupToSubMeshJson = async (
  * extracted SubMesh metadata. Blender importers can consume this directly,
  * without depending on SSMT's page-local MarkTextureConfig.json.
  */
-export const writeSubMeshRoleMetadata = async (args: {
+export type SubMeshRoleChange = {
 	workspacePath: string
 	subMesh: string
 	role?: SubMeshRole
-}): Promise<{ updatedFileCount: number }> => {
-	const { workspacePath, subMesh, role } = args
-	if (!workspacePath || !subMesh) {
-		return { updatedFileCount: 0 }
-	}
+}
 
-	const targetEntries = await getSubMeshTargetEntries(workspacePath, subMesh)
+export const writeSubMeshRoleMetadata = async (args: SubMeshRoleChange): Promise<{ updatedFileCount: number }> =>
+	writeSubMeshRoleMetadataBatch([args])
+
+/** 先准备完整变更；任何类型目录写入失败时恢复已尝试写入的文件。 */
+export const writeSubMeshRoleMetadataBatch = async (changes: SubMeshRoleChange[]): Promise<{ updatedFileCount: number }> => {
+	const writes: { path: string; before: string; after: string }[] = []
 	let updatedFileCount = 0
-	for (const entry of targetEntries) {
-		const parsed = await readSubMeshJsonFile(entry.jsonPath)
-		if (!parsed) {
-			continue
+	for (const { workspacePath, subMesh, role } of changes) {
+		const entries = await getSubMeshTargetEntries(workspacePath, subMesh, true)
+		if (entries.length === 0) throw new Error(`没有可写的 SubMesh 角色元数据: ${subMesh}`)
+		for (const entry of entries) {
+			const before = await readTextFile(entry.jsonPath)
+			const parsed = JSON.parse(before) as SubMeshJsonObject
+			if (!isSubMeshJsonObject(parsed)) throw new Error(`无效的 SubMesh 元数据: ${entry.jsonPath}`)
+			updatedFileCount += 1
+			if (parsed[SUBMESH_ROLE_KEY] === (role ?? null)) continue
+			// null 表示用户明确清除，防止旧页面记忆将它重新补回。
+			parsed[SUBMESH_ROLE_KEY] = role ?? null
+			writes.push({ path: entry.jsonPath, before, after: JSON.stringify(parsed, null, 2) })
 		}
-
-		if (role) {
-			parsed[SUBMESH_ROLE_KEY] = role
-		} else {
-			delete parsed[SUBMESH_ROLE_KEY]
-		}
-		await writeTextFile(entry.jsonPath, JSON.stringify(parsed, null, 2))
-		updatedFileCount += 1
 	}
-
+	const attempted: typeof writes = []
+	try {
+		for (const write of writes) {
+			attempted.push(write)
+			await writeTextFile(write.path, write.after)
+		}
+	} catch (error) {
+		const rollbackFailures: string[] = []
+		for (const write of attempted.reverse()) {
+			try { await writeTextFile(write.path, write.before) }
+			catch { rollbackFailures.push(write.path) }
+		}
+		throw new Error(`写入 SubMesh 角色失败: ${String(error)}${rollbackFailures.length ? `；恢复失败: ${rollbackFailures.join(', ')}` : ''}`)
+	}
 	return { updatedFileCount }
+}
+
+/** 模型 JSON 优先；旧页面记忆仅补齐缺失的角色，并同步全部类型目录。 */
+export const restoreSubMeshRoleMetadata = async (args: {
+	workspacePath: string
+	subMesh: string
+	rememberedRole?: SubMeshRole
+}): Promise<SubMeshRole | undefined> => {
+	const entries = await getSubMeshTargetEntries(args.workspacePath, args.subMesh, true)
+	if (entries.length === 0) throw new Error(`没有可读的 SubMesh 角色元数据: ${args.subMesh}`)
+	const roles = new Set<SubMeshRole | undefined>()
+	for (const entry of entries) {
+		const parsed = await readSubMeshJsonFile(entry.jsonPath)
+		if (!parsed) throw new Error(`无法读取 SubMesh 角色元数据: ${entry.jsonPath}`)
+		const role = parsed[SUBMESH_ROLE_KEY]
+		if (role === 'Face' || role === 'Neck' || role === 'Eye') roles.add(role)
+		else if (role === null) roles.add(undefined)
+		else if (role !== undefined) throw new Error(`无效的 SubMesh 角色: ${entry.jsonPath}`)
+	}
+	if (roles.size > 1) throw new Error(`SubMesh 不同类型目录的角色标记冲突: ${args.subMesh}`)
+	if (roles.size === 0 && args.rememberedRole === undefined) return undefined
+	const role = roles.size ? roles.values().next().value : args.rememberedRole
+	await writeSubMeshRoleMetadata({ ...args, role })
+	return role
 }
 
 const normalizeMarkupList = (value: unknown): TextureMarkUpInfo[] => {
