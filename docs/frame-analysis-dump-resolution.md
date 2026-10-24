@@ -32,6 +32,21 @@ Runtime 曾在 `24a94e7d` 修复图形组件复制 COM 虚表后的帧分析内�
 
 ## 回归与验收
 
+### SRMI CPU 布局误匹配（2026-10-24）
+
+`4d5352ec` 的 Draw `000056` 中，vb0 是 1382 × 40 字节的逐顶点数据，
+vb1 是 `TEXCOORD3 / R32_UINT / per-instance`。旧逻辑仅对 GPU 预蒙皮类型
+校验 InputLayout，CPU 类型按 stride 与 TXT count 匹配，误选
+`CPU_P12_N12_TA16_T4_`，随后按顶点数读取 960 字节的实例 buffer，发生
+`[40..5568)` 越界。
+
+类型发现现在对 CPU/GPU 的非 pointlist 分类核对捕获布局，并要求匹配的元素为
+per-vertex；现有 `CPU_P12_N8_TA8_C4_T4_T1-4_` 符合 vb0 布局，无须新增类型。
+缺少 element[] 或旧布局缺少 InputSlotClass 时保留原有兼容行为。
+此检查不扩展到候选导出阶段，也不将最终 IA 布局套用于 pointlist 预蒙皮资源。
+回归测试 `cpu_input_layout_rejects_instance_data_and_wrong_vertex_interpretations`
+覆盖三个真实类型配置和实例数据反例；完整工作空间导出仍需通过应用验证。
+
 应用侧运行：
 
 ```powershell

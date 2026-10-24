@@ -357,7 +357,7 @@ impl SRMINewExtractor {
     fn read_migoto_input_layout_for_slot(
         txt_file_path: &Path,
         input_slot: u64,
-    ) -> Result<Vec<(String, u64, String, u64)>, String> {
+    ) -> Result<Vec<(String, u64, String, u64, bool)>, String> {
         let content = fs::read_to_string(txt_file_path).map_err(|e| {
             format!(
                 "Failed to read migoto layout txt {}: {}",
@@ -366,7 +366,7 @@ impl SRMINewExtractor {
             )
         })?;
 
-        let mut result: Vec<(String, u64, String, u64)> = Vec::new();
+        let mut result = Vec::new();
 
         for block in content.split("element[").skip(1) {
             let mut semantic_name: Option<String> = None;
@@ -374,6 +374,8 @@ impl SRMINewExtractor {
             let mut format: Option<String> = None;
             let mut slot: Option<u64> = None;
             let mut aligned_byte_offset: Option<u64> = None;
+            // 兼容缺少分类字段的旧 dump；有声明时必须为逐顶点数据。
+            let mut per_vertex = true;
 
             for line in block.lines() {
                 let trimmed = line.trim();
@@ -391,6 +393,8 @@ impl SRMINewExtractor {
                     slot = value.trim().parse::<u64>().ok();
                 } else if let Some(value) = trimmed.strip_prefix("AlignedByteOffset:") {
                     aligned_byte_offset = value.trim().parse::<u64>().ok();
+                } else if let Some(value) = trimmed.strip_prefix("InputSlotClass:") {
+                    per_vertex = value.trim().eq_ignore_ascii_case("per-vertex");
                 }
             }
 
@@ -408,7 +412,13 @@ impl SRMINewExtractor {
                 aligned_byte_offset,
             ) {
                 if slot == input_slot {
-                    result.push((semantic_name, semantic_index, format, aligned_byte_offset));
+                    result.push((
+                        semantic_name,
+                        semantic_index,
+                        format,
+                        aligned_byte_offset,
+                        per_vertex,
+                    ));
                 }
             }
         }
@@ -450,8 +460,9 @@ impl SRMINewExtractor {
 
             let expected_format = Self::normalize_dxgi_format(&element.format);
             let found = actual_elements.iter().any(
-                |(semantic_name, semantic_index, format, aligned_byte_offset)| {
-                    semantic_name.eq_ignore_ascii_case(&element.semantic_name)
+                |(semantic_name, semantic_index, format, aligned_byte_offset, per_vertex)| {
+                    *per_vertex
+                        && semantic_name.eq_ignore_ascii_case(&element.semantic_name)
                         && *semantic_index == element.semantic_index
                         && format.eq_ignore_ascii_case(&expected_format)
                         && *aligned_byte_offset == expected_offset
@@ -1870,11 +1881,9 @@ impl SRMINewExtractor {
                 let category_buf_txt_filepath =
                     self.resolve_fa_filepath(&category_buf_txt_filename);
 
-                // Same total stride is not enough to identify a GPU trianglelist
-                // category. Verify semantic/index/format/offset against the captured
-                // D3D11 InputLayout when element[] metadata is available.
-                if d3d11_game_type.gpu_pre_skinning
-                    && topology != "pointlist"
+                // CPU 和 GPU 的 trianglelist 都需要核对布局，避免相同 stride
+                // 或实例数据的 vertex count 元信息让错误类型通过匹配。
+                if topology != "pointlist"
                     && !category_buf_txt_filename.is_empty()
                     && category_buf_txt_filepath.exists()
                     && !self.category_matches_migoto_input_layout(
@@ -2538,6 +2547,46 @@ mod tests {
             .category_topology_dict
             .insert("Texcoord".to_string(), "trianglelist".to_string());
         game_type
+    }
+
+    #[test]
+    fn cpu_input_layout_rejects_instance_data_and_wrong_vertex_interpretations() {
+        let (extractor, dir) = create_candidate_test_extractor(&[]);
+        let txt = dir.join("layout.txt");
+        let elements = [
+            ("POSITION", 0, "R32G32B32_FLOAT", 0, 0, "per-vertex"),
+            ("NORMAL", 0, "R16G16B16A16_FLOAT", 0, 12, "per-vertex"),
+            ("TANGENT", 0, "R16G16B16A16_FLOAT", 0, 20, "per-vertex"),
+            ("COLOR", 0, "R8G8B8A8_UNORM", 0, 28, "per-vertex"),
+            ("TEXCOORD", 0, "R16G16_FLOAT", 0, 32, "per-vertex"),
+            ("TEXCOORD", 1, "R16G16_FLOAT", 0, 36, "per-vertex"),
+            ("TEXCOORD", 3, "R32_UINT", 1, 0, "per-instance"),
+        ];
+        let layout: String = elements.iter().enumerate().map(|(i, (name, index, format, slot, offset, class))| {
+            format!("element[{i}]:\n  SemanticName: {name}\n  SemanticIndex: {index}\n  Format: {format}\n  InputSlot: {slot}\n  AlignedByteOffset: {offset}\n  InputSlotClass: {class}\n")
+        }).collect();
+        fs::write(&txt, &layout).unwrap();
+        let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/GameType/SRMI");
+        for (name, expected) in [
+            ("CPU_P12_N8_TA8_C4_T4_T1-4_", true),
+            ("CPU_P12_N12_TA16_T4_", false),
+            ("CPU_P12_TA4_T4_", false),
+        ] {
+            let game_type = D3D11GameType::from_json_file(resources.join(format!("{name}.json"))).unwrap();
+            assert_eq!(extractor.category_matches_migoto_input_layout(&game_type, "Position", "vb0", &txt).unwrap(), expected, "{name}");
+        }
+
+        // 即使语义、格式、偏移全部相同，实例数据也不能用作逐顶点属性。
+        let mut instance_type = D3D11GameType::from_parts("Instance", vec![
+            D3D11Element::new("TEXCOORD", "R32_UINT", "vb1", "trianglelist", "Texcoord", "Texcoord", "4"),
+        ]);
+        instance_type.element_name_d3d11_element_dict.values_mut().for_each(|element| element.semantic_index = 3);
+        assert!(!extractor.category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt).unwrap());
+        fs::write(&txt, layout.replace("per-instance", "per-vertex")).unwrap();
+        assert!(extractor.category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt).unwrap());
+        fs::write(&txt, "stride: 4\nvertex count: 1382\n").unwrap();
+        assert!(extractor.category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt).unwrap());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
