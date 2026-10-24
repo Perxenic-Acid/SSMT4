@@ -17,7 +17,7 @@ function load(relative, mocks) {
   return exports;
 }
 
-function harness(config, hostConfig = null, hotRuntime = null, settingsError = null, shadeHotRuntime = null) {
+function harness(config, hostConfig = null, hotRuntime = null, settingsError = null, shadeHotRuntime = null, pluginInjectedDlls = []) {
   let ini = '[Loader]\nloader = XXMI Launcher.exe\nlaunch = C:/old.exe\nlaunch_args = old\nmodule = d3d11.dll\n';
   const calls = [];
   const messages = [];
@@ -48,6 +48,7 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
     '@tauri-apps/api/core': { invoke: async (command, args) => {
       calls.push({ command, args });
       if (command === 'prepare_plugin_host_config') return hostConfig;
+      if (command === 'plugin_launch_injected_dlls') return { dlls: pluginInjectedDlls, warnings: [] };
       if (command === 'prepare_hoyoshade_launch') return null;
       if (command === 'prepare_plugin_graphics_plan') {
         const diagnostics = [];
@@ -125,6 +126,23 @@ test('enabled PluginHost config is passed to the external injector', async () =>
   assert.match(injector.args, /--plugin-host-config "C:\/Plugins\/host.json"/);
   assert.match(injector.args, /--inject-mode direct/);
   assert.match(h.ini(), /inject_dlls = C:\/Extra\/a.dll\|C:\/Extra\/b.dll/);
+});
+
+test('plugin-provided injected DLLs merge into SSMT Run.exe launch and force native injection', async () => {
+  const h = harness({
+    ...base,
+    useShell: true,
+    launcherExePath: 'C:/Official/Games.exe',
+    extraDlls: ['C:/Migoto/d3d11.dll'],
+  }, null, null, null, null, [
+    { pluginId: 'ssmt.secondary-motion', pluginName: 'Secondary Motion', path: 'C:/Plugins/SBM/plugin/sbm.dll' },
+  ]);
+  await h.launch.launch('EFMI', { gameLaunchMode: 'always-normal' }, () => {});
+  const programs = h.calls.find(call => call.command === 'launch_programs').args.programs;
+  assert.equal(programs.some(program => program.path === 'C:/Official/Games.exe'), false);
+  const injector = programs.find(program => program.path.endsWith('/Run.exe'));
+  assert.match(injector.args, /--launch-parent "C:\/Official\/Games.exe"/);
+  assert.match(h.ini(), /inject_dlls = C:\/Migoto\/d3d11.dll\|C:\/Plugins\/SBM\/plugin\/sbm.dll/);
 });
 
 test('EFMI direct launch falls back to -force-d3d11 when launch arguments are empty', async () => {

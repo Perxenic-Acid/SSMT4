@@ -381,6 +381,10 @@
     "version": "版本",
     "author": "作者",
     "currentGame": "当前游戏",
+    "injectedDlls": "启动注入 DLL",
+    "originalProject": "原项目 GitHub",
+    "maintenance": "维护说明",
+    "maintenanceNote": "本 SSMT 适配版基于 Sp1cHless 的原项目修改，并非原项目官方发行版。该版本由非原项目作者尽力维护，不保证持续更新或及时兼容后续游戏版本。请勿到原项目作者处催更，也不要向原项目作者反馈本适配版的问题。",
     "installedPackage": "已安装的插件包",
     "official": "Native Release 官方包",
     "thirdParty": "第三方或未验证来源",
@@ -403,9 +407,10 @@
     "notProvided": "此目录条目尚未提供。",
     "actions": {"refresh": "刷新", "installFromFile": "从文件安装", "choosePackage": "选择 SSMT 插件包", "installPackage": "安装插件包", "installOfficial": "安装插件", "updateOfficial": "更新插件", "chooseDependencyPath": "选择依赖目录", "enable": "启用", "disable": "禁用", "viewLog": "查看日志", "openSettings": "打开插件设置", "clearLog": "清空日志", "close": "关闭", "installLocal": "安装本地构建", "clearSearch": "清除搜索"},
     "review": {"title": "检查插件包", "permissions": "声明权限：", "disclaimer": "安全检查已验证压缩包结构、路径、大小、清单和声明文件，但无法保证插件代码没有恶意行为。安装后插件可能按所列权限运行原生代码或启动程序。请确认来源可信，并自行承担第三方插件造成的风险。", "accept": "我已阅读并理解以上免责声明，仍要安装这个插件。", "cancel": "取消", "source": "来源："},
+    "risk": {"title": "原生注入风险与免责声明", "summary": "该插件会向游戏进程加载第三方原生 DLL，并可能修改 Unity IL2CPP 运行时或骨骼数据。未获得游戏开发商、发行商或服务器运营方认可。", "account": "可能触发反作弊、账号风控、封禁或其他账号处置。", "stability": "可能造成游戏崩溃、卡顿、骨骼异常、穿模或存档相关风险。", "native": "第三方 DLL 具有进程内原生代码权限，只应使用可信来源。", "update": "游戏更新可能使插件失效、行为变化或产生兼容问题。", "warranty": "插件按现状提供，不附带任何明示或暗示担保。作者、集成者和分发者不对账号处置、数据损坏、设备故障、存档丢失或其他直接或间接损失负责。", "accept": "我已阅读并理解上述风险和免责声明，自愿启用此原生注入插件。", "cancel": "不同意并取消", "enable": "同意并启用", "saveFailed": "保存风险确认失败：{error}"},
     "logTitle": "插件日志 · {name}",
     "logEmpty": "暂无插件日志。",
-    "messages": {"loadFailed": "读取插件注册表失败：{error}", "catalogFailed": "无法读取 Native Release 插件目录：{error}。仍可从本地文件安装第三方插件。", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "dependencySaved": "依赖目录已保存。", "dependencySaveFailed": "设置依赖目录失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}", "logFailed": "访问插件日志失败：{error}", "logCleared": "插件日志已清空。", "localCatalogFailed": "读取本地构建插件失败：{error}", "localUnavailable": "本地插件包已不存在，请刷新市场。"}
+    "messages": {"loadFailed": "读取插件注册表失败：{error}", "catalogFailed": "无法读取 Native Release 插件目录：{error}。仍可从本地文件安装第三方插件。", "installed": "插件已安装。", "installFailed": "插件安装失败：{error}", "dependencySaved": "依赖目录已保存。", "dependencySaveFailed": "设置依赖目录失败：{error}", "enabled": "插件已启用。", "disabled": "插件已禁用。", "updateFailed": "更新插件状态失败：{error}", "logFailed": "访问插件日志失败：{error}", "logCleared": "插件日志已清空。", "localCatalogFailed": "读取本地构建插件失败：{error}", "localUnavailable": "本地插件包已不存在，请刷新市场。", "projectLinkFailed": "打开原项目链接失败：{error}"}
   },
   "launchUi": {
     "console": {
@@ -1624,6 +1629,7 @@
       "ssmtRuntimeUpdateFallback": "SSMT Runtime（{file}）更新失败，已保留现有版本并继续启动。原因：{reason}",
       "ssmtRuntimeRemoteFallback": "SSMT Runtime 在线更新失败，已使用本地可用版本继续启动。原因：{reason}",
       "graphicsPluginUnavailableContinue": "{plugin} 本次未加载，游戏继续启动。原因：{error}",
+      "pluginInjectedDllFailed": "读取插件额外注入 DLL 失败，本次将只使用手动配置的额外 DLL。原因：{error}",
       "gimiHotManualLaunchUnsupported": "DLSS5 热注入需要由 SSMT 创建游戏进程。当前已关闭“启动目标程序”，请在游戏设置中开启该选项。",
       "gimiHotExternalLauncherUnsupported": "DLSS5 热注入暂不支持通过其他程序创建游戏。当前启动路径：{launcher}；目标程序：{target}。请将 Shell 启动路径设为同一个游戏程序，或选择普通启动。",
       "ssmtRuntimeUnavailable": "SSMT Runtime（{file}）准备失败，且没有可用的旧版本。请修复应用资源后重试。原因：{reason}",

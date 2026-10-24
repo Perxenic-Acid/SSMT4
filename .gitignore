@@ -29,6 +29,7 @@ src-tauri/target
 
 # 发布产物
 publish
+publish-local/
 
 # Editor directories and files
 .vscode/*

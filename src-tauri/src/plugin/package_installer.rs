@@ -1,5 +1,5 @@
-use super::registry::{InstalledPlugin, PluginRegistry, PluginRegistryError};
 use super::marketplace::verify_package_sha256;
+use super::registry::{InstalledPlugin, PluginRegistry, PluginRegistryError};
 use super::{validate_package_relative_path, PluginManifest, PluginManifestError};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -115,19 +115,28 @@ pub struct PackageInspection {
 pub fn inspect_ssmtpkg(archive_path: &Path) -> Result<PackageInspection, PackageInstallError> {
     let metadata = fs::metadata(archive_path)?;
     if !metadata.is_file() || metadata.len() > MAX_ARCHIVE_BYTES {
-        return Err(PackageInstallError::ResourceLimit("package archive exceeds 512 MiB".into()));
+        return Err(PackageInstallError::ResourceLimit(
+            "package archive exceeds 512 MiB".into(),
+        ));
     }
     let temporary = TemporaryDirectory::create()?;
     extract_archive(archive_path, temporary.path())?;
-    let raw = fs::read_to_string(temporary.path().join(MANIFEST_FILE_NAME))
-        .map_err(|error| if error.kind() == io::ErrorKind::NotFound {
+    let raw = fs::read_to_string(temporary.path().join(MANIFEST_FILE_NAME)).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
             PackageInstallError::MissingManifest
         } else {
             PackageInstallError::Io(error)
-        })?;
+        }
+    })?;
     let manifest = PluginManifest::from_json_str(&raw)?;
     for runtime in &manifest.contributions.runtime_plugins {
         require_package_file(temporary.path(), &runtime.path)?;
+    }
+    for injected in &manifest.contributions.injected_dlls {
+        require_package_file(temporary.path(), &injected.path)?;
+        injected
+            .verify_file(temporary.path())
+            .map_err(PackageInstallError::InvalidArchive)?;
     }
     for extension in &manifest.contributions.host_extensions {
         if let Some(config) = &extension.config {
@@ -201,7 +210,9 @@ pub fn install_verified_ssmtpkg(
 ) -> Result<InstalledPlugin, PackageInstallError> {
     let metadata = fs::metadata(archive_path)?;
     if !metadata.is_file() || metadata.len() > MAX_ARCHIVE_BYTES {
-        return Err(PackageInstallError::ResourceLimit("package archive exceeds 512 MiB".into()));
+        return Err(PackageInstallError::ResourceLimit(
+            "package archive exceeds 512 MiB".into(),
+        ));
     }
     let temporary = TemporaryDirectory::create()?;
     let staged = temporary.path().join("plugin.ssmtpkg");
@@ -484,11 +495,17 @@ mod tests {
             "contributions":{"runtimePlugins":[{"path":"native/example.dll"}]},"permissions":["native.inject"]
         }"#;
         zip_fixture(&archive, &[("ssmt-plugin.json", manifest.as_bytes())]);
-        assert!(matches!(inspect_ssmtpkg(&archive), Err(PackageInstallError::InvalidArchive(_))));
-        zip_fixture(&archive, &[
-            ("ssmt-plugin.json", manifest.as_bytes()),
-            ("native/example.dll", b"fixture"),
-        ]);
+        assert!(matches!(
+            inspect_ssmtpkg(&archive),
+            Err(PackageInstallError::InvalidArchive(_))
+        ));
+        zip_fixture(
+            &archive,
+            &[
+                ("ssmt-plugin.json", manifest.as_bytes()),
+                ("native/example.dll", b"fixture"),
+            ],
+        );
         let inspection = inspect_ssmtpkg(&archive).unwrap();
         assert_eq!(inspection.manifest.id, "thirdparty.example");
         assert_eq!(inspection.file_count, 2);
@@ -496,6 +513,77 @@ mod tests {
         assert!(install_verified_ssmtpkg(&mut registry, &archive, &"0".repeat(64)).is_err());
         assert!(registry.installed().is_empty());
         install_verified_ssmtpkg(&mut registry, &archive, &inspection.sha256).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_requires_declared_direct_injected_dll() {
+        let root = root("injected-dll");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("plugin.ssmtpkg");
+        let manifest = r#"{
+            "schemaVersion":1,"id":"thirdparty.injected","name":"Injected","version":"1.0.0","author":"Other",
+            "compatibility":{"ssmt":">=4.2.0","platforms":["windows-x64"],"games":["EFMI"]},
+            "contributions":{"injectedDlls":[{"path":"plugin/example.dll"}]},"permissions":["native.inject"]
+        }"#;
+        zip_fixture(&archive, &[("ssmt-plugin.json", manifest.as_bytes())]);
+        assert!(matches!(
+            inspect_ssmtpkg(&archive),
+            Err(PackageInstallError::InvalidArchive(_))
+        ));
+        zip_fixture(
+            &archive,
+            &[
+                ("ssmt-plugin.json", manifest.as_bytes()),
+                ("plugin/example.dll", b"fixture"),
+            ],
+        );
+        let inspection = inspect_ssmtpkg(&archive).unwrap();
+        assert_eq!(
+            inspection.manifest.contributions.injected_dlls[0].path,
+            "plugin/example.dll"
+        );
+        let wrong_hash = manifest.replace(
+            r#"[{"path":"plugin/example.dll"}]"#,
+            r#"[{"path":"plugin/example.dll","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]"#,
+        );
+        zip_fixture(
+            &archive,
+            &[
+                ("ssmt-plugin.json", wrong_hash.as_bytes()),
+                ("plugin/example.dll", b"fixture"),
+            ],
+        );
+        assert!(matches!(
+            inspect_ssmtpkg(&archive),
+            Err(PackageInstallError::InvalidArchive(_))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "设置 SSMT_SECONDARY_MOTION_PACKAGE 后验证实际 SBM 插件包"]
+    fn installs_real_secondary_motion_package_in_isolated_registry() {
+        let package = std::env::var("SSMT_SECONDARY_MOTION_PACKAGE").unwrap();
+        let inspection = inspect_ssmtpkg(Path::new(&package)).unwrap();
+        assert_eq!(inspection.manifest.id, "ssmt.secondary-motion");
+        assert_eq!(inspection.manifest.version, "3.2.0");
+        assert_eq!(
+            inspection.manifest.contributions.injected_dlls[0].path,
+            "plugin/sbm.dll"
+        );
+        let root = root("real-secondary-motion");
+        fs::create_dir_all(&root).unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        let installed =
+            install_verified_ssmtpkg(&mut registry, Path::new(&package), &inspection.sha256)
+                .unwrap();
+        assert!(!installed.enabled);
+        assert!(installed.package_root.join("plugin/sbm.dll").is_file());
+        assert!(installed
+            .package_root
+            .join("SecondaryMotion/runtime/config.json")
+            .is_file());
         fs::remove_dir_all(root).unwrap();
     }
 }

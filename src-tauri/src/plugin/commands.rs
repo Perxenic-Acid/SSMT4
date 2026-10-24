@@ -589,6 +589,24 @@ pub struct InstalledPluginSnapshot {
 }
 
 const PLAYER_TWEAKS_ID: &str = "ssmt.player-tweaks";
+pub(crate) const NATIVE_INJECTION_RISK_ACK_KEY: &str = "native_injection_risk_ack_v1";
+
+pub(crate) fn has_native_injection_risk_ack(plugin: &super::registry::InstalledPlugin) -> bool {
+    if plugin.manifest.contributions.injected_dlls.is_empty() {
+        return true;
+    }
+    let Ok(store) = PluginSettingsStore::from_default_location() else {
+        return false;
+    };
+    let Ok(Some(value)) = store.get(&plugin.manifest.id, NATIVE_INJECTION_RISK_ACK_KEY) else {
+        return false;
+    };
+    value.get("accepted").and_then(serde_json::Value::as_bool) == Some(true)
+        && value
+            .get("pluginVersion")
+            .and_then(serde_json::Value::as_str)
+            == Some(plugin.manifest.version.as_str())
+}
 
 fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<InstalledPluginSnapshot> {
     let preset = game_scope_preset(game_name);
@@ -604,6 +622,13 @@ fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<Installe
         if !plugin.app_scoped && !plugin.manifest.compatibility.supports_game(&preset) {
             plugin.enabled = false;
             plugin.lifecycle_status = PluginLifecycleStatus::Incompatible;
+        }
+        let installed_plugin = scoped
+            .find(&plugin.manifest.id)
+            .is_some_and(|installed| has_native_injection_risk_ack(installed));
+        if !installed_plugin && !plugin.manifest.contributions.injected_dlls.is_empty() {
+            plugin.enabled = false;
+            plugin.lifecycle_status = PluginLifecycleStatus::Disabled;
         }
     }
     plugins
@@ -648,6 +673,19 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
 }
 
 fn lifecycle_status(plugin: &super::registry::InstalledPlugin) -> PluginLifecycleStatus {
+    let injected = &plugin.manifest.contributions.injected_dlls;
+    if !injected.is_empty()
+        && (!plugin
+            .manifest
+            .permissions
+            .iter()
+            .any(|permission| *permission == super::PluginPermission::NativeInject)
+            || injected
+                .iter()
+                .any(|contribution| contribution.verify_file(&plugin.package_root).is_err()))
+    {
+        return PluginLifecycleStatus::Broken;
+    }
     if plugin
         .external_dependencies
         .iter()
@@ -762,6 +800,15 @@ pub fn set_plugin_enabled_for_game(
     game_executable: Option<String>,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
     let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    if enabled {
+        if let Some(plugin) = registry.find(&id) {
+            if !plugin.manifest.contributions.injected_dlls.is_empty()
+                && !has_native_injection_risk_ack(plugin)
+            {
+                return Err("启用原生注入插件前必须阅读并同意风险与免责声明".into());
+            }
+        }
+    }
     let cleanup_dlss5 = id == DLSS5_PLUGIN_ID && !enabled
         && (registry.game_enabled(&game_name, &id)
             || registry.managed_game_executable(&game_name, &id).is_some());
@@ -1377,6 +1424,62 @@ mod tests {
             lifecycle_status(&plugin),
             PluginLifecycleStatus::ExternalDependencyMissing
         ));
+    }
+
+    #[test]
+    fn missing_direct_injected_dll_marks_plugin_broken() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-injected-lifecycle-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("plugin")).unwrap();
+        let manifest = PluginManifest {
+            schema_version: 1,
+            id: "ssmt.secondary-motion".to_string(),
+            name: "Secondary Motion".to_string(),
+            version: "3.2.0".to_string(),
+            author: "SSMT".to_string(),
+            compatibility: PluginCompatibility {
+                ssmt: ">=4.2.0".to_string(),
+                platforms: vec!["windows-x64".to_string()],
+                games: vec!["EFMI".to_string()],
+            },
+            contributions: PluginContributions {
+                injected_dlls: vec![crate::plugin::InjectedDllContribution {
+                    path: "plugin/sbm.dll".to_string(),
+                    sha256: None,
+                }],
+                ..PluginContributions::default()
+            },
+            external_dependencies: Vec::new(),
+            permissions: vec![PluginPermission::NativeInject],
+        };
+        let mut plugin = InstalledPlugin {
+            manifest,
+            package_root: root.clone(),
+            enabled: true,
+            official: false,
+            external_dependencies: BTreeMap::new(),
+        };
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::Broken
+        ));
+        fs::write(root.join("plugin/sbm.dll"), b"fixture").unwrap();
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::Enabled
+        ));
+        plugin.manifest.permissions.clear();
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::Broken
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
