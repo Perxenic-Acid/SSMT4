@@ -1382,12 +1382,16 @@ watch(showSettings, visible => {
     --version-panel-gap: 18px;
   }
 
-  .home-launcher-links { bottom: 140px; }
+  .home-launcher-links { bottom: 92px; }
 
   .version-info-panel {
-    bottom: calc(var(--bottom-ui-gap) + 72px);
-    max-width: calc(100% - (var(--version-panel-gap) * 2));
+    bottom: 20px;
+    max-width: calc(100% - var(--action-bar-width) - 54px);
+    gap: 4px;
+    font-size: 11px;
   }
+
+  .version-info-chip { padding: 2px 8px; }
 
   .action-bar {
     right: 28px;
@@ -1396,8 +1400,7 @@ watch(showSettings, visible => {
 
 @container home-main (max-width: 720px) {
   .version-info-panel {
-    right: 18px;
-    max-width: none;
+    max-width: calc(100% - var(--action-bar-width) - 44px);
   }
 
   .action-bar {
