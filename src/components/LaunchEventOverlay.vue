@@ -112,7 +112,7 @@ const openLog = async () => {
 </template>
 
 <style scoped>
-.launch-monitor { position: absolute; right: 20px; bottom: 20px; z-index: 100; width: 340px; max-width: calc(100% - 40px); color: var(--theme-text, #eee); pointer-events: none; font-size: 12px; }
+.launch-monitor { position: absolute; right: 20px; bottom: 116px; z-index: 100; width: 340px; max-width: calc(100% - 40px); color: var(--theme-text, #eee); pointer-events: none; font-size: 12px; }
 .launch-monitor.expanded { top: 60px; width: 660px; display: flex; align-items: flex-end; }
 .monitor-panel { width: 100%; min-height: 0; max-height: 100%; display: flex; flex-direction: column; overflow: hidden; pointer-events: auto; border: var(--t-material-border); border-radius: 18px; background: var(--t-surface-solid, #171822); box-shadow: var(--t-material-shadow); }
 .launch-monitor:not(.expanded) .monitor-panel { border-radius: 999px; opacity: .58; transition: opacity .18s ease; }
@@ -170,8 +170,11 @@ footer > button { flex-shrink: 0; }
 .monitor-events small { display: block; margin-top: 4px; opacity: .45; }
 .monitor-error, .monitor-events li.failed { color: #e99865; }
 .monitor-error { flex-shrink: 0; padding: 8px 16px; background: rgba(230,140,80,.08); overflow-wrap: anywhere; }
+@media (max-width: 980px) {
+  .launch-monitor { bottom: 100px; }
+}
 @media (max-width: 480px) {
-  .launch-monitor { right: 12px; bottom: 12px; max-width: calc(100% - 24px); }
+  .launch-monitor { right: 12px; bottom: 100px; max-width: calc(100% - 24px); }
   .activity-badge { display: none; }
   .monitor-toolbar { gap: 6px; }
   .source-kind { padding: 5px; }

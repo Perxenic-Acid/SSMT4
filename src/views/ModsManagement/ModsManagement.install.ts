@@ -17,6 +17,7 @@ interface UseModsManagementInstallOptions {
     loading: Ref<boolean>;
     t: Translate;
     reconcileInstalledMods: () => Promise<void>;
+    suppressFsRefresh?: (durationMs?: number) => void;
 }
 
 export const useModsManagementInstall = (options: UseModsManagementInstallOptions) => {
@@ -130,6 +131,7 @@ export const useModsManagementInstall = (options: UseModsManagementInstallOption
         installProgress.percent = 0;
         installProgress.stage = options.t('modsManagement.progress.preparing');
         try {
+            options.suppressFsRefresh?.(30_000);
             const installDir = await ModManager.getInstallDir(options.selectedGame.value);
             await invoke('install_mod_archive', {
                 gameName: options.selectedGame.value,
@@ -139,6 +141,7 @@ export const useModsManagementInstall = (options: UseModsManagementInstallOption
                 targetGroup: installForm.targetGroup,
                 password: installForm.password || null,
             });
+            options.suppressFsRefresh?.(2_500);
             installProgress.stage = options.t('modsManagement.progress.extractionComplete');
             installProgress.percent = 100;
 
@@ -196,6 +199,7 @@ export const useModsManagementInstall = (options: UseModsManagementInstallOption
         installProgress.visible = true;
         installProgress.percent = 0;
         installProgress.stage = options.t('modsManagement.progress.preparing');
+        options.suppressFsRefresh?.(30_000);
 
         let successCount = 0;
         let failCount = 0;
@@ -221,6 +225,7 @@ export const useModsManagementInstall = (options: UseModsManagementInstallOption
                 await invoke<ArchivePreview>('preview_mod_archive', { path });
 
                 // Install silently
+                options.suppressFsRefresh?.(30_000);
                 const installDir = await ModManager.getInstallDir(options.selectedGame.value);
                 await invoke('install_mod_archive', {
                     gameName: options.selectedGame.value,
@@ -240,6 +245,7 @@ export const useModsManagementInstall = (options: UseModsManagementInstallOption
 
         installProgress.percent = 100;
         installProgress.stage = options.t('modsManagement.progress.extractionComplete');
+        options.suppressFsRefresh?.(2_500);
         options.loading.value = false;
 
         if (successCount > 0) {
