@@ -20,6 +20,30 @@
 
 `priority` 用于提供同类 Host 的候选排序；共享效果应作为贡献合并，不能通过选中一个 Host 丢失其余插件的效果。文件、环境和配置合并仍须检查所有权与冲突。`settingsComponent` 只匹配可信 UI 注册表中的组件键，不把清单路径当成可执行前端模块。
 
+`contributions.injectedDlls` 声明由 `Run.exe` 直接通过额外 DLL 路径加载的插件文件：
+
+```json
+{
+  "injectedDlls": [
+    { "path": "plugin/sbm.dll" }
+  ]
+}
+```
+
+这条路径不要求 DLL 导出 SSMT PluginHost ABI，适合已经拥有自身 `DllMain`、线程和
+运行时生命周期的原生插件。清单必须同时声明 `native.inject`；安装器要求声明文件
+实际存在，启动协调器将其与用户手动配置的额外 DLL 合并。启用的插件文件损坏或丢失时，
+市场标记为损坏，启动时跳过该插件并继续加载其他有效 DLL。
+
+插件私有数据应放在安装包内，由 DLL 从自身位置解析；若插件需要游戏根目录布局，必须在
+清单和文档中明确写出，不能把第三方安装器的复制行为当作 SSMT 默认约定。
+
+`injectedDlls[].sha256` 可选声明贡献 DLL 的哈希。安装时验证该文件；注册表生命周期和
+启动注入也会重新核对，安装后文件被替换或损坏时不得继续启用。Secondary Motion 的用户
+预设存放在 `SSMT4GlobalConfigs/PluginData/ssmt.secondary-motion/SecondaryMotion`，
+SSMT 在读取设置和启动前按 runtime revision 与版本包同步，避免安装新插件版本后丢失
+用户参数。
+
 同一 ID 的旧安装包可继续保留，实际执行统一选择最高语义版本，与注册表 `find` 和市场默认版本一致。
 页面、启动候选、共享效果与 PluginHost 不得遍历所有版本并行贡献；当前版本关闭或不兼容时不自动退回旧版本。
 

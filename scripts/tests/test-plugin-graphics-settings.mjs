@@ -86,7 +86,8 @@ function marketplace(t, options = {}) {
     'installed', 'installedGameName', 'selectedGameName', 'selectedId', 'detailTab', 'openPluginSettings', 'graphicsTargetExe', 'graphicsConfigLoading',
     'catalog', 'catalogError', 'allEntries', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
     'selectedDependencies', 'dependencyActionsEnabled', 'openDependencyDownload', 'openDependencySettings', 'optionalDependency',
-    'openDependencyDirectory', 'installOfficial', 'updateEntries', 'selectedPlugin',
+    'openDependencyDirectory', 'installOfficial', 'updateEntries', 'selectedPlugin', 'selectedInjectedDlls',
+    'riskDialogOpen', 'riskAccepted', 'riskPlugin', 'togglePlugin', 'confirmRiskyEnable',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
     '@tauri-apps/plugin-opener': { openUrl: options.openUrl ?? (() => { throw new Error('Unexpected external download'); }), openPath: options.openPath },
@@ -232,6 +233,61 @@ test('marketplace exposes DLSS5 settings only for the selected enabled game and 
   await setImmediate();
   assert.equal(s.graphicsTargetExe.value, 'D:/Other/GenshinImpact.exe');
   assert.equal(s.graphicsConfigLoading.value, false);
+});
+
+test('marketplace opens Secondary Motion settings and exposes its launch injection path', async t => {
+  const s = marketplace(t);
+  const plugin = {
+    manifest: {
+      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.2.0',
+      externalDependencies: [], permissions: ['native.inject'],
+      contributions: {
+        hostExtensions: [{ id: 'settings', settingsComponent: 'ssmt.secondary-motion.settings' }],
+        injectedDlls: [{ path: 'plugin/sbm.dll' }],
+      },
+    },
+    enabled: true, externalDependencies: {}, lifecycleStatus: 'enabled', official: false,
+  };
+  s.installed.value = [plugin];
+  s.installedGameName.value = 'GIMI';
+  s.selectedId.value = 'ssmt.secondary-motion';
+  await vue.nextTick();
+  assert.deepEqual(Array.from(s.selectedInjectedDlls.value), [{ path: 'plugin/sbm.dll' }]);
+  s.openPluginSettings();
+  assert.equal(s.detailTab.value, 'features');
+});
+
+test('native injection plugin requires explicit risk acknowledgement before enabling', async t => {
+  const calls = [];
+  const plugin = {
+    manifest: {
+      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.2.0',
+      externalDependencies: [], permissions: ['native.inject'],
+      contributions: {
+        hostExtensions: [{ id: 'settings', settingsComponent: 'ssmt.secondary-motion.settings' }],
+        injectedDlls: [{ path: 'plugin/sbm.dll' }],
+      },
+    },
+    enabled: false, externalDependencies: {}, lifecycleStatus: 'disabled', official: false,
+  };
+  const s = marketplace(t, { invoke: async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'set_plugin_setting') return;
+    if (command === 'set_plugin_enabled_for_game') return [{ ...plugin, enabled: true, lifecycleStatus: 'enabled' }];
+    throw new Error(`Unexpected risk IPC: ${command}`);
+  } });
+  s.installed.value = [plugin];
+  s.installedGameName.value = 'GIMI';
+  await s.togglePlugin(plugin);
+  assert.equal(s.riskDialogOpen.value, true);
+  assert.equal(calls.length, 0, '未同意前不得启用或写入确认');
+  s.riskAccepted.value = true;
+  await s.confirmRiskyEnable();
+  assert.deepEqual(calls.map(call => call.command), ['set_plugin_setting', 'set_plugin_enabled_for_game']);
+  assert.equal(calls[0].args.key, 'native_injection_risk_ack_v1');
+  assert.equal(calls[0].args.value.accepted, true);
+  assert.equal(calls[0].args.value.pluginVersion, '3.2.0');
+  assert.equal(s.riskDialogOpen.value, false);
 });
 
 test('刷新相同插件快照与目录时保留 DLSS 设置，避免清空目标并重新挂载', async t => {

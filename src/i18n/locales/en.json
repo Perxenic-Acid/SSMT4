@@ -382,6 +382,10 @@
     "version": "Version",
     "author": "Author",
     "currentGame": "Current game",
+    "injectedDlls": "Launch-injected DLLs",
+    "originalProject": "Original project on GitHub",
+    "maintenance": "Maintenance",
+    "maintenanceNote": "This SSMT adaptation is based on Sp1cHless's original project and is not an official release of that project. It is maintained by a third party on a best-effort basis, with no guarantee of continued updates or timely compatibility with future game versions. Please do not ask the original project's author to expedite updates or report issues with this adaptation to them.",
     "installedPackage": "Installed plugin package",
     "official": "Official Native Release",
     "thirdParty": "Third-party or unverified source",
@@ -404,9 +408,10 @@
     "notProvided": "Not provided by this catalog entry.",
     "actions": {"refresh": "Refresh", "installFromFile": "Install from file", "choosePackage": "Choose an SSMT plugin package", "installPackage": "Install package", "installOfficial": "Install plugin", "updateOfficial": "Update plugin", "chooseDependencyPath": "Choose dependency folder", "enable": "Enable", "disable": "Disable", "viewLog": "View log", "openSettings": "Open plugin settings", "clearLog": "Clear log", "close": "Close", "installLocal": "Install local build", "clearSearch": "Clear search"},
     "review": {"title": "Review plugin package", "permissions": "Declared permissions:", "disclaimer": "The safety check validates the archive structure, paths, size, manifest, and declared files. It cannot guarantee that plugin code is harmless. Once installed, a plugin may run native code or start programs under its declared permissions. Confirm that you trust its source and accept the risks of third-party plugins.", "accept": "I have read and understand this disclaimer and want to install this plugin.", "cancel": "Cancel", "source": "Source:"},
+    "risk": {"title": "Native injection risk and disclaimer", "summary": "This plugin loads third-party native DLLs into the game process and may modify the Unity IL2CPP runtime or bone data. It is not endorsed by the game developer, publisher, or server operator.", "account": "It may trigger anti-cheat systems, account risk controls, bans, or other account action.", "stability": "It may cause crashes, stutter, broken bones, clipping, or save-related risk.", "native": "Third-party DLLs have native in-process access. Use only trusted sources.", "update": "Game updates may break the plugin, change its behavior, or cause compatibility issues.", "warranty": "The plugin is provided as-is without any express or implied warranty. Authors, integrators, and distributors are not responsible for account action, data corruption, device failure, save loss, or other direct or indirect damage.", "accept": "I have read and understand the risks and disclaimer and voluntarily enable this native injection plugin.", "cancel": "Disagree and cancel", "enable": "Agree and enable", "saveFailed": "Failed to save risk acknowledgement: {error}"},
     "logTitle": "Plugin log · {name}",
     "logEmpty": "No plugin log entries.",
-    "messages": {"loadFailed": "Failed to load plugin registry: {error}", "catalogFailed": "Could not load the Native Release catalog: {error}. You can still install third-party packages from a local file.", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "dependencySaved": "Dependency folder saved.", "dependencySaveFailed": "Failed to set dependency folder: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}", "logFailed": "Failed to access plugin log: {error}", "logCleared": "Plugin log cleared.", "localCatalogFailed": "Could not read locally built plugins: {error}", "localUnavailable": "Local package is no longer available. Refresh the marketplace."}
+    "messages": {"loadFailed": "Failed to load plugin registry: {error}", "catalogFailed": "Could not load the Native Release catalog: {error}. You can still install third-party packages from a local file.", "installed": "Plugin installed.", "installFailed": "Plugin installation failed: {error}", "dependencySaved": "Dependency folder saved.", "dependencySaveFailed": "Failed to set dependency folder: {error}", "enabled": "Plugin enabled.", "disabled": "Plugin disabled.", "updateFailed": "Failed to update plugin state: {error}", "logFailed": "Failed to access plugin log: {error}", "logCleared": "Plugin log cleared.", "localCatalogFailed": "Could not read locally built plugins: {error}", "localUnavailable": "Local package is no longer available. Refresh the marketplace.", "projectLinkFailed": "Failed to open the original project link: {error}"}
   },
   "launchUi": {
     "console": {
@@ -1624,6 +1629,7 @@
       "ssmtRuntimeUpdateFallback": "SSMT Runtime ({file}) could not be updated. Continuing with the existing version. Reason: {reason}",
       "ssmtRuntimeRemoteFallback": "SSMT Runtime could not be updated online. Continuing with an available local version. Reason: {reason}",
       "graphicsPluginUnavailableContinue": "{plugin} was skipped for this launch. The game will continue to start. Reason: {error}",
+      "pluginInjectedDllFailed": "Could not read plugin-provided injected DLLs. This launch will use only manually configured extra DLLs. Reason: {error}",
       "gimiHotManualLaunchUnsupported": "DLSS5 hot injection requires SSMT to create the game process. Enable Launch target program in the game settings.",
       "gimiHotExternalLauncherUnsupported": "DLSS5 hot injection cannot currently launch the game through another program. Launch path: {launcher}; target: {target}. Set the Shell launch path to the same game executable, or select normal launch.",
       "ssmtRuntimeUnavailable": "SSMT Runtime ({file}) could not be prepared and no existing version is available. Repair the application resources and try again. Reason: {reason}",

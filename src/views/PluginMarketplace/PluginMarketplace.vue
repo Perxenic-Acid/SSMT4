@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -19,6 +19,9 @@ const PlayerTweaksGameplaySettings = defineAsyncComponent(
 )
 const Dlss5GraphicsSettings = defineAsyncComponent(
   () => import('../../plugin/components/Dlss5GraphicsSettings.vue'),
+)
+const SecondaryMotionSettings = defineAsyncComponent(
+  () => import('../../plugin/components/SecondaryMotionSettings.vue'),
 )
 
 type DependencyStatus = 'missing' | 'invalid' | 'ready'
@@ -46,7 +49,10 @@ interface PluginManifest {
   compatibility?: { games?: string[] }
   permissions: string[]
   externalDependencies: ExternalDependency[]
-  contributions?: { hostExtensions?: Array<{ id: string; settingsComponent?: string | null }> }
+  contributions?: {
+    hostExtensions?: Array<{ id: string; settingsComponent?: string | null }>
+    injectedDlls?: Array<{ path: string }>
+  }
 }
 
 interface InstalledPlugin {
@@ -125,6 +131,12 @@ const logDialogOpen = ref(false)
 const pluginLog = ref('')
 const logPlugin = ref<{ id: string; name: string } | null>(null)
 const logLoading = ref(false)
+const riskDialogOpen = ref(false)
+const riskAccepted = ref(false)
+const riskPlugin = ref<InstalledPlugin | null>(null)
+const NATIVE_INJECTION_RISK_ACK_KEY = 'native_injection_risk_ack_v1'
+const settingsSectionRef = ref<HTMLElement | null>(null)
+const settingsAttention = ref(false)
 
 const selectedEntry = computed(() => visibleEntries.value.find(entry => entry.id === selectedId.value))
 const installedById = computed(() => {
@@ -139,6 +151,13 @@ const installedById = computed(() => {
 })
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
 const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
+const selectedInjectedDlls = computed(() => selectedPlugin.value?.manifest.contributions?.injectedDlls ?? [])
+const originalProjectUrls: Record<string, string> = {
+  'ssmt.secondary-motion': 'https://github.com/Sp1cHless/Arknights-Endfield-Plugin-Secondary-bodyphysics',
+}
+const selectedProjectUrl = computed(() => selectedEntry.value
+  ? originalProjectUrls[selectedEntry.value.id] ?? ''
+  : '')
 // 已安装版本可能与目录中的待更新版本不同，操作必须使用实际安装的依赖声明。
 const selectedDependencies = computed(() => selectedPlugin.value?.manifest.externalDependencies ?? selectedEntry.value?.externalDependencies ?? [])
 const dependencyActionsEnabled = computed(() => !!selectedPlugin.value?.enabled && !loading.value
@@ -410,7 +429,7 @@ const configureDependency = async (pluginId: string, dependencyId: string) => {
   }
 }
 
-const togglePlugin = async (plugin: InstalledPlugin) => {
+const applyPluginToggle = async (plugin: InstalledPlugin) => {
   if (!selectedGameName.value && !plugin.appScoped) return
   if (!plugin.appScoped && installedGameName.value !== selectedGameName.value) return
   if (!plugin.enabled && plugin.lifecycleStatus === 'incompatible') return
@@ -447,6 +466,39 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
   }
 }
 
+const togglePlugin = async (plugin: InstalledPlugin) => {
+  if (!plugin.enabled && plugin.manifest.permissions.includes('native.inject')) {
+    riskPlugin.value = plugin
+    riskAccepted.value = false
+    riskDialogOpen.value = true
+    return
+  }
+  await applyPluginToggle(plugin)
+}
+
+const confirmRiskyEnable = async () => {
+  if (!riskAccepted.value || !riskPlugin.value) return
+  loading.value = true
+  try {
+    await invoke('set_plugin_setting', {
+      pluginId: riskPlugin.value.manifest.id,
+      key: NATIVE_INJECTION_RISK_ACK_KEY,
+      value: {
+        accepted: true,
+        pluginVersion: riskPlugin.value.manifest.version,
+        acceptedAt: new Date().toISOString(),
+      },
+    })
+    const plugin = riskPlugin.value
+    riskDialogOpen.value = false
+    await applyPluginToggle(plugin)
+  } catch (error) {
+    ElMessage.error(t('pluginMarketplace.risk.saveFailed', { error: String(error) }))
+  } finally {
+    loading.value = false
+  }
+}
+
 const openPluginLog = async () => {
   if (!selectedEntry.value || !installedById.value.has(selectedEntry.value.id) || logLoading.value) return
   const { id, name } = selectedEntry.value
@@ -476,13 +528,31 @@ const clearSelectedPluginLog = async () => {
   }
 }
 
-const openPluginSettings = () => {
-  if (selectedSettings.value.includes('ssmt.dlss5.settings') || selectedSettings.value.includes('ssmt.player-tweaks.settings')) {
+const openPluginSettings = async () => {
+  if (selectedSettings.value.includes('ssmt.dlss5.settings')
+    || selectedSettings.value.includes('ssmt.player-tweaks.settings')
+    || selectedSettings.value.includes('ssmt.secondary-motion.settings')) {
     detailTab.value = 'features'
+    settingsAttention.value = false
+    await nextTick()
+    settingsSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    settingsAttention.value = true
+    setTimeout(() => {
+      settingsAttention.value = false
+    }, 1200)
     return
   }
   if (selectedSettings.value.includes('ssmt.reshade.settings')) {
     detailTab.value = 'dependencies'
+  }
+}
+
+const openOriginalProject = async () => {
+  if (!selectedProjectUrl.value) return
+  try {
+    await openUrl(selectedProjectUrl.value)
+  } catch (error) {
+    ElMessage.error(t('pluginMarketplace.messages.projectLinkFailed', { error: String(error) }))
   }
 }
 
@@ -659,7 +729,12 @@ onMounted(async () => {
 
         <div class="detail-body">
           <div class="detail-main">
-            <section v-if="detailTab === 'features'" class="detail-section">
+            <section
+              v-if="detailTab === 'features'"
+              ref="settingsSectionRef"
+              class="detail-section"
+              :class="{ 'settings-attention': settingsAttention }"
+            >
               <template v-if="selectedSettings.includes('ssmt.dlss5.settings') && selectedPlugin">
                 <p class="section-hint">{{ t('pluginMarketplace.dlss5SettingsHint') }}</p>
                 <div v-if="!selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5SelectGame') }}</div>
@@ -680,6 +755,12 @@ onMounted(async () => {
                   :game-name="selectedGameName"
                   :enabled="selectedPlugin.enabled"
                   :registry-fps="selectedPlugin.features?.includes('fps-120') || false"
+                />
+              </template>
+              <template v-else-if="selectedSettings.includes('ssmt.secondary-motion.settings') && selectedPlugin && installedGameName === selectedGameName && selectedPlugin.lifecycleStatus !== 'incompatible'">
+                <SecondaryMotionSettings
+                  :plugin-id="selectedPlugin.manifest.id"
+                  :game-name="selectedGameName"
                 />
               </template>
               <template v-else>
@@ -759,6 +840,20 @@ onMounted(async () => {
                 <dt>{{ t('pluginMarketplace.author') }}</dt><dd>{{ selectedEntry.author }}</dd>
                 <dt>{{ t('pluginMarketplace.source') }}</dt><dd>{{ sourceLabelFor(selectedEntry) }}</dd>
                 <dt>{{ t('pluginMarketplace.currentGame') }}</dt><dd>{{ selectedPlugin?.appScoped ? t('pluginMarketplace.appScope') : (selectedGameName || '—') }}</dd>
+                <template v-if="selectedInjectedDlls.length">
+                  <dt>{{ t('pluginMarketplace.injectedDlls') }}</dt>
+                  <dd>{{ selectedInjectedDlls.map(item => item.path).join(' · ') }}</dd>
+                </template>
+                <template v-if="selectedProjectUrl">
+                  <dt>{{ t('pluginMarketplace.originalProject') }}</dt>
+                  <dd>
+                    <el-button link type="primary" @click="openOriginalProject">
+                      Sp1cHless / Arknights-Endfield-Plugin-Secondary-bodyphysics ↗
+                    </el-button>
+                  </dd>
+                  <dt>{{ t('pluginMarketplace.maintenance') }}</dt>
+                  <dd>{{ t('pluginMarketplace.maintenanceNote') }}</dd>
+                </template>
               </dl>
               <h3>{{ t('pluginMarketplace.sections.supportedGames') }}</h3>
               <div class="tag-list">
@@ -775,6 +870,28 @@ onMounted(async () => {
         <div><Box aria-hidden="true" /><h2>{{ t('pluginMarketplace.title') }}</h2><p>{{ t('pluginMarketplace.selectPlugin') }}</p></div>
       </section>
     </div>
+
+    <el-dialog v-model="riskDialogOpen" :title="t('pluginMarketplace.risk.title')"
+      width="min(680px, calc(100vw - 36px))" :close-on-click-modal="false">
+      <div class="native-risk-dialog">
+        <p><strong>{{ riskPlugin?.manifest.name }} v{{ riskPlugin?.manifest.version }}</strong></p>
+        <p>{{ t('pluginMarketplace.risk.summary') }}</p>
+        <ul>
+          <li>{{ t('pluginMarketplace.risk.account') }}</li>
+          <li>{{ t('pluginMarketplace.risk.stability') }}</li>
+          <li>{{ t('pluginMarketplace.risk.native') }}</li>
+          <li>{{ t('pluginMarketplace.risk.update') }}</li>
+        </ul>
+        <p>{{ t('pluginMarketplace.risk.warranty') }}</p>
+        <el-checkbox v-model="riskAccepted">{{ t('pluginMarketplace.risk.accept') }}</el-checkbox>
+      </div>
+      <template #footer>
+        <el-button @click="riskDialogOpen = false">{{ t('pluginMarketplace.risk.cancel') }}</el-button>
+        <el-button type="danger" :disabled="!riskAccepted" :loading="loading" @click="confirmRiskyEnable">
+          {{ t('pluginMarketplace.risk.enable') }}
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="logDialogOpen" :title="t('pluginMarketplace.logTitle', { name: logPlugin?.name ?? '' })"
       width="min(760px, calc(100vw - 36px))">
@@ -829,6 +946,10 @@ onMounted(async () => {
 .catalog-notice p { padding: 0 14px 12px 39px; margin: 0; overflow-wrap: anywhere; color: var(--market-muted); }
 .review-detail { font: 11px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
 .review-disclaimer { padding: 12px; border: var(--t-page-panel-border); border-radius: 6px; line-height: 1.6; }
+.native-risk-dialog { color: var(--t-page-text); font-size: 12px; line-height: 1.75; }
+.native-risk-dialog p { margin: 8px 0; }
+.native-risk-dialog ul { padding: 10px 12px 10px 30px; margin: 10px 0; border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); color: var(--t-warning-text); }
+.native-risk-dialog li + li { margin-top: 5px; }
 .section-hint, .muted-copy {
   color: var(--market-muted);
   font-size: 12px;
@@ -903,6 +1024,11 @@ onMounted(async () => {
 .detail-body { padding-top: 22px; }
 .detail-main { min-width: 0; }
 .detail-section { min-width: 0; }
+.detail-section.settings-attention { animation: settings-attention 1.15s ease-out; }
+@keyframes settings-attention {
+  0% { filter: brightness(1.35); box-shadow: 0 0 0 2px var(--theme-accent); }
+  100% { filter: brightness(1); box-shadow: 0 0 0 2px transparent; }
+}
 .detail-section h3, .detail-meta h3 { margin: 0 0 8px; font-size: 13px; font-weight: 650; }
 .section-hint { margin: 0 0 18px; }
 .dependency-row { padding: 16px; margin: 12px 0; border: 1px solid var(--market-line); border-radius: 8px; background: var(--t-surface-subtle); }

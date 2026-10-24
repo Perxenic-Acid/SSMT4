@@ -25,6 +25,7 @@ pub struct ResolvedPlugin {
     pub version: String,
     pub package_root: PathBuf,
     pub runtime_plugins: Vec<PathBuf>,
+    pub injected_dlls: Vec<PathBuf>,
     pub launcher_adapter_count: usize,
 }
 
@@ -41,6 +42,13 @@ impl ResolvedPlugin {
                 .iter()
                 .map(|runtime| plugin.package_root.join(&runtime.path))
                 .collect(),
+            injected_dlls: plugin
+                .manifest
+                .contributions
+                .injected_dlls
+                .iter()
+                .map(|injected| plugin.package_root.join(&injected.path))
+                .collect(),
             launcher_adapter_count: plugin.manifest.contributions.launcher_adapters.len(),
         }
     }
@@ -50,6 +58,7 @@ impl ResolvedPlugin {
 pub struct LaunchPlan {
     pub request: LaunchRequest,
     pub enabled_plugins: Vec<ResolvedPlugin>,
+    pub injected_dlls: Vec<PathBuf>,
     pub plugin_host_config: Option<PluginHostConfig>,
     pub launcher_adapter_count: usize,
 }
@@ -186,6 +195,7 @@ impl<'a> LaunchCoordinator<'a> {
             plan: LaunchPlan {
                 request,
                 enabled_plugins: Vec::new(),
+                injected_dlls: Vec::new(),
                 plugin_host_config: None,
                 launcher_adapter_count: 0,
             },
@@ -207,6 +217,10 @@ impl<'a> LaunchCoordinator<'a> {
             .iter()
             .map(|plugin| plugin.launcher_adapter_count)
             .sum();
+        session.plan.injected_dlls = enabled_plugins
+            .iter()
+            .flat_map(|plugin| plugin.injected_dlls.iter().cloned())
+            .collect();
         session.plan.enabled_plugins = enabled_plugins;
 
         session.transition(LaunchPhase::Preflight)?;
@@ -256,7 +270,8 @@ fn validate_plugin_preflight(plugin: &InstalledPlugin) -> Result<(), LaunchCoord
         }
     }
 
-    if !plugin.manifest.contributions.runtime_plugins.is_empty()
+    if (!plugin.manifest.contributions.runtime_plugins.is_empty()
+        || !plugin.manifest.contributions.injected_dlls.is_empty())
         && !has_permission(plugin, PluginPermission::NativeInject)
     {
         return Err(LaunchCoordinatorError::MissingPermission {
@@ -407,6 +422,41 @@ mod tests {
             error,
             LaunchCoordinatorError::MissingPermission { .. }
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepares_direct_injected_dll_contribution() {
+        let root = temp_root("injected-dll");
+        let package = root.join("Plugins/ssmt.secondary-motion/3.2.0");
+        fs::create_dir_all(package.join("plugin")).unwrap();
+        fs::write(package.join("plugin/sbm.dll"), b"plugin").unwrap();
+        fs::write(
+            package.join("ssmt-plugin.json"),
+            r#"{
+              "schemaVersion": 1,
+              "id": "ssmt.secondary-motion",
+              "name": "Secondary Motion",
+              "version": "3.2.0",
+              "author": "SSMT",
+              "compatibility": {"ssmt": ">=4.2.0", "platforms": ["windows-x64"], "games": ["EFMI"]},
+              "contributions": {"injectedDlls": [{"path": "plugin/sbm.dll"}]},
+              "permissions": ["native.inject"]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry
+            .set_game_enabled("EFMI", "ssmt.secondary-motion", true)
+            .unwrap();
+        let scoped = registry.for_game("EFMI");
+        let session = LaunchCoordinator::new(&scoped)
+            .prepare(request(&root))
+            .unwrap();
+        assert_eq!(
+            session.plan.injected_dlls,
+            vec![package.join("plugin/sbm.dll")]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -36,7 +36,8 @@ pub(super) fn settings_extensions(plugin: &InstalledPlugin) -> Vec<HostExtension
         let supported = matches!((plugin.id(), extension.provider.as_str(), extension.settings_component.as_deref()),
             (super::dlss5::DLSS5_PLUGIN_ID, "ssmt.graphics.dlss5", Some("ssmt.dlss5.settings"))
             | (super::hoyoshade::HOYOSHADE_PLUGIN_ID, "ssmt.graphics.reshade", Some("ssmt.reshade.settings"))
-            | ("ssmt.player-tweaks", "ssmt.player-tweaks", Some("ssmt.player-tweaks.settings")));
+            | ("ssmt.player-tweaks", "ssmt.player-tweaks", Some("ssmt.player-tweaks.settings"))
+            | (super::secondary_motion::SECONDARY_MOTION_PLUGIN_ID, "ssmt.secondary-motion", Some("ssmt.secondary-motion.settings")));
         if !supported { extension.settings_component = None; }
         extension
     }).collect()

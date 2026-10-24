@@ -42,6 +42,17 @@ interface PluginLaunchProgram {
     postLaunchDelayMs: number;
 }
 
+interface PluginInjectedDll {
+    pluginId: string;
+    pluginName: string;
+    path: string;
+}
+
+interface PluginInjectedDllsResult {
+    dlls: PluginInjectedDll[];
+    warnings: string[];
+}
+
 interface HotRuntimePlan {
     dlls: string[];
     environment: Record<string, string | null>;
@@ -222,6 +233,19 @@ export class LaunchGame {
             trimmed.lastIndexOf("\\"),
         );
         return lastSlash >= 0 ? trimmed.substring(lastSlash + 1) : trimmed;
+    }
+
+    private static dedupeDllPaths(paths: string[]): string[] {
+        const seen = new Set<string>();
+        return paths
+            .map(path => path.trim())
+            .filter(path => {
+                if (!path) return false;
+                const key = path.replace(/\//g, "\\").toLocaleLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
     }
 
     private static applyRequiredLaunchArgs(raw: string, plan: HotRuntimePlan): string {
@@ -577,6 +601,49 @@ export class LaunchGame {
             const targetProcessName = this.getProcessNameFromPath(targetExe);
             let useShell = launchTargetProgram && (config.useShell || false);
             const useRunInjector = !pureMode || !launchTargetProgram;
+            let pluginInjectedDlls: string[] = [];
+            if (useRunInjector && !pureDirectTarget) {
+                try {
+                    const injected = await invoke<PluginInjectedDllsResult | null>(
+                        "plugin_launch_injected_dlls",
+                        { gameName },
+                    );
+                    pluginInjectedDlls = Array.isArray(injected?.dlls)
+                        ? injected.dlls.map(item => item.path)
+                        : [];
+                    if (Array.isArray(injected?.warnings) && injected.warnings.length) {
+                        ElMessage.warning({
+                            message: t("launchGame.messages.pluginInjectedDllFailed", {
+                                error: injected.warnings.join(" · "),
+                            }),
+                            grouping: true,
+                            showClose: true,
+                            duration: 12000,
+                        });
+                    }
+                } catch (error) {
+                    ElMessage.warning({
+                        message: t("launchGame.messages.pluginInjectedDllFailed", {
+                            error: String(error),
+                        }),
+                        grouping: true,
+                        showClose: true,
+                        duration: 12000,
+                    });
+                }
+            }
+            if (pluginInjectedDlls.length > 0) {
+                // Run.exe only consumes extra DLLs on its native launch path.
+                useShell = false;
+            }
+            const configuredExtraDlls = Array.isArray(config.extraDlls)
+                ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
+                : [];
+            const legacyExtraDll = typeof config.extraDll === "string" ? config.extraDll.trim() : "";
+            const launchExtraDlls = this.dedupeDllPaths([
+                ...(configuredExtraDlls.length ? configuredExtraDlls : legacyExtraDll ? [legacyExtraDll] : []),
+                ...pluginInjectedDlls,
+            ]);
             const useEfmiDirectWait = useRunInjector &&
                 (config.gamePreset || "").trim().toUpperCase() === "EFMI";
             // 与 XXMI 的 EFMI DIRECT 链路一致：默认由 SSMT 直接启动 Endfield.exe，
@@ -637,7 +704,10 @@ export class LaunchGame {
             }
 
             if (!pureDirectTarget) {
-                await MigotoManager.patchD3dxForLaunch(gameName, { overlayLanguage: appSettings.runtimeOverlayLanguage ?? 'auto' });
+                await MigotoManager.patchD3dxForLaunch(gameName, {
+                    ...(launchExtraDlls.length ? { extraDlls: launchExtraDlls } : {}),
+                    overlayLanguage: appSettings.runtimeOverlayLanguage ?? 'auto',
+                });
             }
 
             const preLaunchPrograms = launchTargetProgram
@@ -672,18 +742,13 @@ export class LaunchGame {
                 contributionWarnings.set(reason, plugins);
             };
             const collectHotRuntimeDlls = (plan: HotRuntimePlan): string[] => {
-                const configuredExtras = Array.isArray(config.extraDlls)
-                    ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
-                    : [];
-                const legacyExtra = typeof config.extraDll === "string" ? config.extraDll.trim() : "";
-                const extras = configuredExtras.length ? configuredExtras : legacyExtra ? [legacyExtra] : [];
                 const owned = plan.dlls.map(path => this.getProcessNameFromPath(path).toLowerCase());
-                for (const dll of extras) {
+                for (const dll of launchExtraDlls) {
                     if ([...owned, "d3d11.dll", "dxgi.dll"].includes(this.getProcessNameFromPath(dll).toLowerCase())) {
                         throw new Error(`热注入组件与额外 DLL 重复或所有权冲突：${dll}`);
                     }
                 }
-                return [...plan.dlls, ...extras];
+                return this.dedupeDllPaths([...plan.dlls, ...launchExtraDlls]);
             };
             if (!pureDirectTarget && useRunInjector && targetExe) {
                 const comparablePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").toLowerCase();

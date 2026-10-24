@@ -2,6 +2,7 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
+use std::path::Path;
 
 pub mod commands;
 pub mod dlss5;
@@ -32,6 +33,7 @@ pub mod package_installer;
 pub mod process_forwarder;
 pub mod registry;
 pub mod resource_cache;
+pub mod secondary_motion;
 pub mod settings;
 pub mod star_rail_tweaks;
 
@@ -92,6 +94,10 @@ pub struct PluginContributions {
     pub host_extensions: Vec<host_extensions::HostExtensionContribution>,
     #[serde(default)]
     pub runtime_plugins: Vec<RuntimePluginContribution>,
+    /// DLLs loaded directly by Run.exe's extra-DLL path. Unlike
+    /// `runtimePlugins`, these do not need to export the SSMT PluginHost ABI.
+    #[serde(default)]
+    pub injected_dlls: Vec<InjectedDllContribution>,
     #[serde(default)]
     pub launcher_adapters: Vec<LauncherAdapterContribution>,
     #[serde(default)]
@@ -113,6 +119,28 @@ pub struct ExternalManagerContribution {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimePluginContribution {
     pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InjectedDllContribution {
+    pub path: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+impl InjectedDllContribution {
+    pub fn verify_file(&self, package_root: &Path) -> Result<(), String> {
+        let path = package_root.join(&self.path);
+        if !path.is_file() {
+            return Err(format!("injected DLL does not exist: {}", path.display()));
+        }
+        if let Some(expected) = &self.sha256 {
+            crate::plugin::marketplace::verify_package_sha256(&path, expected)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +306,7 @@ impl PluginManifest {
         self.compatibility.games.is_empty()
             && !self.contributions.ui_pages.is_empty()
             && self.contributions.runtime_plugins.is_empty()
+            && self.contributions.injected_dlls.is_empty()
             && self.contributions.launcher_adapters.is_empty()
             && self.contributions.external_managers.is_empty()
     }
@@ -375,6 +404,38 @@ fn validate_contributions(
                 field: "runtime plugin path",
                 value: runtime_plugin.path.clone(),
             });
+        }
+    }
+
+    let mut injected_dll_paths = HashSet::new();
+    for injected_dll in &contributions.injected_dlls {
+        validate_package_path("injected DLL", &injected_dll.path)?;
+        if !injected_dll.path.to_ascii_lowercase().ends_with(".dll") {
+            return Err(PluginManifestError::InvalidContribution(format!(
+                "injected DLL must use a .dll extension: {}",
+                injected_dll.path
+            )));
+        }
+        if let Some(hash) = &injected_dll.sha256 {
+            if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(PluginManifestError::InvalidContribution(format!(
+                    "invalid injected DLL SHA256: {}",
+                    injected_dll.path
+                )));
+            }
+        }
+        let normalized = injected_dll.path.replace('\\', "/");
+        if !injected_dll_paths.insert(normalized.clone()) {
+            return Err(PluginManifestError::DuplicateValue {
+                field: "injected DLL path",
+                value: injected_dll.path.clone(),
+            });
+        }
+        if runtime_paths.contains(&normalized) {
+            return Err(PluginManifestError::InvalidContribution(format!(
+                "a DLL cannot be both a PluginHost runtime and a direct injected DLL: {}",
+                injected_dll.path
+            )));
         }
     }
 
@@ -716,6 +777,34 @@ mod tests {
             manifest.external_dependencies[0].kind,
             ExternalDependencyType::Directory
         );
+    }
+
+    #[test]
+    fn validates_direct_injected_dll_contributions() {
+        let manifest = PluginManifest::from_json_str(
+            r#"{
+              "schemaVersion": 1,
+              "id": "ssmt.secondary-motion",
+              "name": "Secondary Motion",
+              "version": "3.2.0",
+              "author": "SSMT",
+              "compatibility": {"ssmt": ">=4.2.0", "platforms": ["windows-x64"], "games": ["EFMI"]},
+              "contributions": {"injectedDlls": [{"path": "plugin/sbm.dll"}]},
+              "permissions": ["native.inject"]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.contributions.injected_dlls[0].path, "plugin/sbm.dll");
+        assert!(!manifest.is_app_scoped());
+
+        let mut invalid = manifest.clone();
+        invalid.contributions.injected_dlls[0].path = "plugin/sbm.txt".into();
+        assert!(invalid.validate().is_err());
+
+        invalid = manifest;
+        invalid.contributions.runtime_plugins =
+            vec![RuntimePluginContribution { path: "plugin/sbm.dll".into() }];
+        assert!(invalid.validate().is_err());
     }
 
     #[test]
