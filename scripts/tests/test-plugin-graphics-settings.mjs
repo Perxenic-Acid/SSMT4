@@ -87,11 +87,14 @@ function marketplace(t, options = {}) {
     'catalog', 'catalogError', 'allEntries', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
     'selectedDependencies', 'dependencyActionsEnabled', 'openDependencyDownload', 'openDependencySettings', 'optionalDependency',
     'openDependencyDirectory', 'installOfficial', 'updateEntries', 'selectedPlugin', 'selectedInjectedDlls',
-    'riskDialogOpen', 'riskAccepted', 'riskPlugin', 'togglePlugin', 'confirmRiskyEnable',
+    'riskDialogOpen', 'riskAccepted', 'riskPlugin', 'togglePlugin', 'confirmRiskyEnable', 'uninstallPlugin',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
     '@tauri-apps/plugin-opener': { openUrl: options.openUrl ?? (() => { throw new Error('Unexpected external download'); }), openPath: options.openPath },
-    '@tauri-apps/plugin-dialog': {}, 'element-plus': { ElMessage: { success() {}, error: message => { throw new Error(message); } } },
+    '@tauri-apps/plugin-dialog': {}, 'element-plus': {
+      ElMessage: { success() {}, warning() {}, error: message => { throw new Error(message); } },
+      ElMessageBox: { confirm: options.confirm ?? (() => Promise.resolve()) },
+    },
     '@element-plus/icons-vue': {}, 'vue-i18n': i18n,
     'vue-router': { useRoute: () => ({ query: options.query ?? {} }) },
     '../../plugin/logs': options.logs ?? {}, '../../store/GamePreset': { getGamePresetPriority: () => 0 },
@@ -255,6 +258,38 @@ test('marketplace opens Secondary Motion settings and exposes its launch injecti
   assert.deepEqual(Array.from(s.selectedInjectedDlls.value), [{ path: 'plugin/sbm.dll' }]);
   s.openPluginSettings();
   assert.equal(s.detailTab.value, 'features');
+});
+
+test('any installed plugin can be completely uninstalled after it is disabled', async t => {
+  const calls = [];
+  let confirmation = '';
+  const plugin = { ...dlssPlugin(false), manifest: { ...dlssPlugin(false).manifest, id: 'example.uninstallable' } };
+  const s = marketplace(t, {
+    confirm: async (message, title) => { confirmation = `${title}\n${message}`; },
+    invoke: async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'uninstall_plugin') return [];
+      throw new Error(`Unexpected uninstall IPC: ${command}`);
+    },
+  });
+  s.installed.value = [plugin];
+  s.installedGameName.value = 'GIMI';
+  s.selectedId.value = plugin.manifest.id;
+  await vue.nextTick();
+  assert.match(confirmation, /^$/);
+  await s.uninstallPlugin();
+  assert.match(confirmation, /uninstallTitle/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'uninstall_plugin');
+  assert.equal(calls[0].args.pluginId, plugin.manifest.id);
+  assert.equal(calls[0].args.gameName, 'GIMI');
+  assert.deepEqual(Array.from(s.installed.value), []);
+
+  const enabled = { ...plugin, enabled: true, lifecycleStatus: 'enabled' };
+  s.installed.value = [enabled];
+  await vue.nextTick();
+  await s.uninstallPlugin();
+  assert.equal(calls.length, 1, '启用中的插件不得调用卸载 IPC');
 });
 
 test('native injection plugin requires explicit risk acknowledgement before enabling', async t => {

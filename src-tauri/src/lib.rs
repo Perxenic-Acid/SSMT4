@@ -184,6 +184,7 @@ pub fn run() {
             plugin::commands::open_dlss5_swapper,
             plugin::commands::install_plugin_package,
             plugin::commands::inspect_plugin_package,
+            plugin::commands::uninstall_plugin,
             plugin::commands::local_plugin_packages,
             plugin::commands::install_local_plugin,
             plugin::commands::official_plugin_catalog,
