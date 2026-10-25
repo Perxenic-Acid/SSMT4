@@ -1,0 +1,306 @@
+﻿#requires -Version 5.1
+<#
+.SYNOPSIS
+定位 SSMT 标签副本，预览合并结果，并按已生成的计划恢复。
+.EXAMPLE
+.\Recover-ModTags.ps1 -ScanRoot D:\,E:\ -ReportDirectory .\tag-report
+.EXAMPLE
+.\Recover-ModTags.ps1 -TargetModsPath D:\GIMI\Mods -BackupPath E:\backup\Mods\.mod-tags -ReportDirectory .\tag-preview
+.EXAMPLE
+.\Recover-ModTags.ps1 -ApplyPlan .\tag-preview\plan.json
+#>
+[CmdletBinding(SupportsShouldProcess = $true)]
+param(
+    [string[]]$ScanRoot,
+    [string]$TargetModsPath,
+    [string[]]$BackupPath,
+    [string]$ReportDirectory,
+    [string]$ApplyPlan,
+    [switch]$AllowDamagedCurrent
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$Names = @('tags.json', 'mod-mappings.json', 'group-mappings.json')
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+
+function FullPath([string]$Path) { return [IO.Path]::GetFullPath($Path) }
+function Write-Utf8([string]$Path, [string]$Text) { [IO.File]::WriteAllText($Path, $Text, $Utf8) }
+function To-Map($Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $result = New-Object System.Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal)
+        foreach ($property in $Value.PSObject.Properties) { $result[$property.Name] = To-Map $property.Value }
+        return ,$result
+    }
+    if ($Value -is [Array]) { return ,@(foreach ($item in $Value) { To-Map $item }) }
+    return $Value
+}
+function Read-Json([string]$Path) {
+    $raw = [IO.File]::ReadAllText($Path)
+    # Windows PowerShell 5.1 会展开顶层数组，须保留空数组和单元素数组。
+    $value = ConvertFrom-Json -InputObject $raw
+    if ($raw.TrimStart().StartsWith('[')) {
+        if ($null -eq $value) { $value = @() }
+        elseif ($value -isnot [Array]) { $value = @($value) }
+    }
+    return ,(To-Map $value)
+}
+function Hash([string]$Path) {
+    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { return 'MISSING' }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+}
+function Assert-RegularPath([string]$Path) {
+    $cursor = FullPath $Path
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "写入路径包含目录链接或重解析点，请使用真实目录：$cursor" }
+        }
+        $parent = [IO.Directory]::GetParent($cursor)
+        if (!$parent) { break }
+        $cursor = $parent.FullName
+    }
+}
+function Assert-Relative([string]$Path) {
+    if (!$Path -or [IO.Path]::IsPathRooted($Path) -or $Path -match '(^|[\\/])\.\.?([\\/]|$)|[:\x00-\x1f]') {
+        throw "无效的标签相对路径：$Path"
+    }
+}
+function Assert-Snapshot($Snapshot) {
+    if ($Snapshot.tags -isnot [Array]) { throw 'tags.json 必须是数组' }
+    $ids = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($tag in $Snapshot.tags) {
+        if ($tag -isnot [System.Collections.IDictionary] -or !$tag.Contains('id') -or !$tag.Contains('name') -or
+            $tag.id -isnot [string] -or $tag.name -isnot [string] -or !$tag.id.Trim() -or !$tag.name.Trim()) { throw '标签定义缺少有效 id/name' }
+        if (!$ids.Add($tag.id)) { throw "重复标签 ID：$($tag.id)" }
+        if ($tag.Contains('iconFile') -and $tag.iconFile) {
+            if ($tag.iconFile -isnot [string] -or $tag.iconFile -match '[\\/:]' -or $tag.iconFile -in @('.', '..')) { throw '图标必须是单个文件名' }
+        }
+    }
+    foreach ($field in @('modMappings', 'groupMappings')) {
+        if ($Snapshot[$field] -isnot [System.Collections.IDictionary]) { throw "$field 必须是对象" }
+        foreach ($key in $Snapshot[$field].Keys) {
+            Assert-Relative $key
+            if ($Snapshot[$field][$key] -isnot [Array]) { throw "$field 中的标签列表必须是数组" }
+            foreach ($id in $Snapshot[$field][$key]) {
+                if ($id -isnot [string] -or !$ids.Contains($id)) { throw "关联引用了缺失标签：$key -> $id" }
+            }
+        }
+    }
+}
+function Empty-Snapshot { return @{ tags = @(); modMappings = (New-Object System.Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal)); groupMappings = (New-Object System.Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal)) } }
+function Read-Store([string]$Directory, [switch]$Backup) {
+    $snapshot = Empty-Snapshot
+    $inputs = @()
+    for ($i = 0; $i -lt $Names.Count; $i++) {
+        $path = Join-Path $Directory $Names[$i]
+        if ($Backup -and !(Test-Path -LiteralPath $path -PathType Leaf)) {
+            # 支持 tags.json.bak、mod-mappings.json.时间戳等同目录副本；多个候选必须手工选定。
+            $variants = @(Get-ChildItem -LiteralPath $Directory -File -Force | Where-Object { $_.Name.StartsWith($Names[$i] + '.', [StringComparison]::OrdinalIgnoreCase) -and $_.Extension -ne '.tmp' })
+            if ($variants.Count -gt 1) { throw "存在多个 $($Names[$i]) 副本，请复制选定版本到独立目录：$Directory" }
+            if ($variants.Count -eq 1) { $path = $variants[0].FullName }
+        }
+        $inputs += @{ path = $path; hash = Hash $path }
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $field = @('tags', 'modMappings', 'groupMappings')[$i]
+            $snapshot[$field] = Read-Json $path
+        } elseif ($i -eq 0 -and $Backup) { throw "备份缺少 tags.json：$Directory" }
+    }
+    Assert-Snapshot $snapshot
+    return @{ snapshot = $snapshot; inputs = $inputs }
+}
+function Html($Value) { return [System.Net.WebUtility]::HtmlEncode([string]$Value) }
+function Write-Report([string]$Directory, [string]$Title, [string]$Body, $Data, [string]$JsonName) {
+    [IO.Directory]::CreateDirectory($Directory) | Out-Null
+    Write-Utf8 (Join-Path $Directory $JsonName) (ConvertTo-Json -InputObject $Data -Depth 100)
+    $page = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>' + (Html $Title) + '</title><style>body{font:15px system-ui;margin:32px;color:#182231}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccd3db;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#eef2f7}code{white-space:pre-wrap}.warning{color:#9c3800}</style><h1>' + (Html $Title) + '</h1>' + $Body + '</html>'
+    Write-Utf8 (Join-Path $Directory 'preview.html') $page
+    Write-Host "预览：$(Join-Path $Directory 'preview.html')"
+}
+
+if ($ApplyPlan) {
+    if ($TargetModsPath -or $BackupPath -or $ScanRoot) { throw 'ApplyPlan 不能与扫描或预览参数同时使用' }
+    $plan = Read-Json (FullPath $ApplyPlan)
+    if ($plan.version -ne 1) { throw '不支持的恢复计划版本' }
+    $target = FullPath $plan.targetModsPath
+    if (!(Test-Path -LiteralPath $target -PathType Container)) { throw '目标 Mods 目录不存在' }
+    Assert-Snapshot $plan.snapshot
+    $store = Join-Path $target '.mod-tags'
+    Assert-RegularPath $store
+    foreach ($name in $Names) { Assert-RegularPath (Join-Path $store $name) }
+    Assert-RegularPath (Join-Path $store 'icons')
+    foreach ($inputFile in $plan.inputs) {
+        if ((Hash $inputFile.path) -ne $inputFile.hash) { throw "预览后数据已变化，请重新生成预览：$($inputFile.path)" }
+    }
+    foreach ($icon in $plan.icons) {
+        if ($icon.name -match '[\\/:]' -or $icon.name -in @('.', '..')) { throw '恢复计划中的图标文件名无效' }
+        Assert-RegularPath (Join-Path (Join-Path $store 'icons') $icon.name)
+    }
+    if (!$PSCmdlet.ShouldProcess($store, '备份当前标签并应用已预览的合并结果')) { return }
+    if (Get-Process -Name 'ssmt4', 'ssmt' -ErrorAction SilentlyContinue) { throw '请先完全退出 SSMT，再执行恢复' }
+    $rollback = Join-Path $target ('.mod-tags-recovery-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8))
+    Assert-RegularPath $rollback
+    [IO.Directory]::CreateDirectory($rollback) | Out-Null
+    $writes = @()
+    $fields = @('tags', 'modMappings', 'groupMappings')
+    for ($i = 0; $i -lt $Names.Count; $i++) {
+        $writes += @{ destination = Join-Path $store $Names[$i]; relative = $Names[$i]; content = ConvertTo-Json -InputObject $plan.snapshot[$fields[$i]] -Depth 100 }
+    }
+    foreach ($icon in $plan.icons) { $writes += @{ destination = Join-Path (Join-Path $store 'icons') $icon.name; relative = 'icons/' + $icon.name; source = $icon.source } }
+    # 所有原文件先备份；发生写入错误时只回滚本次计划触及的文件。
+    foreach ($write in $writes) {
+        $write.existed = Test-Path -LiteralPath $write.destination -PathType Leaf
+        if ($write.existed) {
+            $saved = Join-Path $rollback $write.relative
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($saved)) | Out-Null
+            [IO.File]::Copy($write.destination, $saved, $false)
+        }
+    }
+    Write-Utf8 (Join-Path $rollback 'before.json') (ConvertTo-Json -InputObject $writes -Depth 100)
+    try {
+        foreach ($write in $writes) {
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($write.destination)) | Out-Null
+            $temporary = $write.destination + '.recovery-' + [Guid]::NewGuid().ToString('N') + '.tmp'
+            if ($write.ContainsKey('source')) { [IO.File]::Copy($write.source, $temporary, $false) }
+            else { Write-Utf8 $temporary $write.content }
+            if ($write.existed) { [IO.File]::Replace($temporary, $write.destination, (Join-Path $rollback ($write.relative + '.replace'))) }
+            else { [IO.File]::Move($temporary, $write.destination) }
+        }
+        Write-Host "恢复完成。恢复前副本：$rollback"
+    } catch {
+        $cause = $_
+        foreach ($write in $writes) {
+            try {
+                if ($write.existed) {
+                    $saved = Join-Path $rollback $write.relative
+                    if ((Hash $saved) -ne (Hash $write.destination)) { [IO.File]::Copy($saved, $write.destination, $true) }
+                }
+                elseif (Test-Path -LiteralPath $write.destination -PathType Leaf) { [IO.File]::Delete($write.destination) }
+            } catch { Write-Warning "自动回滚失败：$($write.destination)。原文件保存在 $rollback" }
+        }
+        throw $cause
+    }
+    return
+}
+
+if (!$ReportDirectory) { $ReportDirectory = Join-Path (Get-Location).Path ('mod-tag-report-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss')) }
+$ReportDirectory = FullPath $ReportDirectory
+if (!$TargetModsPath) {
+    if ($BackupPath) { throw '预览恢复必须指定 TargetModsPath' }
+    if (!$ScanRoot) { $ScanRoot = @([IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.DriveType -eq 'Fixed' } | ForEach-Object { $_.RootDirectory.FullName }) }
+    $found = @{}
+    $errors = New-Object 'System.Collections.Generic.List[string]'
+    $queue = New-Object 'System.Collections.Generic.Queue[string]'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($root in $ScanRoot) { $queue.Enqueue((FullPath $root)) }
+    while ($queue.Count -gt 0) {
+        $directory = $queue.Dequeue()
+        if (!$seen.Add($directory)) { continue }
+        try {
+            $item = Get-Item -LiteralPath $directory -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+            $children = @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)
+            foreach ($child in $children) {
+                if ($child.PSIsContainer) {
+                    if ($child.Name -notin @('node_modules', '.git', '$RECYCLE.BIN', 'System Volume Information')) { $queue.Enqueue($child.FullName) }
+                } elseif ($child.Name -match '^(tags|mod-mappings|group-mappings)\.json($|\.)') { $found[$directory] = $true }
+            }
+        } catch { $errors.Add("$directory : $($_.Exception.Message)") }
+        if ($seen.Count % 500 -eq 0) { Write-Progress -Activity '定位标签数据（不跟随目录链接）' -Status "已扫描 $($seen.Count) 个目录，候选 $($found.Count) 个" }
+    }
+    Write-Progress -Activity '定位标签数据（不跟随目录链接）' -Completed
+    $candidates = @(foreach ($directory in ($found.Keys | Sort-Object)) {
+        try {
+            $data = Read-Store $directory -Backup
+            @{ path = $directory; tags = @($data.snapshot.tags).Count; mods = @($data.snapshot.modMappings.Keys).Count; groups = @($data.snapshot.groupMappings.Keys).Count; error = ''; files = $data.inputs }
+        } catch { @{ path = $directory; tags = 0; mods = 0; groups = 0; error = $_.Exception.Message; files = @() } }
+    })
+    $rows = @($candidates | ForEach-Object { '<tr><td>' + (Html $_.path) + '</td><td>' + $_.tags + '</td><td>' + $_.mods + '</td><td>' + $_.groups + '</td><td>' + (Html $_.error) + '</td></tr>' }) -join ''
+    $body = '<p>仅定位副本，尚未恢复。请选定同一游戏的目标 Mods 目录和备份目录后生成合并预览。ZIP/7z 请先解压。目录链接、回收站及系统保留目录跳过；访问失败见 inventory.json。</p><table><tr><th>候选目录</th><th>标签</th><th>Mod 路径</th><th>分组路径</th><th>错误</th></tr>' + $rows + '</table><p>无法读取的目录数：' + $errors.Count + '</p>'
+    Write-Report $ReportDirectory 'SSMT 标签定位结果' $body @{ candidates = $candidates; scanErrors = @($errors); scannedDirectories = $seen.Count } 'inventory.json'
+    Write-Host "候选目录：$($candidates.Count)，扫描失败：$($errors.Count)。不会从无副本的数据中重建已删除的标签。"
+    return
+}
+
+if (!$BackupPath) { throw '请指定一个或多个同一游戏的 BackupPath；脚本不会自动混合不同游戏' }
+$target = FullPath $TargetModsPath
+if (!(Test-Path -LiteralPath $target -PathType Container)) { throw 'TargetModsPath 必须是已存在的 Mods 目录' }
+$store = Join-Path $target '.mod-tags'
+$warnings = New-Object 'System.Collections.Generic.List[string]'
+try { $current = Read-Store $store } catch {
+    if (!$AllowDamagedCurrent) { throw "当前数据损坏；请检查后使用 -AllowDamagedCurrent 从备份重建。$($_.Exception.Message)" }
+    $warnings.Add('当前标签数据损坏：本计划从选定备份重建，无法保留损坏文件中未被备份的关联。执行前仍会备份原文件。')
+    $current = @{ snapshot = Empty-Snapshot; inputs = @($Names | ForEach-Object { $path = Join-Path $store $_; @{ path = $path; hash = Hash $path } }) }
+}
+$sources = @(@{ path = $store; data = $current })
+foreach ($backup in $BackupPath) {
+    $directory = FullPath $backup
+    if (!(Test-Path -LiteralPath $directory -PathType Container)) { throw "备份目录不存在（压缩包须先解压）：$directory" }
+    $sources += @{ path = $directory; data = Read-Store $directory -Backup }
+}
+$merged = Empty-Snapshot
+$definitions = New-Object System.Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal)
+$icons = @()
+$inputs = @($sources | ForEach-Object { $_.data.inputs })
+foreach ($source in $sources) {
+    foreach ($tag in $source.data.snapshot.tags) {
+        if ($definitions.Contains($tag.id)) {
+            if (($definitions[$tag.id] | ConvertTo-Json -Depth 30 -Compress) -ne ($tag | ConvertTo-Json -Depth 30 -Compress)) { $warnings.Add("标签 ID $($tag.id) 的定义冲突，保留当前数据或靠前备份的定义。来源：$($source.path)") }
+            continue
+        }
+        $definitions[$tag.id] = $tag
+
+    }
+    foreach ($field in @('modMappings', 'groupMappings')) {
+        foreach ($key in $source.data.snapshot[$field].Keys) {
+            $normalized = $key.Replace('\', '/').TrimEnd('/')
+            if (!$merged[$field].Contains($normalized)) { $merged[$field][$normalized] = @() }
+            $merged[$field][$normalized] = @(@($merged[$field][$normalized]) + @($source.data.snapshot[$field][$key]) | Select-Object -Unique)
+        }
+    }
+}
+$merged.tags = @($definitions.Values)
+$iconNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($tag in $merged.tags) {
+    if (!$tag.Contains('iconFile') -or !$tag.iconFile -or !$iconNames.Add($tag.iconFile)) { continue }
+    $iconTarget = Join-Path (Join-Path $store 'icons') $tag.iconFile
+    if (Test-Path -LiteralPath $iconTarget -PathType Leaf) { continue }
+    $iconSource = $null
+    foreach ($source in $sources) {
+        $candidate = Join-Path (Join-Path $source.path 'icons') $tag.iconFile
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $iconSource = $candidate; break }
+    }
+    if ($iconSource) {
+        $icons += @{ name = $tag.iconFile; source = $iconSource }
+        $inputs += @{ path = $iconSource; hash = Hash $iconSource }, @{ path = $iconTarget; hash = Hash $iconTarget }
+    } else { $warnings.Add("备份缺少图标：$($tag.iconFile)") }
+}
+
+Assert-Snapshot $merged
+$changes = @()
+foreach ($field in @('modMappings', 'groupMappings')) {
+    foreach ($key in $merged[$field].Keys) {
+        $existing = @()
+        foreach ($oldKey in $current.snapshot[$field].Keys) {
+            if ($oldKey.Replace('\', '/').TrimEnd('/') -ceq $key) { $existing += @($current.snapshot[$field][$oldKey]) }
+        }
+        foreach ($id in $merged[$field][$key]) {
+            if ($id -cnotin $existing) {
+                $changes += @{ scope = $field; path = $key; tagId = $id; tagName = $definitions[$id].name; exists = Test-Path -LiteralPath (Join-Path $target $key) -PathType Container }
+            }
+        }
+    }
+}
+$plan = @{ version = 1; createdAt = [DateTime]::UtcNow.ToString('o'); targetModsPath = $target; inputs = $inputs; snapshot = $merged; icons = $icons; changes = $changes; warnings = @($warnings); sources = @($sources | ForEach-Object { $_.path }) }
+$rows = @($changes | ForEach-Object { '<tr><td>' + (Html $_.scope) + '</td><td>' + (Html $_.path) + '</td><td>' + (Html $_.tagName) + '</td><td>' + (Html $_.tagId) + '</td><td>' + $(if ($_.exists) { '存在' } else { '未找到（仍保留关联）' }) + '</td></tr>' }) -join ''
+$warningHtml = @($warnings | ForEach-Object { '<li>' + (Html $_) + '</li>' }) -join ''
+$tagRows = @(foreach ($tag in $merged.tags) {
+    $oldMods = @($current.snapshot.modMappings.Values | Where-Object { $tag.id -cin $_ }).Count
+    $newMods = @($merged.modMappings.Values | Where-Object { $tag.id -cin $_ }).Count
+    $oldGroups = @($current.snapshot.groupMappings.Values | Where-Object { $tag.id -cin $_ }).Count
+    $newGroups = @($merged.groupMappings.Values | Where-Object { $tag.id -cin $_ }).Count
+    '<tr><td>' + (Html $tag.name) + '</td><td>' + (Html $tag.id) + '</td><td>' + $oldMods + ' → ' + $newMods + '</td><td>' + $oldGroups + ' → ' + $newGroups + '</td></tr>'
+}) -join ''
+$body = '<p>目标：<code>' + (Html $target) + '</code></p><p>合并后标签 ' + $merged.tags.Count + ' 个，新增标签关联 ' + $changes.Count + ' 条，待复制图标 ' + $icons.Count + ' 个。保留当前关联，不重写 Mod 文件。</p><p class="warning">多个备份按参数顺序合并；这可能恢复你曾主动移除的标签。路径不匹配不会猜测迁移，不存在的路径仍保留。执行前请完全退出 SSMT。</p><ul>' + $warningHtml + '</ul><h2>备份来源</h2><pre>' + (Html ($plan.sources -join "`n")) + '</pre><h2>全部标签</h2><table><tr><th>标签</th><th>ID</th><th>Mod 数量（当前 → 恢复后）</th><th>分组数量（当前 → 恢复后）</th></tr>' + $tagRows + '</table><h2>新增关联</h2><table><tr><th>范围</th><th>相对路径</th><th>标签</th><th>ID</th><th>目标目录</th></tr>' + $rows + '</table><p>确认后运行：<code>.\Recover-ModTags.ps1 -ApplyPlan "' + (Html (Join-Path $ReportDirectory 'plan.json')) + '"</code>；可先加 -WhatIf。预览后文件变化会阻止执行。</p>'
+Write-Report $ReportDirectory 'SSMT 标签恢复预览（尚未执行）' $body $plan 'plan.json'
+Write-Host "新增关联：$($changes.Count)，合并后标签：$($merged.tags.Count)。仅生成预览，尚未修改目标标签。"

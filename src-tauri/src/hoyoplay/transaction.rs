@@ -8,22 +8,49 @@ use std::{
     path::{Path, PathBuf},
 };
 
+fn is_link(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    let reparse = meta.file_attributes() & 0x400 != 0;
+    #[cfg(not(windows))]
+    let reparse = false;
+    meta.file_type().is_symlink() || reparse
+}
+
 pub fn safe(root: &Path, name: &str) -> Result<PathBuf, String> {
     let relative = manifest::relative(name)?;
     let mut path = root.to_path_buf();
-    for part in relative.components() {
+    for (index, part) in relative.components().enumerate() {
         path.push(part);
         if let Ok(meta) = fs::symlink_metadata(&path) {
-            #[cfg(windows)]
-            let reparse = meta.file_attributes() & 0x400 != 0;
-            #[cfg(not(windows))]
-            let reparse = false;
-            if meta.file_type().is_symlink() || reparse {
+            if is_link(&meta) {
+                // 只允许原神根目录的双向兼容别名；目标必须是同目录下无链接的真实数据目录。
+                let alias = part.as_os_str().to_string_lossy();
+                let sibling = if alias.eq_ignore_ascii_case("GenshinImpact_Data") {
+                    Some("YuanShen_Data")
+                } else if alias.eq_ignore_ascii_case("YuanShen_Data") {
+                    Some("GenshinImpact_Data")
+                } else {
+                    None
+                };
+                if let Some(sibling) = sibling.filter(|_| index == 0) {
+                    let target = root.join(sibling);
+                    if fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir() && !is_link(&m)) {
+                        let resolved = fs::canonicalize(&path).map_err(|e| e.to_string())?;
+                        if resolved == fs::canonicalize(&target).map_err(|e| e.to_string())? {
+                            path = resolved;
+                            continue;
+                        }
+                    }
+                }
                 return Err(format!("资源路径包含链接：{}", path.display()));
             }
         }
     }
     Ok(path)
+}
+
+pub fn target_key(root: &Path, name: &str) -> Result<String, String> {
+    Ok(safe(root, name)?.to_string_lossy().to_lowercase())
 }
 
 pub fn hash(path: &Path) -> Result<Option<String>, String> {
@@ -156,10 +183,14 @@ impl Workspace {
         }
         validate_config_fields(&journal.config_before, &journal.config_after)?;
         let mut unique = std::collections::HashSet::new();
+        let mut targets = std::collections::HashSet::new();
         for change in &journal.changes {
             manifest::relative(&change.name)?;
             if !unique.insert(change.name.to_lowercase()) {
                 return Err("事务记录含重复路径".into());
+            }
+            if !targets.insert(target_key(&self.root, &change.name)?) {
+                return Err("事务记录包含指向同一文件的重复路径".into());
             }
             for hash in [&change.before, &change.after].into_iter().flatten() {
                 client::validate_md5(hash)?;
@@ -219,7 +250,11 @@ impl Workspace {
         if self.work.join("journal.json").exists() {
             return Err("有未恢复事务，不能覆盖".into());
         }
+        let mut targets = std::collections::HashSet::new();
         for change in &changes {
+            if !targets.insert(target_key(&self.root, &change.name)?) {
+                return Err("事务包含指向同一文件的重复路径".into());
+            }
             if hash(&safe(&self.root, &change.name)?)? != change.before {
                 return Err(format!("提交前文件发生变化：{}", change.name));
             }

@@ -1,4 +1,4 @@
-import { copyFile, exists, mkdir, readDir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
+import { copyFile, exists, mkdir, readDir, readTextFile, rename, writeTextFile } from '@tauri-apps/plugin-fs'
 import { defineStore } from 'pinia'
 import { moveFileToRecycleBin } from '../utils/RecycleBin'
 import { ModManager } from './ModManager'
@@ -186,13 +186,16 @@ async function readJsonFile<T>(path: string, fallback: T): Promise<T> {
     }
     const raw = await readTextFile(path)
     return JSON.parse(raw) as T
-  } catch {
-    return fallback
+  } catch (error) {
+    throw new Error(`读取标签数据失败 (${path}): ${String(error)}`)
   }
 }
 
 async function writeJsonFile(path: string, value: unknown) {
-  await writeTextFile(path, JSON.stringify(value, null, 2))
+  // 先完整写入临时文件，避免写入中断破坏上一份有效 JSON。
+  const temporaryPath = `${path}.tmp`
+  await writeTextFile(temporaryPath, JSON.stringify(value, null, 2))
+  await rename(temporaryPath, path)
 }
 
 async function removeIconFile(gameName: string, iconFile?: string) {
@@ -236,6 +239,21 @@ function buildSnapshot(tags: ModTagDefinition[], modMappings: Record<string, str
 // ---------------------------------------------------------------------------
 
 export const useModTagStore = defineStore('modTags', () => {
+  // 同一游戏的读取和完整修改事务排队；内部调用保持不排队，避免嵌套死锁。
+  const pendingOperations = new Map<string, Promise<unknown>>()
+  function serialize<Args extends unknown[], Result>(operation: (gameName: string, ...args: Args) => Promise<Result>) {
+    return (gameName: string, ...args: Args): Promise<Result> => {
+      const previous = pendingOperations.get(gameName) || Promise.resolve()
+      const result = previous.catch(() => undefined).then(() => operation(gameName, ...args))
+      const settled = result.then(() => undefined, () => undefined)
+      pendingOperations.set(gameName, settled)
+      void settled.then(() => {
+        if (pendingOperations.get(gameName) === settled) pendingOperations.delete(gameName)
+      })
+      return result
+    }
+  }
+
   // ---- Public API (former public static methods) ----
 
   async function load(gameName: string): Promise<ModTagSnapshot> {
@@ -245,6 +263,14 @@ export const useModTagStore = defineStore('modTags', () => {
     const tagsRaw = await readJsonFile<unknown>(tagsFile, [])
     const mappingsRaw = await readJsonFile<unknown>(mappingsFile, {})
     const groupMappingsRaw = await readJsonFile<unknown>(groupMappingsFile, {})
+
+    const isMapping = (value: unknown): value is Record<string, string[]> =>
+      !!value && typeof value === 'object' && !Array.isArray(value)
+      && Object.values(value).every((ids) => Array.isArray(ids) && ids.every((id) => typeof id === 'string'))
+    if (!Array.isArray(tagsRaw) || tagsRaw.some((tag) => normalizeTagDefinition(tag) === null)
+      || !isMapping(mappingsRaw) || !isMapping(groupMappingsRaw)) {
+      throw new Error('标签数据格式无效，已停止加载和保存，请检查 .mod-tags 中的数据文件')
+    }
 
     const tags = Array.isArray(tagsRaw)
       ? tagsRaw.map(normalizeTagDefinition).filter((tag): tag is ModTagDefinition => tag !== null)
@@ -461,21 +487,6 @@ export const useModTagStore = defineStore('modTags', () => {
     })
   }
 
-  async function pruneMappings(gameName: string, validModIds: string[]) {
-    const snapshot = await load(gameName)
-    const validIds = new Set(validModIds.map((modId) => normalizePath(modId)))
-    const nextMappings: Record<string, string[]> = {}
-    Object.entries(snapshot.modMappings).forEach(([modId, tagIds]) => {
-      if (validIds.has(normalizePath(modId)) && tagIds.length > 0) {
-        nextMappings[normalizePath(modId)] = tagIds
-      }
-    })
-    return save(gameName, {
-      ...snapshot,
-      modMappings: nextMappings,
-    })
-  }
-
   async function getTagIconPath(gameName: string, tag: ModTagDefinition) {
     if (!tag.iconFile) {
       return ''
@@ -484,7 +495,9 @@ export const useModTagStore = defineStore('modTags', () => {
     return joinPath(iconsDir, tag.iconFile)
   }
 
-  async function cleanupUnusedIcons(gameName: string, tags: ModTagDefinition[]) {
+  async function cleanupUnusedIcons(gameName: string, _tags: ModTagDefinition[]) {
+    // 调用方快照可能已经过期，必须在队列内重新读取后再判断图标归属。
+    const { tags } = await load(gameName)
     const iconsDir = await getIconsDir(gameName)
     if (!(await exists(iconsDir))) {
       return
@@ -592,23 +605,25 @@ export const useModTagStore = defineStore('modTags', () => {
   }
 
   return {
-    load,
-    save,
-    upsertTag,
-    deleteTag,
-    setModTags,
-    toggleModTag,
-    remapModPath,
-    remapPrefix,
-    deleteModMapping,
-    deletePrefixMappings,
-    pruneMappings,
-    getTagIconPath,
-    cleanupUnusedIcons,
-    setGroupTags,
-    remapGroupPath,
-    remapGroupPrefix,
-    deleteGroupMapping,
+    load: serialize(load),
+    save: serialize(async (gameName: string, snapshot: ModTagSnapshot) => {
+      await load(gameName)
+      return save(gameName, snapshot)
+    }),
+    upsertTag: serialize(upsertTag),
+    deleteTag: serialize(deleteTag),
+    setModTags: serialize(setModTags),
+    toggleModTag: serialize(toggleModTag),
+    remapModPath: serialize(remapModPath),
+    remapPrefix: serialize(remapPrefix),
+    deleteModMapping: serialize(deleteModMapping),
+    deletePrefixMappings: serialize(deletePrefixMappings),
+    getTagIconPath: serialize(getTagIconPath),
+    cleanupUnusedIcons: serialize(cleanupUnusedIcons),
+    setGroupTags: serialize(setGroupTags),
+    remapGroupPath: serialize(remapGroupPath),
+    remapGroupPrefix: serialize(remapGroupPrefix),
+    deleteGroupMapping: serialize(deleteGroupMapping),
   }
 })
 
@@ -627,7 +642,6 @@ export const ModTagStore = {
   get remapPrefix() { return useModTagStore().remapPrefix },
   get deleteModMapping() { return useModTagStore().deleteModMapping },
   get deletePrefixMappings() { return useModTagStore().deletePrefixMappings },
-  get pruneMappings() { return useModTagStore().pruneMappings },
   get getTagIconPath() { return useModTagStore().getTagIconPath },
   get cleanupUnusedIcons() { return useModTagStore().cleanupUnusedIcons },
   get setGroupTags() { return useModTagStore().setGroupTags },

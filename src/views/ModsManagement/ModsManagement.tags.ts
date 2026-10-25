@@ -92,24 +92,27 @@ export const useModsManagementTags = (options: UseModsManagementTagsOptions) => 
             return;
         }
 
+        const gameName = options.selectedGame.value;
         const scanToken = ++allModsCatalogScanToken;
         const scanSignal = {
-            isCancelled: () => scanToken !== allModsCatalogScanToken,
+            isCancelled: () => scanToken !== allModsCatalogScanToken || gameName !== options.selectedGame.value,
         };
         allModsCatalogLoading.value = true;
         try {
-            const result = await ModManager.scanAllMods(options.selectedGame.value, scanSignal);
+            const result = await ModManager.scanAllMods(gameName, scanSignal);
             if (scanSignal.isCancelled()) {
                 return;
             }
             allModsCatalog.value = result.mods;
-            allModsCatalogLoadedForGame.value = options.selectedGame.value;
+            allModsCatalogLoadedForGame.value = gameName;
             options.updateAvailableGroups(result.groups);
-            const snapshot = await ModTagStore.pruneMappings(options.selectedGame.value, result.mods.map((mod) => mod.relativePath));
+            // 扫描缓存不代表完整磁盘状态，刷新只能读取标签，不能据此删除用户数据。
+            const snapshot = await ModTagStore.load(gameName);
+            if (scanSignal.isCancelled()) return;
             tagDefinitions.value = snapshot.tags;
             modTagMappings.value = snapshot.modMappings;
             groupTagMappings.value = snapshot.groupMappings;
-            await syncTagIconPathMap(options.selectedGame.value, snapshot.tags);
+            await syncTagIconPathMap(gameName, snapshot.tags);
         } finally {
             if (!scanSignal.isCancelled()) {
                 allModsCatalogLoading.value = false;

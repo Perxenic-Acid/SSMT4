@@ -717,6 +717,15 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
     }
     task.phase("sdk", "部署所选渠道 SDK");
     let sdk = channel_sdk(&http, server, &work, &mut changes, task, true)?;
+    // 兼容目录别名可能让新旧清单路径指向同一文件，不能把仍被使用的资源列入删除事务。
+    let live_targets: HashSet<String> = files
+        .values()
+        .map(|r| transaction::target_key(&work.root, &r.asset.name))
+        .chain(
+            sdk.keys()
+                .map(|name| transaction::target_key(&work.root, name)),
+        )
+        .collect::<Result<_, _>>()?;
     if request.operation == "switch" {
         let old_server = servers
             .iter()
@@ -727,6 +736,7 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
             if files.contains_key(&key(&name))
                 || sdk.keys().any(|n| key(n) == key(&name))
                 || changes.contains_key(&key(&name))
+                || live_targets.contains(&transaction::target_key(&work.root, &name)?)
             {
                 continue;
             }
@@ -745,7 +755,11 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
     }
     // 只移除清单证明归属且未被修改的过期资源，不扫描或递归清理 Mod 目录。
     for (name, old) in &old_files {
-        if files.contains_key(name) || changes.contains_key(name) || name == "config.ini" {
+        if files.contains_key(name)
+            || changes.contains_key(name)
+            || name == "config.ini"
+            || live_targets.contains(&transaction::target_key(&work.root, &old.asset.name)?)
+        {
             continue;
         }
         let before = transaction::hash(&transaction::safe(&work.root, &old.asset.name)?)?;

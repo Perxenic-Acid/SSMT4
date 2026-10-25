@@ -214,7 +214,6 @@ export const buildCapabilityTools = (ctx: CapabilityContext): CapabilityTool[] =
       'normalizeColor',
       'normalizePath',
       'normalizeTagName',
-      'pruneMappings',
       'load',
       'buildSnapshot',
       'cleanupUnusedIcons',

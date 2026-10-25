@@ -507,6 +507,100 @@ fn preload_never_blocks_launch_even_during_initial_queries() {
 
 #[cfg(windows)]
 #[test]
+fn genshin_data_aliases_share_transaction_targets_and_preserve_links() {
+    use std::os::windows::fs::MetadataExt;
+    use std::os::windows::process::CommandExt;
+    for (alias, real) in [
+        ("GenshinImpact_Data", "Yuanshen_DATA"),
+        ("YuanShen_Data", "GenshinImpact_Data"),
+    ] {
+        let temp = Temp::new();
+        let work = Workspace::open(&temp.0.join("game")).unwrap();
+        let data = work.root.join(real);
+        fs::create_dir(&data).unwrap();
+        fs::write(data.join("model"), b"old").unwrap();
+        let link = work.root.join(alias);
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&data)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        let name = format!("{alias}/model");
+        let physical = format!("{real}/model");
+        assert!(transaction::safe(&work.root, &format!("{alias}/new/file")).is_ok());
+        assert_eq!(
+            transaction::target_key(&work.root, &name).unwrap(),
+            transaction::target_key(&work.root, &physical).unwrap()
+        );
+        let before = Some(digest(b"old"));
+        let after = Some(digest(b"new"));
+        let change = Change {
+            name: name.clone(),
+            before: before.clone(),
+            after: after.clone(),
+        };
+        fs::create_dir_all(work.stage.join(alias)).unwrap();
+        fs::write(work.stage.join(&name), b"new").unwrap();
+        assert!(work
+            .commit(
+                vec![
+                    change.clone(),
+                    Change {
+                        name: physical,
+                        before,
+                        after
+                    }
+                ],
+                Path::new(""),
+                json!({}),
+                json!({})
+            )
+            .is_err());
+        assert!(!work.work.join("journal.json").exists());
+        work.commit(vec![change], Path::new(""), json!({}), json!({}))
+            .unwrap();
+        assert_eq!(fs::read(data.join("model")).unwrap(), b"new");
+        // 用提交中断记录验证原路恢复，不替换或删除兼容链接。
+        fs::rename(
+            work.work.join("completed.json"),
+            work.work.join("journal.json"),
+        )
+        .unwrap();
+        work.recover(Path::new("")).unwrap();
+        assert_eq!(fs::read(data.join("model")).unwrap(), b"old");
+        assert!(fs::symlink_metadata(&link).unwrap().file_attributes() & 0x400 != 0);
+        fs::remove_dir(&link).unwrap();
+        let outside = temp.0.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert!(transaction::safe(&work.root, &name).is_err());
+        fs::remove_dir(link).unwrap();
+        let nested = data.join("nested");
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&nested)
+            .arg(&outside)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert!(transaction::safe(&work.root, &format!("{real}/nested/file")).is_err());
+        fs::remove_dir(nested).unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn junction_paths_are_rejected_before_writing_outside_the_workspace() {
     use std::os::windows::process::CommandExt;
     let temp = Temp::new();
