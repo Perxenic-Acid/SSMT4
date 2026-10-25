@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openPath, openUrl } from '@tauri-apps/plugin-opener'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { FolderOpened, Refresh, Search, Setting, Document, Delete, Box, InfoFilled } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
@@ -476,6 +476,52 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
   await applyPluginToggle(plugin)
 }
 
+const uninstallPlugin = async () => {
+  const plugin = selectedPlugin.value
+  if (!plugin || loading.value) return
+  if (plugin.enabled) {
+    ElMessage.warning(t('pluginMarketplace.messages.uninstallDisabled'))
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      t('pluginMarketplace.messages.uninstallConfirm', { name: plugin.manifest.name }),
+      t('pluginMarketplace.messages.uninstallTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('pluginMarketplace.actions.uninstall'),
+        cancelButtonText: t('pluginMarketplace.actions.close'),
+        distinguishCancelAndClose: true,
+      },
+    )
+  } catch {
+    return
+  }
+  const requestId = ++refreshRequestId
+  loading.value = true
+  try {
+    const snapshot = await invoke<InstalledPlugin[]>('uninstall_plugin', {
+      pluginId: plugin.manifest.id,
+      gameName: selectedGameName.value || null,
+    })
+    if (requestId === refreshRequestId) {
+      installed.value = snapshot
+      installedGameName.value = selectedGameName.value
+      if (logPlugin.value?.id === plugin.manifest.id) {
+        logDialogOpen.value = false
+        logPlugin.value = null
+        pluginLog.value = ''
+      }
+    }
+    ElMessage.success(t('pluginMarketplace.messages.uninstalled'))
+  } catch (error) {
+    console.error('Failed to uninstall plugin:', error)
+    ElMessage.error(t('pluginMarketplace.messages.uninstallFailed', { error: String(error) }))
+  } finally {
+    if (requestId === refreshRequestId) loading.value = false
+  }
+}
+
 const confirmRiskyEnable = async () => {
   if (!riskAccepted.value || !riskPlugin.value) return
   loading.value = true
@@ -701,6 +747,12 @@ onMounted(async () => {
               @click="openPluginSettings">{{ t('pluginMarketplace.actions.openSettings') }}</el-button>
             <el-button size="small" :icon="Document" :loading="logLoading" @click="openPluginLog">
               {{ t('pluginMarketplace.actions.viewLog') }}
+            </el-button>
+            <el-button size="small" type="danger" plain :icon="Delete"
+              :disabled="loading || selectedPlugin.enabled"
+              :title="selectedPlugin.enabled ? t('pluginMarketplace.messages.uninstallDisabled') : t('pluginMarketplace.actions.uninstall')"
+              @click="uninstallPlugin">
+              {{ t('pluginMarketplace.actions.uninstall') }}
             </el-button>
             <span v-if="['broken', 'incompatible', 'external_dependency_missing', 'update_available'].includes(lifecycleFor(selectedEntry, selectedPlugin))" class="detail-issue">
               {{ t('pluginMarketplace.lifecycle.' + lifecycleFor(selectedEntry, selectedPlugin)) }}

@@ -19,6 +19,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+use sysinfo::{ProcessRefreshKind, System};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1082,6 +1083,149 @@ pub async fn install_official_plugin(app: tauri::AppHandle, id: String, version:
 }
 
 #[tauri::command]
+pub fn uninstall_plugin(
+    plugin_id: String,
+    game_name: Option<String>,
+) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    if any_configured_game_process_running() {
+        return Err("请先退出所有游戏，再卸载插件，避免残留已加载的运行时".into());
+    }
+    let plugins_root = crate::config::path_manager::PathManager::ssmt_plugins_folder();
+    let global_root = crate::config::path_manager::PathManager::ssmt_global_config_folder();
+    uninstall_plugin_from_roots(&plugin_id, game_name.as_deref(), &plugins_root, &global_root)
+}
+
+fn any_configured_game_process_running() -> bool {
+    let games_root = crate::config::path_manager::PathManager::global_config_games_folder();
+    let Ok(entries) = fs::read_dir(games_root) else { return false };
+    let mut names = HashSet::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let config_path = entry.path().join("Config.json");
+        let Ok(raw) = fs::read_to_string(config_path) else { continue };
+        let Ok(config) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+        let Some(path) = config.get("targetExePath").and_then(serde_json::Value::as_str) else { continue };
+        let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else { continue };
+        names.insert(name.to_ascii_lowercase());
+    }
+    if names.is_empty() {
+        return false;
+    }
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessRefreshKind::new());
+    system.processes().values().any(|process| {
+        names.contains(&process.name().to_ascii_lowercase())
+    })
+}
+
+fn remove_owned_path(path: &Path, directory: bool) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("读取卸载目标失败 {}：{error}", path.display())),
+    };
+    if directory && metadata.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+    .map_err(|error| format!("删除卸载目标失败 {}：{error}", path.display()))
+}
+
+fn cached_package_paths_for_plugin(cache_root: &Path, plugin_id: &str) -> Result<Vec<PathBuf>, String> {
+    let entries = match fs::read_dir(cache_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("读取插件缓存失败：{error}")),
+    };
+    let mut paths = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || !path.extension().is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("asset")) {
+            continue;
+        }
+        let owned = inspect_ssmtpkg(&path)
+            .is_ok_and(|inspection| inspection.manifest.id == plugin_id)
+            || cached_manifest_plugin_id(&path).as_deref() == Some(plugin_id);
+        if owned {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+fn cached_manifest_plugin_id(path: &Path) -> Option<String> {
+    const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+    let file = fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let entry = archive.by_name(MANIFEST_FILE_NAME).ok()?;
+    if entry.size() > MAX_MANIFEST_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    entry.take(MAX_MANIFEST_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+        return None;
+    }
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()?
+        .get("id")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn uninstall_plugin_from_roots(
+    plugin_id: &str,
+    game_name: Option<&str>,
+    plugins_root: &Path,
+    global_root: &Path,
+) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    let plugin_id = plugin_id.trim();
+    let mut registry = PluginRegistry::new(plugins_root).map_err(|error| error.to_string())?;
+    if registry.find(plugin_id).is_none() {
+        return Err(format!("插件尚未安装：{plugin_id}"));
+    }
+    if registry.plugin_enabled_anywhere(plugin_id) {
+        return Err("请先禁用该插件的所有游戏，再执行卸载".into());
+    }
+
+    let package_dir = plugins_root.join(plugin_id);
+    if package_dir.parent() != Some(plugins_root) {
+        return Err("插件目录不在受控插件根目录内".into());
+    }
+    // Delete the package first: if files are locked, no settings or state is lost.
+    remove_owned_path(&package_dir, true)?;
+
+    let data_dir = global_root.join("PluginData").join(plugin_id);
+    remove_owned_path(&data_dir, true)?;
+    let log_file = global_root.join("PluginLogs").join(format!("{plugin_id}.log"));
+    remove_owned_path(&log_file, false)?;
+    let log_tmp = global_root.join("PluginLogs").join(format!("{plugin_id}.log.tmp"));
+    remove_owned_path(&log_tmp, false)?;
+    for cached in cached_package_paths_for_plugin(&global_root.join("PluginAssetCache"), plugin_id)? {
+        remove_owned_path(&cached, false)?;
+    }
+
+    registry
+        .remove_plugin_state(plugin_id)
+        .map_err(|error| error.to_string())?;
+    let mut settings = PluginSettingsStore::new(global_root.join("plugin-settings.json"))
+        .map_err(|error| error.to_string())?;
+    settings
+        .remove_namespace(plugin_id)
+        .map_err(|error| error.to_string())?;
+
+    let snapshots = if let Some(game_name) = game_name.map(str::trim).filter(|name| !name.is_empty()) {
+        snapshot_for_game(&registry, game_name)
+    } else {
+        snapshot(&registry)
+    };
+    Ok(snapshots)
+}
+
+#[tauri::command]
 pub fn read_plugin_log(plugin_id: String) -> Result<String, String> {
     let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
     if registry.find(&plugin_id).is_none() {
@@ -1141,6 +1285,7 @@ mod tests {
         lifecycle_status,
         should_launch_hoyoshade, Dlss5GameStateSnapshot, GraphicsLaunchDecision,
         GraphicsLaunchInspection, PluginLifecycleStatus, inspect_dlss5_last_run_log,
+        uninstall_plugin_from_roots,
     };
     use crate::plugin::graphics_stack::{
         CompatibilityLevel, GraphicsCompatibilityIssue, GraphicsStackResolution,
@@ -1153,8 +1298,95 @@ mod tests {
     };
     use std::collections::BTreeMap;
     use std::fs;
-    use std::path::PathBuf;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn uninstall_test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ssmt-plugin-uninstall-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ))
+    }
+
+    fn write_uninstall_fixture(root: &Path, id: &str) -> PathBuf {
+        let package = root.join("source").join(id);
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("ssmt-plugin.json"), format!(r#"{{
+          "schemaVersion":1,"id":"{id}","name":"Uninstall fixture","version":"1.0.0","author":"Test",
+          "compatibility":{{"ssmt":">=4.0.0","platforms":["windows-x64"]}},
+          "contributions":{{}},"externalDependencies":[],"permissions":[]
+        }}"#)).unwrap();
+        package
+    }
+
+    fn write_cached_package(path: &Path, id: &str) {
+        let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        zip.start_file("ssmt-plugin.json", zip::write::FileOptions::default()).unwrap();
+        zip.write_all(format!(r#"{{
+          "schemaVersion":1,"id":"{id}","name":"Cached fixture",
+          "description":"full inspection intentionally rejects this cache",
+          "version":"1.0.0","author":"Test",
+          "compatibility":{{"ssmt":">=4.0.0","platforms":["windows-x64"]}},
+          "contributions":{{}},"externalDependencies":[],"permissions":[]
+        }}"#).as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn uninstall_removes_package_data_logs_cache_settings_and_state() {
+        let root = uninstall_test_root("complete");
+        let plugins_root = root.join("Plugins");
+        let global_root = root.join("Global");
+        let mut registry = PluginRegistry::new(&plugins_root).unwrap();
+        for id in ["example.remove", "example.keep"] {
+            let package = write_uninstall_fixture(&root, id);
+            registry.install_directory_package(&package).unwrap();
+            registry.set_game_enabled("GIMI", id, true).unwrap();
+        }
+        let enabled_error = uninstall_plugin_from_roots(
+            "example.remove", None, &plugins_root, &global_root,
+        ).unwrap_err();
+        assert!(enabled_error.contains("请先禁用"));
+        registry.set_game_enabled("GIMI", "example.remove", false).unwrap();
+
+        let data = global_root.join("PluginData/example.remove/presets");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("Default.json"), b"preset").unwrap();
+        let logs = global_root.join("PluginLogs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(logs.join("example.remove.log"), b"log").unwrap();
+        fs::write(logs.join("example.remove.log.tmp"), b"tmp").unwrap();
+        let cache = global_root.join("PluginAssetCache");
+        fs::create_dir_all(&cache).unwrap();
+        let cached = cache.join("fixture.asset");
+        write_cached_package(&cached, "example.remove");
+        let mut settings = crate::plugin::settings::PluginSettingsStore::new(
+            global_root.join("plugin-settings.json"),
+        ).unwrap();
+        settings.set("example.remove", "native_injection_risk_ack_v1",
+            serde_json::json!({"accepted":true})).unwrap();
+
+        let snapshots = uninstall_plugin_from_roots(
+            "example.remove", None, &plugins_root, &global_root,
+        ).unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].manifest.id, "example.keep");
+        assert!(!plugins_root.join("example.remove").exists());
+        assert!(!global_root.join("PluginData/example.remove").exists());
+        assert!(!logs.join("example.remove.log").exists());
+        assert!(!logs.join("example.remove.log.tmp").exists());
+        assert!(!cached.exists());
+        let restarted = PluginRegistry::new(&plugins_root).unwrap();
+        assert!(restarted.find("example.remove").is_none());
+        assert!(restarted.find("example.keep").is_some());
+        let settings = crate::plugin::settings::PluginSettingsStore::new(
+            global_root.join("plugin-settings.json"),
+        ).unwrap();
+        assert_eq!(settings.get("example.remove", "native_injection_risk_ack_v1").unwrap(), None);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn graphics_status_io_does_not_block_the_dispatch_thread() {

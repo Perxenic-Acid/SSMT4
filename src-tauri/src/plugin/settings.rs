@@ -67,6 +67,13 @@ impl PluginSettingsStore {
             .and_then(|namespace| namespace.get(key).cloned()))
     }
 
+    pub fn remove_namespace(&mut self, plugin_id: &str) -> Result<(), PluginSettingsError> {
+        if self.state.namespaces.remove(plugin_id).is_some() {
+            write_state(&self.path, &self.state)?;
+        }
+        Ok(())
+    }
+
     pub fn set(
         &mut self,
         plugin_id: &str,
@@ -177,6 +184,19 @@ mod tests {
         let disk = PluginSettingsStore::new(&path).unwrap();
         assert_eq!(disk.get("ssmt.fixture", "installation").unwrap(), Some("old".into()));
         assert_eq!(store.get("ssmt.fixture", "installation").unwrap(), Some("old".into()));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn removes_only_the_requested_namespace() {
+        let path = path();
+        let mut store = PluginSettingsStore::new(&path).unwrap();
+        store.set("ssmt.first", "key", Value::from(1)).unwrap();
+        store.set("ssmt.second", "key", Value::from(2)).unwrap();
+        store.remove_namespace("ssmt.first").unwrap();
+        let restored = PluginSettingsStore::new(&path).unwrap();
+        assert_eq!(restored.get("ssmt.first", "key").unwrap(), None);
+        assert_eq!(restored.get("ssmt.second", "key").unwrap(), Some(Value::from(2)));
         fs::remove_file(path).unwrap();
     }
 }

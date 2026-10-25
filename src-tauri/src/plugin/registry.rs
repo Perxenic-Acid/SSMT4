@@ -349,6 +349,38 @@ impl PluginRegistry {
                 || plugin.manifest.compatibility.supports_game(&game_scope_preset(game_name)))
     }
 
+    pub fn enabled_games_for_plugin(&self, id: &str) -> Vec<String> {
+        self.state.game_plugins
+            .iter()
+            .filter_map(|(game, selections)| selections.get(id).copied().unwrap_or(false).then(|| game.clone()))
+            .collect()
+    }
+
+    pub fn plugin_enabled_anywhere(&self, id: &str) -> bool {
+        let prefix = format!("{id}@");
+        self.state.game_plugins.values().any(|selections| selections.get(id) == Some(&true))
+            || self.state.plugins.iter().any(|(key, settings)| {
+                key.starts_with(&prefix) && settings.enabled
+            })
+    }
+
+    /// Removes all state owned by one plugin while preserving every other plugin.
+    pub fn remove_plugin_state(&mut self, id: &str) -> Result<(), PluginRegistryError> {
+        let prefix = format!("{id}@");
+        self.state.plugins.retain(|key, _| key != id && !key.starts_with(&prefix));
+        self.state.external_paths.remove(id);
+        for selections in self.state.game_plugins.values_mut() {
+            selections.remove(id);
+        }
+        self.state.game_plugins.retain(|_, selections| !selections.is_empty());
+        for executables in self.state.managed_game_executables.values_mut() {
+            executables.remove(id);
+        }
+        self.state.managed_game_executables.retain(|_, executables| !executables.is_empty());
+        write_state(&self.state_path, &self.state)?;
+        self.refresh()
+    }
+
     fn configured_game_enabled(&self, game_name: &str, id: &str) -> bool {
         self.state
             .game_plugins
@@ -706,6 +738,44 @@ mod tests {
         restarted.set_enabled("ssmt.fixture", false).unwrap();
         assert!(!restarted.find("ssmt.fixture").unwrap().enabled);
         drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uninstall_state_removes_every_record_for_one_plugin_only() {
+        let root = temp_root("remove-state");
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        for id in ["example.remove", "example.keep"] {
+            let source = fixture_package(&root.join(id), id, "1.0.0");
+            registry.install_directory_package(&source).unwrap();
+            registry.set_game_enabled("GIMI", id, true).unwrap();
+        }
+        registry.set_enabled("example.remove", true).unwrap();
+        registry.state.external_paths.insert(
+            "example.remove".into(),
+            BTreeMap::from([("tool".into(), root.join("tool"))]),
+        );
+        registry.state.managed_game_executables.insert(
+            "gimi".into(),
+            BTreeMap::from([("example.remove".into(), root.join("game.exe"))]),
+        );
+        write_state(&registry.state_path, &registry.state).unwrap();
+
+        assert_eq!(registry.enabled_games_for_plugin("example.remove"), vec!["gimi"]);
+        assert!(registry.plugin_enabled_anywhere("example.remove"));
+        fs::remove_dir_all(registry.plugins_root().join("example.remove")).unwrap();
+        registry.remove_plugin_state("example.remove").unwrap();
+
+        assert!(registry.find("example.remove").is_none());
+        assert!(registry.find("example.keep").is_some());
+        assert!(registry.enabled_games_for_plugin("example.remove").is_empty());
+        assert!(registry.enabled_games_for_plugin("example.keep") == vec!["gimi"]);
+        let restarted = PluginRegistry::new(registry.plugins_root()).unwrap();
+        assert!(restarted.find("example.remove").is_none());
+        assert!(restarted.find("example.keep").is_some());
+        assert!(restarted.state.external_paths.get("example.remove").is_none());
+        assert!(restarted.state.managed_game_executables.get("gimi")
+            .and_then(|executables| executables.get("example.remove")).is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
