@@ -26,6 +26,7 @@ export const useModsManagementPreviews = (opts: UseModsManagementPreviewsOptions
     const subgroupPreviewMap = opts.subgroupPreviewMap ?? ref<Record<string, string[]>>(loadSubgroupPreviewCacheStorage());
     const subgroupPreviewIndices = opts.subgroupPreviewIndices ?? reactive<Record<string, number>>({});
     let subgroupPreviewLoadToken = 0;
+    const dirtyPreviewKeys = new Set<string>();
     let subgroupPreviewPersistTimer: ReturnType<typeof setTimeout> | null = null;
     const MAX_AUTO_SWITCH_MODS = 20;
     const MAX_AUTO_SWITCH_SUBGROUPS = 12;
@@ -104,17 +105,15 @@ export const useModsManagementPreviews = (opts: UseModsManagementPreviewsOptions
     const invalidateSubgroupPreviewByGroupId = (gameName: string, groupId: string) => {
         if (!gameName || !groupId) return;
         const key = `${gameName}::${groupId}`;
-        if (key in subgroupPreviewMap.value) { delete subgroupPreviewMap.value[key]; delete subgroupPreviewIndices[key]; schedulePersistSubgroupPreviewCache(); }
+        dirtyPreviewKeys.add(key);
     };
 
     const invalidateSubgroupPreviewByGame = (gameName: string) => {
         if (!gameName) return;
         const prefix = `${gameName}::`;
-        let changed = false;
         Object.keys(subgroupPreviewMap.value).forEach((key) => {
-            if (key.startsWith(prefix)) { delete subgroupPreviewMap.value[key]; delete subgroupPreviewIndices[key]; changed = true; }
+            if (key.startsWith(prefix)) dirtyPreviewKeys.add(key);
         });
-        if (changed) schedulePersistSubgroupPreviewCache();
     };
 
     const makeSubgroupPreviewKey = (groupId: string) => `${opts.selectedGame.value}::${groupId}`;
@@ -134,7 +133,7 @@ export const useModsManagementPreviews = (opts: UseModsManagementPreviewsOptions
         const game = opts.selectedGame.value;
         for (const group of groups) {
             const key = `${game}::${group.id}`;
-            if (Object.prototype.hasOwnProperty.call(subgroupPreviewMap.value, key)) continue;
+            if (Object.prototype.hasOwnProperty.call(subgroupPreviewMap.value, key) && !dirtyPreviewKeys.has(key)) continue;
             try {
                 const cached = ModManager.getCachedGroup(game, group.id);
                 const scanned = cached ?? await ModManager.scanGroup(game, group.id);
@@ -146,12 +145,13 @@ export const useModsManagementPreviews = (opts: UseModsManagementPreviewsOptions
                 const validImages = Array.from(new Set(images)).slice(0, SUBGROUP_PREVIEW_MAX_IMAGES);
                 if (token !== subgroupPreviewLoadToken) return;
                 subgroupPreviewMap.value[key] = validImages;
+                dirtyPreviewKeys.delete(key);
                 if (!(key in subgroupPreviewIndices)) subgroupPreviewIndices[key] = 0;
                 schedulePersistSubgroupPreviewCache();
             } catch {
                 if (token !== subgroupPreviewLoadToken) return;
-                subgroupPreviewMap.value[key] = [];
-                schedulePersistSubgroupPreviewCache();
+                // 临时读取失败时保留旧预览，后续加载仍可重试。
+                dirtyPreviewKeys.add(key);
             }
         }
     };

@@ -2,7 +2,7 @@ export type MutationImpact = 'content' | 'structure';
 
 interface MutationReconcilerOptions {
     getGameName: () => string;
-    invalidateClientState: (gameName: string) => void;
+    invalidateClientState: (gameName: string, impact: MutationImpact) => void;
     refreshCurrentContent: (gameName: string) => Promise<void>;
     refreshStructure: (gameName: string) => Promise<void>;
     onError?: (error: unknown, impact: MutationImpact) => void;
@@ -38,7 +38,7 @@ export const createMutationReconciler = (options: MutationReconcilerOptions) => 
         try {
             const gameName = options.getGameName();
             if (gameName) {
-                options.invalidateClientState(gameName);
+                options.invalidateClientState(gameName, impact);
                 if (impact === 'structure') {
                     await options.refreshStructure(gameName);
                 } else {

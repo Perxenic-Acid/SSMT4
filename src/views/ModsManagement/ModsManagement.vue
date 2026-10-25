@@ -42,6 +42,7 @@ import { clipboardImageToPngBytes } from './ModsManagement.clipboardPreview';
 import { buildModSortComparator, compareModsByDefault, type SortCriterion, type SortOrder } from './ModsManagement.sort';
 import { mergeGroupOrder } from './ModsManagement.order';
 import { createMutationReconciler, type MutationImpact } from './ModsManagement.mutations';
+import { reconcileModSnapshot } from './ModsManagement.snapshot';
 import { readImage } from '@tauri-apps/plugin-clipboard-manager';
 import {
     buildMovedModRelativePath as buildMovedModRelativePathUtil,
@@ -1464,8 +1465,17 @@ const appendModsIncrementally = async (
     const refreshAnalysis = options.refreshAnalysis !== false;
     modHydrationDepth.value += 1;
     try {
+        if (token !== groupLoadToken) return;
         totalModsCount.value = incomingMods.length;
         if (refreshAnalysis) clearModAnalysisSubscriptions();
+
+        if (mods.value.length > 0) {
+            const next = reconcileModSnapshot(mods.value, incomingMods, removeMissing);
+            if (next.length !== mods.value.length || next.some((mod, index) => mod !== mods.value[index])) mods.value = next;
+            loadedModsCount.value = next.length;
+            if (refreshAnalysis && next.length) queueVisibleModAnalysis(next);
+            return;
+        }
 
         const existingByIdentity = new Map(
             mods.value.map((mod) => [normalizeModIdentity(mod.relativePath || mod.id), mod]),
@@ -2225,7 +2235,7 @@ const refreshMods = async (gameName: string, options?: { preserveVisible?: boole
 
             // Try streaming scan first for progressive rendering.
             // Falls back to cached SQLite query if already indexed.
-            const streamed = await loadGroupModsStreaming(gameName, 'Root', currentRefreshToken);
+            await loadGroupModsStreaming(gameName, 'Root', currentRefreshToken);
             if (signal.isCancelled()) {
                 return;
             }
@@ -2239,7 +2249,7 @@ const refreshMods = async (gameName: string, options?: { preserveVisible?: boole
             }
 
             // If selectedGroup is specific, try to load it?
-            if (!streamed && selectedGroup.value && selectedGroup.value !== 'All' && selectedGroup.value !== 'Root') {
+            if (selectedGroup.value && selectedGroup.value !== 'Root') {
                 await loadGroupMods(selectedGroup.value, { showProgress: !preserveVisible, signal });
             }
         });
@@ -2264,13 +2274,14 @@ const refreshMods = async (gameName: string, options?: { preserveVisible?: boole
 
 mutationReconciler = createMutationReconciler({
     getGameName: () => selectedGame.value,
-    invalidateClientState: (gameName) => {
-        resetModKeyPopoverState();
+    invalidateClientState: (gameName, impact) => {
         ModManager.clearCache(gameName);
         migotoIniService.clearGame(gameName);
-        invalidateSubgroupPreviewByGame(gameName);
         allModsCatalogLoadedForGame.value = '';
-        groupIconVersion.value = Date.now();
+        if (impact === 'structure') {
+            invalidateSubgroupPreviewByGame(gameName);
+            groupIconVersion.value = Date.now();
+        }
     },
     refreshCurrentContent: async (gameName) => {
         await refreshCurrentMutationContent();
@@ -2945,10 +2956,7 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
     } catch (e) {
         if (token !== groupLoadToken) return;
         if (ModManager.isScanCancelled(e)) return;
-        currentSubGroups.value = [];
-        mods.value = [];
-        loadedModsCount.value = 0;
-        totalModsCount.value = 0;
+        // 暂时读取失败不代表当前分类已被清空，保留最后一次成功显示的内容。
         ElMessage.error(t('modsManagement.messages.loadModFailed', { error: String(e) }));
     } finally {
         if (showProgress && token === groupLoadToken) {
@@ -2978,17 +2986,22 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
     const installDir = await ModManager.getInstallDir(gameName);
 
     let streamedChunks = false;
+    const viewToken = groupLoadToken;
+    const isCurrent = () => refreshModsToken === refreshToken && selectedGame.value === gameName;
+    const canApplyView = () => isCurrent() && groupLoadToken === viewToken && selectedGroup.value === 'Root';
+    const progressive = canApplyView() && !hasVisibleContent();
     const accumulatedMods: ModInfo[] = [];
     const accumulatedGroups: GroupInfo[] = [];
     let chunkReconcile = Promise.resolve();
 
     const unlistenChunk = await listen<ScanChunkEvent>('mod-library-scan-chunk', (event) => {
         const payload = event.payload;
-        if (!payload) return;
+        if (!payload || !isCurrent()) return;
         chunkReconcile = chunkReconcile.then(async () => {
+            if (!isCurrent()) return;
             switch (payload.phase) {
                 case 'start':
-                    totalModsCount.value = payload.total ?? 0;
+                    if (canApplyView()) totalModsCount.value = payload.total ?? 0;
                     accumulatedMods.length = 0;
                     accumulatedGroups.length = 0;
                     // Preserve cards until the final scan result is available; this
@@ -2998,7 +3011,7 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
                     streamedChunks = true;
                     if (payload.mods && payload.mods.length > 0) {
                         accumulatedMods.push(...payload.mods);
-                        await appendModsIncrementally(accumulatedMods, groupLoadToken, {
+                        if (progressive && canApplyView()) await appendModsIncrementally(accumulatedMods, viewToken, {
                             removeMissing: false,
                             refreshAnalysis: false,
                         });
@@ -3006,12 +3019,12 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
                     if (payload.groups && payload.groups.length > 0) {
                         accumulatedGroups.push(...payload.groups);
                         updateAvailableGroups(payload.groups);
-                        reconcileCurrentSubGroups(dedupeGroupsById(accumulatedGroups), false);
+                        if (progressive && canApplyView()) reconcileCurrentSubGroups(dedupeGroupsById(accumulatedGroups), false);
                     }
                     break;
                 }
                 case 'done':
-                    totalModsCount.value = payload.totalMods ?? accumulatedMods.length;
+                    if (canApplyView()) totalModsCount.value = payload.totalMods ?? accumulatedMods.length;
                     break;
             }
         });
@@ -3042,9 +3055,11 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
         if (result) {
             const nextGroups = dedupeGroupsById(result.groups);
             updateAvailableGroups(nextGroups);
-            reconcileCurrentSubGroups(nextGroups);
-            await appendModsIncrementally(result.mods, groupLoadToken);
-            totalModsCount.value = result.mods.length;
+            if (canApplyView()) {
+                reconcileCurrentSubGroups(nextGroups);
+                await appendModsIncrementally(result.mods, viewToken);
+                totalModsCount.value = result.mods.length;
+            }
         }
     } catch (e) {
         if (ModManager.isScanCancelled(e)) {
@@ -3059,9 +3074,11 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
             if (refreshModsToken !== refreshToken) return streamedChunks;
             const nextGroups = dedupeGroupsById(result.groups);
             updateAvailableGroups(nextGroups);
-            reconcileCurrentSubGroups(nextGroups);
-            await appendModsIncrementally(result.mods, groupLoadToken);
-            totalModsCount.value = result.mods.length;
+            if (canApplyView()) {
+                reconcileCurrentSubGroups(nextGroups);
+                await appendModsIncrementally(result.mods, viewToken);
+                totalModsCount.value = result.mods.length;
+            }
         }
     } finally {
         unlistenChunk();
@@ -3870,11 +3887,11 @@ const {
             </div>
         </div>
         <div class="mod-grid-container glass-scrollbar">
-            <div v-if="switchingGroup" class="group-loading-hint glass-panel">
+            <div v-if="switchingGroup || loading" class="group-loading-hint glass-panel" role="status">
                 {{ t('modsManagement.ui.loadingCurrentCategory') }}: {{ loadedModsCount }}/{{ totalModsCount || '?' }}
             </div>
 
-            <div v-if="filteredMods.length === 0 && visibleSubGroups.length === 0" class="empty-state">
+            <div v-if="!loading && !switchingGroup && !isHydratingMods && filteredMods.length === 0 && visibleSubGroups.length === 0" class="empty-state">
                 <el-empty :description="emptyModsDescription">
                     <div class="empty-state-actions">
                         <button type="button" class="tb-btn tb-btn--primary tb-btn--icon" @click="pickInstallArchive" :title="t('modsManagement.actions.importArchive')" :aria-label="t('modsManagement.actions.importArchive')">
@@ -5283,6 +5300,8 @@ const {
 
 /* Mod Grid */
 .mod-grid-container {
+    position: relative;
+    scrollbar-gutter: stable;
     flex: 1;
     overflow-y: auto;
     padding: 24px;
@@ -5290,8 +5309,13 @@ const {
 }
 
 .group-loading-hint {
+    position: absolute;
+    pointer-events: none;
+    top: 12px;
+    right: 24px;
+    z-index: 10;
     padding: 10px 16px;
-    margin-bottom: 14px;
+    margin: 0;
     border-radius: 12px;
     font-size: 12px;
     color: rgba(255,255,255,0.70);
@@ -5325,15 +5349,17 @@ const {
 }
 
 .mod-entry-enter-active,
-.mod-entry-leave-active,
+.mod-entry-leave-active {
+    transition: opacity var(--motion-duration-fast) var(--motion-ease-out);
+}
+
 .mod-entry-move {
-    transition: opacity .2s ease, transform .24s cubic-bezier(.2, .7, .2, 1);
+    transition: none !important;
 }
 
 .mod-entry-enter-from,
 .mod-entry-leave-to {
     opacity: 0;
-    transform: scale(.975) translateY(8px);
 }
 
 .mod-list-transition {

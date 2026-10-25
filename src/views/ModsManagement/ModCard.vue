@@ -5,11 +5,12 @@ import type { ModTagDefinition } from '../../store/ModTagStore';
 import type { ModKeyInfo } from '../../store/ModManager';
 import { useI18n } from 'vue-i18n';
 import { AppStateManager } from '../../store/AppStateManager';
+import { ref, watch } from 'vue';
 
 const { t } = useI18n();
 const appSettings = AppStateManager.appSettings;
 
-defineProps<{
+const props = defineProps<{
   mod: ModInfo;
   isDragOver: boolean;
   isPulsing: boolean;
@@ -25,6 +26,18 @@ defineProps<{
   presetName: string | null;
   blurNsfwPreview: boolean;
 }>();
+
+const displayedPreviewUrl = ref(props.previewUrl);
+// 启停会重命名目录；替换图片就绪前保留已显示的内容，首次加载仍由 el-image 懒加载。
+watch(() => props.previewUrl, (url, _previous, onCleanup) => {
+  if (!url || !displayedPreviewUrl.value) { displayedPreviewUrl.value = url; return; }
+  let active = true;
+  const image = new Image();
+  image.onload = () => { if (active) displayedPreviewUrl.value = url; };
+  image.onerror = () => { if (active) displayedPreviewUrl.value = null; };
+  image.src = url;
+  onCleanup(() => { active = false; image.onload = null; image.onerror = null; });
+});
 
 const emit = defineEmits<{
   contextmenu: [event: MouseEvent];
@@ -129,10 +142,10 @@ const onModCardMouseLeave = (e: MouseEvent) => {
         </div>
 
         <div class="mod-crystal-wrapper" :class="{ active: mod.enabled }">
-          <div v-if="previewUrl" class="image-wrapper" :class="{ 'is-nsfw-blurred': blurNsfwPreview, 'can-hover-reveal': appSettings.revealBlurredImagesOnHover }">
+          <div v-if="displayedPreviewUrl" class="image-wrapper" :class="{ 'is-nsfw-blurred': blurNsfwPreview, 'can-hover-reveal': appSettings.revealBlurredImagesOnHover }">
             <div class="slide-item">
               <el-image
-                :src="previewUrl"
+                :src="displayedPreviewUrl"
                 fit="cover"
                 loading="lazy"
                 class="zoom-image"
@@ -212,7 +225,7 @@ const onModCardMouseLeave = (e: MouseEvent) => {
   --rotate-duration: 8.5s;
   border-radius: 12px;
   overflow: hidden;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease, opacity 0.2s ease;
   display: flex;
   flex-direction: column;
   width: 240px;
@@ -289,7 +302,7 @@ const onModCardMouseLeave = (e: MouseEvent) => {
 }
 
 .mod-card:hover {
-  transform: translateY(-4px);
+  transform: none;
   box-shadow:
     0 0 40px rgba(var(--theme-surface-tint-rgb), 0.28),
     0 0 60px rgba(142, 230, 255, 0.12),
@@ -309,7 +322,7 @@ const onModCardMouseLeave = (e: MouseEvent) => {
 }
 
 .mod-card.is-disabled:hover {
-  transform: translateY(-3px);
+  transform: none;
   border-color: rgba(255,255,255,0.24);
   box-shadow:
     0 12px 32px rgba(0,0,0,0.18),
