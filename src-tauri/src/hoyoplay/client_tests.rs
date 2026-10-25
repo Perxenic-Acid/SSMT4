@@ -1,6 +1,54 @@
 use super::*;
 use std::{io::Write, net::TcpListener, thread, time::Instant};
 
+#[test]
+fn metadata_cache_deduplicates_parallel_checks_and_expires_failures() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let slot = BranchSlot::default();
+    let calls = AtomicUsize::new(0);
+    thread::scope(|scope| {
+        for _ in 0..8 {
+            let slot = &slot;
+            let calls = &calls;
+            scope.spawn(move || {
+                let result = cached_branches(slot, || {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    Ok((
+                        Branch {
+                            tag: "7.1.0".into(),
+                            branch: "main".into(),
+                            package_id: "id".into(),
+                            password: String::new(),
+                        },
+                        None,
+                    ))
+                });
+                assert_eq!(result.unwrap().0.tag, "7.1.0");
+            });
+        }
+    });
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    *slot.lock().unwrap() = Some((
+        Instant::now() - Duration::from_secs(121),
+        Ok((
+            Branch {
+                tag: "7.0.0".into(),
+                branch: String::new(),
+                package_id: String::new(),
+                password: String::new(),
+            },
+            None,
+        )),
+    ));
+    assert!(cached_branches(&slot, || Err("offline".into())).is_err());
+    assert!(cached_branches(&slot, || panic!("失败冷却期间不重复请求")).is_err());
+    slot.lock().unwrap().as_mut().unwrap().0 = Instant::now() - Duration::from_secs(11);
+    assert_eq!(
+        cached_branches(&slot, || Err("retried".into())).unwrap_err(),
+        "retried"
+    );
+}
+
 fn server(replies: Vec<(&'static str, &'static str)>) -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

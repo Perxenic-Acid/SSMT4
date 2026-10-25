@@ -210,6 +210,7 @@ pub async fn hoyoplay_status(
     game_name: String,
     server_id: Option<String>,
     home_only: Option<bool>,
+    local_only: Option<bool>,
 ) -> Result<Status, String> {
     tokio::task::spawn_blocking(move || {
         let context = Context::load(&game_name)?;
@@ -227,7 +228,11 @@ pub async fn hoyoplay_status(
             .iter()
             .find(|s| s.id == selected_server)
             .ok_or("未知游戏渠道")?;
-        let (main, pre) = client::branches(&client::http()?, server)?;
+        let remote = if local_only.unwrap_or(false) {
+            client::cached_status_branches(server)
+        } else {
+            Some(client::status_branches(server)?)
+        };
         let local = context
             .root
             .as_deref()
@@ -255,9 +260,9 @@ pub async fn hoyoplay_status(
         if let Some(root) = context
             .root
             .as_ref()
-            .filter(|_| !home_only.unwrap_or(false))
+            .filter(|_| !home_only.unwrap_or(false) && !local_only.unwrap_or(false))
         {
-            let launch = client::launch_config(&client::http()?, server)?;
+            let launch = client::launch_config(client::metadata_http()?, server)?;
             audio_languages = installed_audio(root, &launch, &audio_languages)?;
         }
         let recovery_pending = context
@@ -271,8 +276,11 @@ pub async fn hoyoplay_status(
             selected_server,
             installed_version,
             client_found,
-            latest_version: main.tag,
-            pre_download_version: pre.map(|b| b.tag),
+            latest_version: remote
+                .as_ref()
+                .map(|(main, _)| main.tag.clone())
+                .unwrap_or_default(),
+            pre_download_version: remote.and_then(|(_, pre)| pre.map(|b| b.tag)),
             directory: context.root,
             audio_languages,
             recovery_pending,

@@ -754,7 +754,9 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-size: 0.94rem;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
   color: rgba(var(--theme-text-secondary-rgb), 0.86);
 }
 

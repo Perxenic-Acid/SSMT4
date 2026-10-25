@@ -935,6 +935,9 @@ defineExpose({
               <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/>
               <line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/>
             </svg>
+            <svg v-if="tab.id === 'gameMaintenance'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 10h4M9 8v4"/><circle cx="16" cy="10" r="1"/>
+            </svg>
             <svg v-if="tab.id === 'dllUpdate'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
             </svg>

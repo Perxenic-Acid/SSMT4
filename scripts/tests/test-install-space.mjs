@@ -8,7 +8,7 @@ import * as vue from 'vue';
 const code = ts.transpileModule(readFileSync(new URL('../../src/features/gameMaintenance/useInstallSpace.ts', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
-function fixture(invoke) {
+function fixture(invoke, automatic = true) {
   const request = vue.ref({ gameName: 'Genshin', serverId: 'cn', operation: 'install', directory: 'D:/game', audioLanguages: ['zh-cn'] });
   const cleanup = [], timers = new Map(), calls = [];
   let timerId = 0;
@@ -19,13 +19,26 @@ function fixture(invoke) {
     } } }[name]; },
   });
   const scope = vue.effectScope();
-  const state = scope.run(() => exports.useInstallSpace(() => request.value));
+  const state = scope.run(() => exports.useInstallSpace(() => request.value, automatic));
   return { state, request, calls, async fire() {
     const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn());
     await Promise.resolve(); await Promise.resolve(); await vue.nextTick();
   }, dispose() { cleanup.forEach(fn => fn()); scope.stop(); } };
 }
 const enough = { targetVersion: '7.1.0', downloadBytes: 80, gameBytes: 100, requiredBytes: 110, availableBytes: 120, sufficient: true };
+
+test('手动模式选择目录和语音不查询，确定操作后才估算', async () => {
+  const f = fixture(() => structuredClone(enough), false);
+  f.request.value.directory = 'E:/game';
+  f.request.value.audioLanguages = ['ja-jp'];
+  await f.fire();
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.state.loading.value, false);
+  await f.state.refresh();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0][1].request.directory, 'E:/game');
+  f.dispose();
+});
 
 test('安装空间异步读取，查询本身不发起安装或下载', async () => {
   const f = fixture(() => structuredClone(enough));

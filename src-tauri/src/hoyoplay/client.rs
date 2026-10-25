@@ -1,7 +1,13 @@
 use reqwest::blocking::{Client as Transport, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, error::Error, io::Read, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    error::Error,
+    io::Read,
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Route {
@@ -202,9 +208,17 @@ pub fn http() -> Result<Client, String> {
 }
 
 fn transport(direct: bool) -> Result<Transport, String> {
+    transport_with_timeout(direct, Duration::from_secs(15), Duration::from_secs(90))
+}
+
+fn transport_with_timeout(
+    direct: bool,
+    connect: Duration,
+    total: Duration,
+) -> Result<Transport, String> {
     let builder = Transport::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(90))
+        .connect_timeout(connect)
+        .timeout(total)
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 5 || validate_url(attempt.url().as_str()).is_err() {
                 attempt.error("官方资源重定向不被允许")
@@ -215,6 +229,56 @@ fn transport(direct: bool) -> Result<Transport, String> {
         .user_agent("SSMT/HoYoPlay");
     let builder = if direct { builder.no_proxy() } else { builder };
     builder.build().map_err(|e| error_chain(&e.without_url()))
+}
+
+pub fn metadata_http() -> Result<&'static Client, String> {
+    static HTTP: OnceLock<Result<Client, String>> = OnceLock::new();
+    HTTP.get_or_init(|| {
+        Ok(Client {
+            system: transport_with_timeout(false, Duration::from_secs(3), Duration::from_secs(8))?,
+            direct: transport_with_timeout(true, Duration::from_secs(3), Duration::from_secs(8))?,
+            routes: Mutex::new(HashMap::new()),
+        })
+    })
+    .as_ref()
+    .map_err(Clone::clone)
+}
+
+type BranchResult = Result<(Branch, Option<Branch>), String>;
+type BranchSlot = Arc<Mutex<Option<(Instant, BranchResult)>>>;
+static STATUS_CACHE: OnceLock<Mutex<HashMap<String, BranchSlot>>> = OnceLock::new();
+
+pub fn cached_status_branches(server: &Server) -> Option<(Branch, Option<Branch>)> {
+    let key = endpoint(server, "getGameBranches").ok()?.to_string();
+    let slot = STATUS_CACHE.get()?.try_lock().ok()?.get(&key)?.clone();
+    let cached = slot.try_lock().ok()?;
+    cached.as_ref()?.1.as_ref().ok().cloned()
+}
+
+pub fn status_branches(server: &Server) -> BranchResult {
+    let key = endpoint(server, "getGameBranches")?.to_string();
+    let slot = STATUS_CACHE
+        .get_or_init(Mutex::default)
+        .lock()
+        .map_err(|e| e.to_string())?
+        .entry(key)
+        .or_default()
+        .clone();
+    cached_branches(&slot, || branches(metadata_http()?, server))
+}
+
+fn cached_branches(slot: &BranchSlot, fetch: impl FnOnce() -> BranchResult) -> BranchResult {
+    // 同渠道并发查询共用一次请求；不同渠道不持有全局锁等待网络。
+    let mut cached = slot.lock().map_err(|e| e.to_string())?;
+    if let Some((at, result)) = &*cached {
+        let ttl = if result.is_ok() { 120 } else { 10 };
+        if at.elapsed() < Duration::from_secs(ttl) {
+            return result.clone();
+        }
+    }
+    let result = fetch();
+    *cached = Some((Instant::now(), result.clone()));
+    result
 }
 
 pub fn validate_url(raw: &str) -> Result<reqwest::Url, String> {

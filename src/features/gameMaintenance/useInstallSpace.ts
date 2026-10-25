@@ -2,7 +2,7 @@ import { onBeforeUnmount, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { InstallSpaceEstimate, InstallSpaceRequest } from './types';
 
-export function useInstallSpace(request: () => InstallSpaceRequest | null) {
+export function useInstallSpace(request: () => InstallSpaceRequest | null, automatic = true) {
   const estimate = ref<InstallSpaceEstimate | null>(null);
   const loading = ref(false);
   const error = ref('');
@@ -30,8 +30,8 @@ export function useInstallSpace(request: () => InstallSpaceRequest | null) {
     // 同步失效，避免切换目录或语音之后短暂使用旧磁盘的空间结果。
     ++revision;
     if (timer) clearTimeout(timer);
-    estimate.value = null; error.value = ''; loading.value = !!request();
-    if (request()) timer = setTimeout(() => void refresh(), 300);
+    estimate.value = null; error.value = ''; loading.value = automatic && !!request();
+    if (automatic && request()) timer = setTimeout(() => void refresh(), 300);
   }, { immediate: true, flush: 'sync' });
   onBeforeUnmount(() => { disposed = true; ++revision; if (timer) clearTimeout(timer); });
   return { estimate, loading, error, refresh };

@@ -91,14 +91,12 @@ const packageVersionText = computed(() => {
   return `${repoName} ${packageVersion}`
 })
 
-const coreVersionText = 'SSMT Runtime'
 
 const packageReleaseDescriptionText = computed(() => {
   const description = (currentGameConfig.value.packageReleaseDescription || '').trim()
   return description || t('home.versionInfo.noReleaseNotes')
 })
 
-const coreReleaseDescriptionText = computed(() => t('gameSettingsModal.fields.ssmtRuntimeHint'))
 
 const appVersionText = computed(() => {
   const version = appVersion.value.trim()
@@ -120,7 +118,7 @@ const handleCheckAndInstallAppUpdate = async () => {
   await checkAndInstallAppUpdate('manual')
 }
 
-const hasVersionInfo = computed(() => Boolean(packageVersionText.value || coreVersionText || appVersionText.value))
+const hasVersionInfo = computed(() => Boolean(packageVersionText.value || appVersionText.value))
 
 const openHomeLink = async (url: string) => {
   if (!url) return
@@ -526,6 +524,7 @@ watch(showSettings, visible => {
     <div class="content-area">
     </div>
 
+    <div class="home-left-column">
     <div v-if="appSettings.showHomeLauncherContent && hasVersionInfo" class="version-info-panel">
       <el-popover v-if="appVersionText" trigger="hover" placement="top-start" :width="220"
         popper-class="version-info-popper version-info-popper-menu">
@@ -539,18 +538,6 @@ watch(showSettings, visible => {
           <button class="version-popover-menu-item" @click="openAppReleasePage">
             {{ t('settings.about.releasePage') }}
           </button>
-        </div>
-      </el-popover>
-
-      <el-popover v-if="coreVersionText" trigger="hover" placement="top-start" :width="420"
-        popper-class="version-info-popper">
-        <template #reference>
-          <div class="version-info-chip">{{ coreVersionText }}</div>
-        </template>
-        <div class="version-popover-content">
-          <div class="version-popover-title">{{ t('home.versionInfo.coreTitle') }}</div>
-          <div class="version-popover-version">{{ coreVersionText }}</div>
-          <ReleaseNotesMarkdown class="version-popover-body" :content="coreReleaseDescriptionText" compact />
         </div>
       </el-popover>
 
@@ -572,9 +559,9 @@ watch(showSettings, visible => {
       v-if="appSettings.showHomeLauncherContent && appSettings.showHomeGameNews && (gameNews.banners.length || gameNews.posts.length || gameNewsLoading)"
       class="home-launcher-links">
       <section class="home-news-panel">
-        <div v-if="currentGameNewsBanner" class="home-news-banner" @click="openHomeLink(currentGameNewsBanner.link)">
-          <img :src="currentGameNewsBanner.imageUrl" alt="" />
-          <div class="home-news-banner-dots"><i v-for="(_, index) in gameNews.banners" :key="index"
+        <div v-if="currentGameNewsBanner || gameNewsLoading" class="home-news-banner" :aria-busy="gameNewsLoading" @click="currentGameNewsBanner && openHomeLink(currentGameNewsBanner.link)">
+          <img v-if="currentGameNewsBanner" :src="currentGameNewsBanner.imageUrl" alt="" />
+          <div v-if="currentGameNewsBanner" class="home-news-banner-dots"><i v-for="(_, index) in gameNews.banners" :key="index"
               :class="{ active: gameNewsBannerIndex === index }"></i></div>
         </div>
         <div class="home-news-tabs">
@@ -589,6 +576,7 @@ watch(showSettings, visible => {
           </div>
         </div>
       </section>
+    </div>
     </div>
 
     <div v-if="appSettings.showHomeLauncherContent && canSwitchBackground" class="home-background-hotzone"
@@ -743,10 +731,18 @@ watch(showSettings, visible => {
   /* Ensure content sits above shadow */
 }
 
-.version-info-panel {
+.home-left-column {
   position: absolute;
   left: var(--version-panel-gap);
   bottom: 24px;
+  width: min(360px, 34cqw);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 12px;
+  z-index: 2;
+}
+
+.version-info-panel {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -757,14 +753,13 @@ watch(showSettings, visible => {
   line-height: 1.3;
   letter-spacing: 0.02em;
   z-index: 2;
-  flex-wrap: wrap;
-  max-width: calc(100% - var(--action-bar-width) - (var(--version-panel-gap) * 3));
+  flex-wrap: nowrap;
+  max-width: 100%;
 }
 
+.version-info-panel .version-info-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
 .home-launcher-links {
-  position: absolute;
-  left: 38px;
-  bottom: 82px;
   z-index: 2;
   display: flex;
   align-items: end;
@@ -772,7 +767,8 @@ watch(showSettings, visible => {
 }
 
 .home-news-panel {
-  width: min(360px, 34cqw);
+  width: 100%;
+  box-sizing: border-box;
   height: min(410px, 54vh);
   min-height: 300px;
   padding: 0 14px 10px;
@@ -788,6 +784,7 @@ watch(showSettings, visible => {
 .home-news-banner {
   position: relative;
   flex: 0 0 auto;
+  width: 100%;
   aspect-ratio: 16 / 9;
   margin: 10px 0 8px;
   overflow: hidden;
@@ -797,6 +794,8 @@ watch(showSettings, visible => {
 }
 
 .home-news-banner img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -1215,20 +1214,9 @@ watch(showSettings, visible => {
 }
 
 @container home-main (max-width: 900px) {
-  .home-launcher-links {
-    left: 20px;
-    bottom: 92px;
-  }
-
-  .home-news-panel {
-    width: min(360px, calc(100cqw - 56px));
-    height: min(410px, 54vh);
-  }
-
-  .version-info-panel {
+  .home-left-column {
     left: 20px;
     bottom: 20px;
-    max-width: calc(100% - 330px);
   }
 
   .home-background-hotzone {
@@ -1382,11 +1370,7 @@ watch(showSettings, visible => {
     --version-panel-gap: 18px;
   }
 
-  .home-launcher-links { bottom: 92px; }
-
   .version-info-panel {
-    bottom: 20px;
-    max-width: calc(100% - var(--action-bar-width) - 54px);
     gap: 4px;
     font-size: 11px;
   }
@@ -1399,10 +1383,6 @@ watch(showSettings, visible => {
 }
 
 @container home-main (max-width: 720px) {
-  .version-info-panel {
-    max-width: calc(100% - var(--action-bar-width) - 44px);
-  }
-
   .action-bar {
     right: 18px;
   }

@@ -3899,10 +3899,10 @@ watch(activeChannelPreviewItem, (item) => {
 	box-shadow: inset 0 0 0 1px rgba(var(--theme-surface-tint-rgb), 0.05);
 }
 
-.submesh-drawer-row { display: flex; align-items: center; min-height: 38px; }
+.submesh-drawer-row { display: flex; align-items: center; min-height: 38px; border-radius: 9px; overflow: hidden; }
 .submesh-drawer-row .submesh-select-btn { flex: 1; }
 .submesh-lod-content, .submesh-ib-content { display: flex; flex-direction: column; gap: 6px; margin-left: 8px; padding-left: 6px; border-left: 1px solid rgba(var(--theme-surface-tint-rgb), 0.12); }
-.submesh-group-toggle { width: 100%; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 9px 4px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.submesh-group-toggle { width: 100%; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 9px 4px; border: 0; border-radius: 8px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .submesh-group-toggle:hover { background: rgba(var(--theme-surface-tint-rgb), 0.06); }
 .submesh-group-toggle span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .submesh-group-toggle small { opacity: 0.55; }
@@ -3926,6 +3926,7 @@ watch(activeChannelPreviewItem, (item) => {
 }
 
 .submesh-select-btn {
+    border-radius: 9px;
 	width: 100%;
 	min-height: 38px;
 	min-width: 0;

@@ -46,8 +46,24 @@ SophonBuildClient / GameServerConverter / GameChannelSdkService。
 - 主页进入、重新获得焦点和每三分钟异步检查版本。查询不会自动发起任何下载。
 - “游戏设置 → 游戏管理”提供目录、语音、更新 / 修复、预下载、恢复和原神换服。
   安装使用空的游戏目录，不使用 3DMigoto 的 `installDir`；成功后写入 `targetExePath`。
-- 安装界面按渠道和语音异步展示游戏大小、预计下载量、所需可用空间和磁盘剩余空间。
-  目录、渠道、语音变化立即废弃旧估算；点击安装时重新查询，确认框也显示空间。
+- 游戏管理先通过 `hoyoplay_status(localOnly: true)` 读取本地状态和已有版本缓存，
+  随后在后台自动获取所选渠道的版本（200ms 合并快速切换）。请求带 `homeOnly: true`，
+  不读取语音启动配置。选择即时生效，网络查询不禁用选项；首次加载用版本占位条和统一
+  同步状态展示，失败保留本地信息与旧缓存，不伪造版本或预下载是否开放。
+- 版本元数据使用独立共享 HTTP 客户端：连接上限 3 秒、单路线请求上限 8 秒，
+  复用连接池和已连通路线；成功缓存 120 秒、失败冷却 10 秒，相同渠道并发请求合并。
+  缓存按完整分支接口地址区分游戏和渠道，旧缓存只用于展示，实际任务仍重新验证官方分支。
+  下载连接继续使用原超时；不能用页面短超时限制大文件下载。
+- 点击安装、更新 / 修复、切服或预下载后，根据最终选择检查并确认执行。
+  “检查版本”和“重新估算”保留为主动只读查询入口；查询结果不能回写用户已修改的选择。
+  恢复操作仅走本地恢复，不依赖官方接口。
+- 管理页按版本概览、客户端选项和执行区组织；版本首载占位、同步失败和实际任务错误
+  分开呈现。使用真实组件及 Element Plus 的隔离浏览器夹具检查过 960px / 600px 宽度，
+  覆盖自动填入版本、选择可交互及横向溢出；夹具使用模拟服务，不证明真实官方接口耗时。
+  作为设置子页沿用浮窗现有卡片和按钮样式，避免重复大标题。预下载按钮只在所选渠道
+  已确认有可用分支且客户端匹配时出现，未知、未开放及切换渠道期间均隐藏。
+- 点击安装时查询游戏大小、预计下载量、所需可用空间和磁盘剩余空间，确认框也显示空间。
+  目录、渠道、语音变化立即废弃旧估算，管理页使用 `useInstallSpace` 的手动模式。
   空间不足时不能开始安装，查询失败会显示原因并允许重试，不把未知大小当成零。
   预估只读官方 Build 统计及当前目录，不创建事务、不下载客户端；尚未创建的目录查询
   最近已有父目录所在卷。续装可利用本目录中经过官方摘要验证的缓存清单抵扣已有暂存数据。
@@ -111,6 +127,7 @@ SophonBuildClient / GameServerConverter / GameChannelSdkService。
 cargo test --manifest-path src-tauri/Cargo.toml --lib hoyoplay:: -- --nocapture
 node --test scripts/tests/test-install-space.mjs scripts/tests/test-game-maintenance-entry.mjs scripts/tests/test-home-maintenance.mjs scripts/tests/test-launch-path.mjs scripts/tests/test-efmi-launch.mjs
 node --test scripts/tests/test-runtime-sync.mjs
+node --test scripts/tests/test-maintenance-decisions.mjs
 cargo test --manifest-path src-tauri/Cargo.toml --lib commands::game_discovery::tests -- --nocapture
 bunx vue-tsc --noEmit
 ```

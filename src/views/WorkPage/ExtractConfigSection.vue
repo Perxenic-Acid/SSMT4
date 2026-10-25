@@ -294,9 +294,23 @@ onBeforeUnmount(stopModelRowDrag);
 }
 
 .extract-tabs :deep(.el-tabs__item) {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   --el-color-primary: var(--theme-accent);
   color: rgba(var(--theme-text-secondary-rgb), 0.62);
 }
+
+.extract-tabs :deep(.el-tabs__header) { margin: 0 0 12px; }
+.extract-tabs :deep(.el-tabs__nav-wrap) { padding: 0; }
+.extract-tabs :deep(.el-tabs__nav) { float: none; display: flex; justify-content: flex-start; }
+.extract-tabs :deep(.el-tabs__item) { padding: 0 16px; }
+.extract-tabs :deep(.el-tabs__item:nth-child(2)) { padding-left: 0; }
 
 .extract-tabs :deep(.el-tabs__item.is-active),
 .extract-tabs :deep(.el-tabs__item:hover) {
