@@ -938,12 +938,31 @@ onMounted(async () => {
   display: flex;
   align-items: center;
 }
-.catalog-notice { flex: none; max-height: 30%; overflow-y: auto; border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); font-size: 12px; line-height: 1.6; }
-.catalog-notice summary { display: flex; align-items: center; gap: 9px; padding: 10px 14px; cursor: pointer; list-style: none; color: var(--t-warning-text); }
+.catalog-notice {
+  flex: none;
+  max-height: 30%;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--t-warning-border) 72%, rgba(255, 255, 255, .16));
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(var(--theme-warning-rgb), .16), rgba(var(--theme-warning-rgb), .06)),
+    rgba(7, 11, 18, .94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .22);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.catalog-notice summary { display: flex; align-items: center; gap: 9px; padding: 10px 14px; cursor: pointer; list-style: none; color: var(--t-warning-text); font-weight: 600; }
 .catalog-notice summary::-webkit-details-marker { display: none; }
 .catalog-notice summary > svg { flex: none; width: 16px; height: 16px; }
-.notice-details { margin-left: auto; white-space: nowrap; color: var(--market-muted); font-size: 11px; }
-.catalog-notice p { padding: 0 14px 12px 39px; margin: 0; overflow-wrap: anywhere; color: var(--market-muted); }
+.notice-details { margin-left: auto; white-space: nowrap; color: color-mix(in srgb, var(--t-page-text) 72%, transparent); font-size: 11px; font-weight: 400; }
+.catalog-notice p {
+  padding: 0 14px 12px 39px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: rgba(var(--theme-text-primary-rgb), .92);
+  font: 11px/1.65 ui-monospace, Consolas, monospace;
+  user-select: text;
+}
 .review-detail { font: 11px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
 .review-disclaimer { padding: 12px; border: var(--t-page-panel-border); border-radius: 6px; line-height: 1.6; }
 .native-risk-dialog { color: var(--t-page-text); font-size: 12px; line-height: 1.75; }
