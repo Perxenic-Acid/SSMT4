@@ -10,8 +10,8 @@ import { Check, Download, Monitor, Refresh } from '@element-plus/icons-vue';
 const props = defineProps<{ gameName: string; targetExePath: string }>();
 const { t, locale } = useI18n();
 const label = (zh: string, en: string) => String(locale.value).startsWith('zh') ? zh : en;
-const hotRuntime = ref<{ root: string; profile: string } | null>(null);
-const hotRuntimes = ref<Record<string, { root: string; profile: string }>>({});
+const hotRuntime = ref<{ root: string; profile: string; route?: string } | null>(null);
+const hotRuntimes = ref<Record<string, { root: string; profile: string; route?: string }>>({});
 interface HotHistoryEntry { root: string; profile: string; route: string; revision: string; current: boolean; usable: boolean; reason?: string | null; removable?: boolean; cleanupReason?: string | null }
 const hotHistory = ref<HotHistoryEntry[]>([]);
 const historySelection = ref('');
@@ -50,7 +50,7 @@ interface Dlss5RouteScan {
 
 interface Dlss5LastRunStatus {
   verdict: 'inactive' | 'engaged' | 'unknown';
-  reason: 'd3d11_interposer_race' | 'feeder_stopped' | 'nr_evaluated' | 'feature18_evaluated' | 'no_dlss_create' | 'no_nr_evidence' | 'no_log' | 'log_precedes_install';
+  reason: 'd3d11_interposer_race' | 'feeder_stopped' | 'bridge_stopped' | 'nr_evaluated' | 'feature18_evaluated' | 'no_dlss_create' | 'no_nr_evidence' | 'no_log' | 'log_precedes_install';
   observedAtMs: number | null;
   warning: 'depth_source_mismatch' | null;
 }
@@ -177,7 +177,7 @@ const installSelectedDlss5Route = async (offline = false) => {
       } else {
         const onProgress = new Channel<{ phase: string; downloadedBytes: number; totalBytes: number }>();
         onProgress.onmessage = event => { if (stillCurrent()) downloadProgress.value = event; };
-        await invoke(route === 'gimi-hot' ? 'download_gimi_hot_runtime' : 'download_dlss5_hot_runtime', { gameName, gameExecutable, profile, onProgress });
+        await invoke(route === 'gimi-hot' ? 'download_gimi_hot_runtime' : 'download_dlss5_hot_runtime', { gameName, gameExecutable, profile, route, onProgress });
       }
       ElMessage.success(label(`${gameName} 热注入组件已配置`, `${gameName} hot-injection components configured`));
       if (stillCurrent()) await refreshGraphicsState();
@@ -293,12 +293,14 @@ onUnmounted(() => {
     <div class="graphics-status" :class="{ 'is-configured': hotRuntime || dlss5State?.state === 'managed' }" role="status">
       <span class="graphics-status-icon"><Check v-if="hotRuntime || dlss5State?.state === 'managed'" /><Monitor v-else /></span>
       <div>
-        <strong>{{ graphicsStateLoading ? label('正在读取组件状态…', 'Checking components…') : hotRuntime
+        <strong>{{ graphicsStateLoading ? label('正在读取组件状态…', 'Checking components…')
+          : dlss5LastRun?.verdict === 'inactive' ? label('上次运行：神经渲染未生效', 'Last run: neural rendering inactive')
+          : dlss5LastRun?.verdict === 'engaged' ? label('上次运行：已确认神经渲染执行', 'Last run: neural rendering evaluation confirmed') : hotRuntime
           ? label('热注入组件已配置', 'Hot-injection components configured') : dlss5State?.state === 'managed'
             ? t('gameSettingsModal.fields.graphicsManagedState', { route: dlss5State.route || '—', owner: dlss5State.owner || 'DLSS5-Swapper' })
             : dlss5State?.state === 'broken' ? t('gameSettingsModal.fields.graphicsBrokenState')
               : label('尚未配置组件', 'Components not configured') }}</strong>
-        <p v-if="hotRuntime">{{ hotRuntime.profile === 'rtx50' ? 'RTX 50' : 'RTX 30 / 40' }} · {{ label('可重新下载或切换显卡组件', 'Reinstall or choose another GPU profile') }}</p>
+        <p v-if="hotRuntime">{{ hotRuntime.profile === 'rtx50' ? 'RTX 50' : 'RTX 30 / 40' }} · {{ hotRuntime.route ? routeLabel(`ssmt-${hotRuntime.route}`) : routeLabel(graphicsSelectedRoute) }} · {{ label('已配置组件不代表渲染已生效', 'Configured components do not confirm rendering is active') }}</p>
         <p v-else-if="isGimi()">{{ label('选择显卡后，自动下载并部署完整组件。', 'Choose your GPU to download and deploy the complete components.') }}</p>
         <p v-else>{{ label('选择适合当前游戏的渲染路线。', 'Choose a rendering route for this game.') }}</p>
       </div>
@@ -397,6 +399,10 @@ onUnmounted(() => {
       <p>{{ label('请先关闭游戏，再自动下载。组件位于 SSMT 自有目录，通过 SSMT 直接启动时热注入；若已有 Swapper 或 RHI / ReShade 安装，请先通过原管理器恢复，避免重复加载 Host。', 'Close the game before setup. Components live in SSMT storage and are hot-injected on direct launch. Restore any previous Swapper or RHI / ReShade installation through its manager to avoid duplicate hosts.') }}</p>
       <p>{{ label('组件按固定版本、大小及哈希校验，来自 ReShade、Feeder、DX11 Bridge、LumeniteFX 和 RHI 组件库。配置完成后仍需游戏内确认 NR 生效。', 'Pinned components are verified by size and hash, from ReShade, Feeder, DX11 Bridge, LumeniteFX and the RHI component repository. Verify NR rendering in game after setup.') }}</p>
       <code v-if="hotRuntime">{{ hotRuntime.root }}</code>
+    </div>
+    <div v-if="graphicsSelectedRoute === 'ssmt-feeder'" class="graphics-startup">
+      <h4>{{ label('Feeder 游戏内控制', 'Feeder in-game controls') }}</h4>
+      <p>{{ label('按 Home 打开 ReShade：在效果页启用 DLSS5_Feed，在附加组件页调整 DLSS5 Feeder 和神经渲染。先选择与主画面匹配的深度缓冲，再比较开启与关闭的画面；无需开启游戏原生 DLSS。', 'Press Home to open ReShade. Enable DLSS5_Feed under Effects and adjust DLSS5 Feeder and Neural Rendering under Add-ons. Select the depth buffer matching the main view before comparing on/off output. Native in-game DLSS is not required.') }}</p>
     </div>
     <p v-if="isGimi()" class="graphics-hint">{{ label('自动下载并配置成功后，此游戏下次启动使用所选实现；切换失败保留原路线。', 'Successful setup selects this implementation for the next launch; a failed setup keeps the previous route.') }}</p>
     <div v-if="dlss5State?.state === 'managed' || hotRuntime" class="graphics-hint"

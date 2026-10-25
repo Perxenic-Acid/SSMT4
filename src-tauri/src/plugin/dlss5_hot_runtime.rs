@@ -84,12 +84,37 @@ fn manifest_for(registry: &PluginRegistry) -> Result<Manifest, String> {
     }
 }
 
+fn manifest_for_setup(registry: &PluginRegistry, route: &str) -> Result<Manifest, String> {
+    let mut manifest = manifest_for(registry)?;
+    // 仅迁移新配置的 Feeder 旧基线。既有安装继续按其快照校验，其他路线和新包不降级。
+    if route == "feeder" {
+        for asset in &mut manifest.assets {
+            if asset.sha256 == "553b1619b9e5ddfbcb4ebc7f2f3bffff9256a48a25b988f4817f5c63f4caa1de" {
+                *asset = serde_json::from_str(include_str!("dlss5_feeder_consumer.json"))
+                    .map_err(|error| error.to_string())?;
+                manifest.revision.push_str("-feeder-rdx85rc5");
+            }
+        }
+    }
+    Ok(manifest)
+}
+
 fn route_for_registry(registry: &PluginRegistry, preset: &str, executable: &Path) -> Result<(String, String), String> {
     if let Some(policy) = super::dlss5_policy::Policy::from_registry(registry)? {
         let route = policy.select(preset, executable)?;
         return Ok((route.route.clone(), route.api.clone()));
     }
     route_for(preset, executable).map(|(route, api)| (route.into(), api.into()))
+}
+
+// 鸣潮的 Feeder 与原生 Bridge 共用 DX11 热注入，组件按玩家选择分别配置。
+fn supports_route(default: &str, preset: &str, executable: &Path, selected: &str) -> bool {
+    selected == default
+        || (default == "native-bridge"
+            && selected == "feeder"
+            && preset.eq_ignore_ascii_case("WWMI")
+            && executable.file_name().and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")))
 }
 
 pub(super) fn applies(executable: &Path) -> bool {
@@ -150,6 +175,8 @@ pub(super) fn route_scan(
     Ok(Dlss5RouteScan {
         routes: if gimi_hot_runtime::applies(executable) {
             vec!["gimi-hot".into(), "ssmt-feeder".into()]
+        } else if supports_route(&route, preset, executable, "feeder") && route != "feeder" {
+            vec!["ssmt-feeder".into(), format!("ssmt-{route}")]
         } else {
             vec![format!("ssmt-{route}")]
         },
@@ -409,14 +436,20 @@ pub async fn download_dlss5_hot_runtime(
     game_name: String,
     game_executable: String,
     profile: String,
+    route: Option<String>,
     on_progress: Channel<DownloadProgress>,
 ) -> Result<Installation, String> {
     let _lock = INSTALL_LOCK
         .try_lock()
         .map_err(|_| "DLSS5 组件正在配置，请稍候")?;
-    let (route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
+    let (default_route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
+    let requested = route.as_deref().unwrap_or(&default_route);
+    let route = requested.strip_prefix("ssmt-").unwrap_or(requested).to_string();
+    if !supports_route(&default_route, &game_scope_preset(&game_name), Path::new(&game_executable), &route) {
+        return Err("所选 DLSS5 路线与当前游戏预设不匹配".into());
+    }
     let registry = PluginRegistry::from_default_location().map_err(|e| e.to_string())?.for_game(&game_name);
-    let manifest = manifest_for(&registry)?;
+    let manifest = manifest_for_setup(&registry, &route)?;
     let assets = selected(&manifest, &route, &profile)?;
     let total_bytes = assets.iter().map(|asset| asset.size).sum();
     let parent = installation_parent();
@@ -477,7 +510,7 @@ pub async fn download_dlss5_hot_runtime(
     };
     validate(&installation, &manifest)?;
     let (current_route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
-    if current_route != route {
+    if current_route != default_route {
         return Err("下载期间游戏预设已改变，请重新配置".into());
     }
     catalog::record_installation(&game_name, &installation)?;
@@ -644,7 +677,7 @@ pub fn prepare_dlss5_hot_runtime(
     let installation =
         load(&game_name)?.ok_or("DLSS5 组件尚未配置，请到插件市场的功能设置中自动下载并配置")?;
     require_owned(&installation)?;
-    if installation.route != route {
+    if !supports_route(&route, &game_scope_preset(&game_name), executable, &installation.route) {
         return Err("DLSS5 组件与当前游戏预设不符，请重新配置".into());
     }
     let mut plan = prepare_at(&registry, &installation)?;
@@ -730,6 +763,35 @@ mod tests {
         }
         assert!(route_for("GIMI", Path::new("StarRail.exe")).is_err());
         assert!(route_for("SRMI", Path::new("ZenlessZoneZero.exe")).is_err());
+    }
+
+    #[test]
+    fn feeder_setup_updates_consumer_without_changing_legacy_baselines() {
+        let temp = std::env::temp_dir().join(format!(
+            "ssmt-feeder-baseline-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let registry = PluginRegistry::new(temp.join("plugins")).unwrap();
+        let feeder = manifest_for_setup(&registry, "feeder").unwrap();
+        let bridge = manifest_for_setup(&registry, "native-bridge").unwrap();
+        assert!(feeder.revision.ends_with("-feeder-rdx85rc5"));
+        assert_eq!(bridge.revision, manifest().unwrap().revision);
+        for profile in ["rtx30", "rtx50"] {
+            let consumer = selected(&feeder, "feeder", profile).unwrap().into_iter()
+                .find(|asset| asset.files.iter().any(|file| file.path == "renodx-dlss5.addon64")).unwrap();
+            assert_eq!(consumer.files[0].size, 3039744);
+            assert!(consumer.url.contains("8.5.0-rc5"));
+        }
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn wuwa_feeder_is_an_alternative_without_changing_other_presets() {
+        let executable = Path::new("Client-Win64-Shipping.exe");
+        assert!(supports_route("native-bridge", "WWMI", executable, "feeder"));
+        assert!(supports_route("native-bridge", "WWMI", executable, "native-bridge"));
+        assert!(!supports_route("native-bridge", "WWMI", executable, "native"));
+        assert!(!supports_route("native-bridge", "ZZMI", executable, "feeder"));
+        assert!(!supports_route("native-bridge", "WWMI", Path::new("Other.exe"), "feeder"));
     }
 
     #[test]

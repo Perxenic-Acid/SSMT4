@@ -1,0 +1,17 @@
+{
+  "zipOffset": 0,
+  "zipLength": 0,
+  "files": [
+    {
+      "path": "renodx-dlss5.addon64",
+      "entry": "renodx-dlss5.addon64",
+      "sha256": "f0ed0bf424ac29c2c83212e259e89d3de5fb995317c34d1bd2c76bea157253cb",
+      "size": 3039744
+    }
+  ],
+  "route": "",
+  "url": "https://github.com/RankFTW/rhi-repo/releases/download/renodx-dlss5-8.5.0-rc5/renodx-dlss5_8.5.0-rc5.zip",
+  "profile": "",
+  "size": 1100477,
+  "sha256": "8b56eeb0be64e97b30120bee9da40117a77a41245d1d6d1ca0dc78c6b1f1e1eb"
+}

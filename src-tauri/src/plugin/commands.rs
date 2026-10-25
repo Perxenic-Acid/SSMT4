@@ -69,6 +69,8 @@ fn inspect_dlss5_last_run_log(path: &std::path::Path) -> Result<Dlss5LastRunStat
         ("inactive", "d3d11_interposer_race")
     } else if log.contains("[DLSS 5 Feed] stopped:") {
         ("inactive", "feeder_stopped")
+    } else if log.contains("[DLSS 5 Bridge] stopped:") {
+        ("inactive", "bridge_stopped")
     } else if log.contains("NO DLSS CREATE SEEN") {
         ("inactive", "no_dlss_create")
     } else if log.contains("NR-VERDICT state=ENGAGED") {
@@ -1201,6 +1203,10 @@ mod tests {
         let status = inspect_dlss5_last_run_log(&log).unwrap();
         assert_eq!(status.verdict, "inactive");
         assert_eq!(status.reason, "d3d11_interposer_race");
+        fs::write(&log, "addon loaded\n[DLSS 5 Bridge] stopped: resource build. The game renders normally.\n").unwrap();
+        let status = inspect_dlss5_last_run_log(&log).unwrap();
+        assert_eq!(status.verdict, "inactive");
+        assert_eq!(status.reason, "bridge_stopped");
         fs::write(
             &log,
             "addon loaded\ninline feature 18 evaluation succeeded (count=60)\nThe depth source is 5120x3200, most likely a shadow map or atlas\n",

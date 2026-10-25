@@ -54,7 +54,6 @@
             "resources/upx.exe",
             "resources/wuwa_settings.exe",
             "resources/DefultTextures/**/*",
-            "resources/DX12/**/*",
             "resources/Games/**/*",
             "resources/GameType/**/*"
         ]

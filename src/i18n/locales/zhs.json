@@ -142,6 +142,7 @@
       "graphicsStack": "当前游戏图形栈",
       "graphicsManagedState": "DLSS5 Route：{route}；配置所有者：{owner}",
       "graphicsInstalledOnly": "仅确认文件已安装，不能据此判断 DLSS5 已生效。最近一次运行",
+      "graphicsRuntime_bridge_stopped": "DX11 Bridge 初始化失败或已停止，神经渲染未生效",
       "graphicsRuntime_feeder_stopped": "Feeder 已停止，神经渲染未生效",
       "graphicsRuntime_d3d11_interposer_race": "Feeder 因 DX11 多线程保护不可用且 Present 路径存在插层而停止；神经渲染未生效",
       "graphicsRuntime_nr_evaluated": "日志报告 NR 已执行；请核对持续增长的帧数",

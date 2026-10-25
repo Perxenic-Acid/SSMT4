@@ -143,6 +143,7 @@
       "graphicsStack": "Game graphics stack",
       "graphicsManagedState": "DLSS5 route: {route}; config owner: {owner}",
       "graphicsInstalledOnly": "Files are installed; this does not prove DLSS5 is active. Last run",
+      "graphicsRuntime_bridge_stopped": "DX11 Bridge failed or stopped; neural rendering is inactive",
       "graphicsRuntime_feeder_stopped": "Feeder stopped; neural rendering is inactive",
       "graphicsRuntime_d3d11_interposer_race": "Feeder stopped because DX11 multithread protection is unavailable with a Present interposer; neural rendering is inactive",
       "graphicsRuntime_nr_evaluated": "Log reports NR activity; check that the frame count keeps increasing",

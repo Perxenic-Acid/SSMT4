@@ -265,7 +265,7 @@ pub fn select_dlss5_hot_runtime(
         .find(|item| item.root == root)
         .ok_or("该组件不在当前实例历史中")?;
     if selected.route == "gimi-hot" && !gimi_hot_runtime::applies(Path::new(&game_executable))
-        || selected.route != "gimi-hot" && selected.route != route
+        || selected.route != "gimi-hot" && !supports_route(&route, &game_scope_preset(&game_name), Path::new(&game_executable), &selected.route)
     {
         return Err("组件路线与当前游戏预设不匹配".into());
     }
