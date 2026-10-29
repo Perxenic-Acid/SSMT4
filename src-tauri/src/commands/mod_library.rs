@@ -60,7 +60,10 @@ fn upsert_group(groups: &mut Vec<GroupInfo>, group: GroupInfo) {
 
     let is_directory_link = existing.is_directory_link || group.is_directory_link;
     if group.enabled && !existing.enabled {
-        let icon_path = group.icon_path.clone().or_else(|| existing.icon_path.clone());
+        let icon_path = group
+            .icon_path
+            .clone()
+            .or_else(|| existing.icon_path.clone());
         *existing = GroupInfo {
             icon_path,
             is_directory_link,
@@ -1501,10 +1504,7 @@ mod group_dedupe_tests {
         let mut disabled = group("Characters", "DISABLED_Characters", false, 2);
         disabled.icon_path = Some("C:/icon.png".to_string());
         upsert_group(&mut groups, disabled);
-        upsert_group(
-            &mut groups,
-            group("Characters", "Characters", true, 5),
-        );
+        upsert_group(&mut groups, group("Characters", "Characters", true, 5));
 
         assert_eq!(groups.len(), 1);
         assert!(groups[0].enabled);
@@ -1546,11 +1546,8 @@ mod group_dedupe_tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "ssmt-mod-count-{}-{}",
-            std::process::id(),
-            unique
-        ));
+        let root =
+            std::env::temp_dir().join(format!("ssmt-mod-count-{}-{}", std::process::id(), unique));
         let first_mod = root.join("FirstMod");
         let second_mod = root.join("SecondMod");
         let modular_mod = root.join("ModularMod");

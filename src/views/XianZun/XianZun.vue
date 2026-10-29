@@ -7784,10 +7784,10 @@ onUnmounted(() => {
 /* image lightbox (template element, global for overlay) */
 .xz-lightbox {
   position: fixed;
-  top: 32px; /* below the fixed TitleBar */
+  top: var(--ssmt-content-overlay-top); /* below the fixed TitleBar */
   right: 0;
   bottom: 0;
-  left: 0;
+  left: var(--ssmt-content-overlay-left);
   z-index: 3000;
   display: flex;
   align-items: center;
@@ -7838,8 +7838,8 @@ onUnmounted(() => {
 
 /* Runtime logs drawer — slide in below the fixed TitleBar */
 .xz-log-drawer {
-  top: 32px !important;
-  height: calc(100% - 32px) !important;
+  top: var(--ssmt-content-overlay-top) !important;
+  height: calc(100% - var(--ssmt-content-overlay-top)) !important;
 }
 
 /* usage & context popover */

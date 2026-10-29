@@ -170,10 +170,21 @@ fn prepare_hot_at(
     };
     let bridge = HoYoShadeBridge::from_installed(plugin).map_err(|error| error.to_string())?;
     let policy = super::shade_policy::Policy::load(plugin)?;
-    let process = executable.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-    if !policy.processes.iter().any(|name| name.eq_ignore_ascii_case(process)) { return Ok(None); }
+    let process = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if !policy
+        .processes
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(process))
+    {
+        return Ok(None);
+    }
     let dependency = policy.dependency_root(plugin)?;
-    bridge.validate_external_directory(&dependency).map_err(|e| e.to_string())?;
+    bridge
+        .validate_external_directory(&dependency)
+        .map_err(|e| e.to_string())?;
     let dll = checked_path(&dependency, &policy.host_dll)?;
     super::gimi_hot_runtime::ensure_stopped(executable)?;
     super::dlss5_hot_runtime::ensure_no_external_host(executable)?;
@@ -235,7 +246,10 @@ fn prepare_hot_at(
     super::hot_reshade::save_config(&root, composed, "", &[])?;
     Ok(Some(HotRuntimePlan {
         dlls: vec![dll],
-        log_sources: vec![crate::commands::launch_logs::LaunchLogSource { name: "ReShade".into(), path: root.join("ReShade.log") }],
+        log_sources: vec![crate::commands::launch_logs::LaunchLogSource {
+            name: "ReShade".into(),
+            path: root.join("ReShade.log"),
+        }],
         environment: [
             (
                 "RESHADE_BASE_PATH_OVERRIDE".into(),

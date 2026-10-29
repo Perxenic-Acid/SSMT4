@@ -123,6 +123,7 @@ pub fn run() {
             app.manage(commands::mod_manager::ModWatcher(Mutex::new(None)));
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
             app.manage(commands::launch_shortcut::LaunchConsoleShortcut::default());
+            app.manage(commands::liquid_gravity_probe::LiquidGravityProbeProcess::default());
 
             if show_window_shortcut_enabled_on_launch(app) {
                 if let Err(error) = register_show_window_shortcut(app.handle()) {
@@ -145,6 +146,9 @@ pub fn run() {
             hoyoplay::hoyoplay_check_launch,
             set_show_window_shortcut_enabled,
             commands::launch_shortcut::set_launch_console_shortcut,
+            commands::liquid_gravity_probe::liquid_gravity_probe_detect,
+            commands::liquid_gravity_probe::start_liquid_gravity_probe_editor,
+            commands::liquid_gravity_probe::stop_liquid_gravity_probe_editor,
             plugin::commands::plugin_registry_snapshot,
             plugin::commands::plugin_registry_snapshot_for_game,
             plugin::commands::plugin_ui_routes,

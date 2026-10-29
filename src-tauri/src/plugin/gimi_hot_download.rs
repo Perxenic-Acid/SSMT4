@@ -50,7 +50,10 @@ fn manifest_for(registry: &PluginRegistry) -> Result<Manifest, String> {
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
-    if manifest.revision.len() != 40 || !manifest.revision.bytes().all(|c| c.is_ascii_hexdigit()) || manifest.assets.is_empty() {
+    if manifest.revision.len() != 40
+        || !manifest.revision.bytes().all(|c| c.is_ascii_hexdigit())
+        || manifest.assets.is_empty()
+    {
         return Err("GIMI 组件版本声明无效".into());
     }
     let mut names = std::collections::HashSet::new();
@@ -58,17 +61,32 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
         for path in [&asset.path, &asset.source] {
             crate::plugin::validate_package_relative_path(path).map_err(|e| e.to_string())?;
         }
-        if asset.size == 0 || asset.size > 256 * 1024 * 1024
-            || asset.sha256.len() != 64 || !asset.sha256.bytes().all(|c| c.is_ascii_hexdigit())
+        if asset.size == 0
+            || asset.size > 256 * 1024 * 1024
+            || asset.sha256.len() != 64
+            || !asset.sha256.bytes().all(|c| c.is_ascii_hexdigit())
             || !names.insert(asset.path.to_ascii_lowercase())
-            || asset.profile.as_ref().is_some_and(|profile| !["rtx30", "rtx50"].contains(&profile.as_str())) {
+            || asset
+                .profile
+                .as_ref()
+                .is_some_and(|profile| !["rtx30", "rtx50"].contains(&profile.as_str()))
+        {
             return Err("GIMI 组件路径、大小或校验声明无效".into());
         }
     }
     let url = reqwest::Url::parse(&manifest.nr_archive.url).map_err(|e| e.to_string())?;
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
-        || manifest.nr_archive.size == 0 || manifest.nr_archive.size > 1024 * 1024 * 1024
-        || manifest.nr_archive.sha256.len() != 64 || !manifest.nr_archive.sha256.bytes().all(|c| c.is_ascii_hexdigit()) {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || manifest.nr_archive.size == 0
+        || manifest.nr_archive.size > 1024 * 1024 * 1024
+        || manifest.nr_archive.sha256.len() != 64
+        || !manifest
+            .nr_archive
+            .sha256
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit())
+    {
         return Err("GIMI NR 归档声明无效".into());
     }
     Ok(())
@@ -83,7 +101,11 @@ pub(super) struct PendingInstallation {
 
 impl PendingInstallation {
     pub(super) fn new(root: PathBuf, parent: PathBuf) -> Self {
-        Self { root, parent, committed: false }
+        Self {
+            root,
+            parent,
+            committed: false,
+        }
     }
 }
 
@@ -256,7 +278,9 @@ pub async fn download_gimi_hot_runtime(
         .map_err(|_| "DLSS5 组件正在下载，请等待当前任务完成")?;
     profile_files(&profile)?;
     require_enabled(&game_name, Path::new(&game_executable))?;
-    let registry = PluginRegistry::from_default_location().map_err(|e| e.to_string())?.for_game(&game_name);
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|e| e.to_string())?
+        .for_game(&game_name);
     let manifest = manifest_for(&registry)?;
     let client = reqwest::Client::builder()
         .user_agent("SSMT4-DLSS5-Setup")
@@ -293,7 +317,10 @@ mod tests {
 
     #[test]
     fn abandoned_installations_only_cleanup_the_expected_parent_and_keep_committed_copies() {
-        let root = std::env::temp_dir().join(format!("ssmt-gimi-pending-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-gimi-pending-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
         let parent = root.join("managed");
         let outside = root.join("outside");
         let pending = parent.join("pending");

@@ -216,6 +216,11 @@ const stepBackground = (delta: number) => {
   if (!canSwitchBackground.value) return
   void applyBackgroundAt(currentBackgroundIndex.value + delta)
 }
+const handleBackgroundFocusOut = (event: FocusEvent) => {
+  const rail = event.currentTarget as HTMLElement | null
+  const next = event.relatedTarget as Node | null
+  if (!next || !rail?.contains(next)) showBackgroundControls.value = false
+}
 const selectBackground = (index: number) => {
   void applyBackgroundAt(index)
 }
@@ -559,11 +564,14 @@ watch(showSettings, visible => {
       v-if="appSettings.showHomeLauncherContent && appSettings.showHomeGameNews && (gameNews.banners.length || gameNews.posts.length || gameNewsLoading)"
       class="home-launcher-links">
       <section class="home-news-panel">
-        <div v-if="currentGameNewsBanner || gameNewsLoading" class="home-news-banner" :aria-busy="gameNewsLoading" @click="currentGameNewsBanner && openHomeLink(currentGameNewsBanner.link)">
+        <button v-if="currentGameNewsBanner || gameNewsLoading" type="button" class="home-news-banner"
+          :aria-busy="gameNewsLoading" :disabled="!currentGameNewsBanner"
+          :aria-label="currentGameNewsBanner ? t('home.gameNews.info') : undefined"
+          @click="currentGameNewsBanner && openHomeLink(currentGameNewsBanner.link)">
           <img v-if="currentGameNewsBanner" :src="currentGameNewsBanner.imageUrl" alt="" />
-          <div v-if="currentGameNewsBanner" class="home-news-banner-dots"><i v-for="(_, index) in gameNews.banners" :key="index"
-              :class="{ active: gameNewsBannerIndex === index }"></i></div>
-        </div>
+          <span v-if="currentGameNewsBanner" class="home-news-banner-dots"><i v-for="(_, index) in gameNews.banners" :key="index"
+              :class="{ active: gameNewsBannerIndex === index }"></i></span>
+        </button>
         <div class="home-news-tabs">
           <button v-for="tab in gameNewsTabs" :key="tab.key" type="button" :class="{ active: gameNewsTab === tab.key }"
             @click="gameNewsTab = tab.key">{{ tab.label }}</button>
@@ -582,7 +590,9 @@ watch(showSettings, visible => {
     <div v-if="appSettings.showHomeLauncherContent && canSwitchBackground" class="home-background-hotzone"
       @mouseenter="showBackgroundControls = true" @mouseleave="showBackgroundControls = false">
       <aside class="home-background-rail" :class="{ 'is-visible': showBackgroundControls }"
-        @mouseenter="showBackgroundControls = true">
+        @mouseenter="showBackgroundControls = true"
+        @focusin="showBackgroundControls = true"
+        @focusout="handleBackgroundFocusOut">
         <button v-if="currentBackgroundIsVideo" type="button" class="home-background-playback"
           :title="t('home.launcherLinks.toggleVideoPlayback')" @click="toggleBackgroundVideo">
           <el-icon>
@@ -643,13 +653,14 @@ watch(showSettings, visible => {
       </div>
       <!-- Start Game Button -->
       <div class="start-game-area">
-      <div class="start-game-btn" @click="launchGame" :class="{ 'disabled': isStartButtonDisabled }">
-        <div class="icon-wrapper">
-          <div v-if="isUpdatingPackage || checkingClient || maintenanceBusy" class="loading-spinner"></div>
-          <div v-else class="play-triangle"></div>
-        </div>
+      <button type="button" class="start-game-btn" :disabled="isStartButtonDisabled"
+        :class="{ 'disabled': isStartButtonDisabled }" @click="launchGame">
+        <span class="icon-wrapper">
+          <span v-if="isUpdatingPackage || checkingClient || maintenanceBusy" class="loading-spinner"></span>
+          <span v-else class="play-triangle"></span>
+        </span>
         <span class="btn-text">{{ mainButtonText }}</span>
-      </div>
+      </button>
       <button v-if="clientMissing" type="button" class="specify-installed-client" :disabled="isStartButtonDisabled" @click="specifyInstalledClient">
         {{ locale.startsWith('zh') ? '已安装? 点击此处手动指定' : 'Already installed? Select the executable' }}
       </button>
@@ -787,10 +798,25 @@ watch(showSettings, visible => {
   width: 100%;
   aspect-ratio: 16 / 9;
   margin: 10px 0 8px;
+  padding: 0;
   overflow: hidden;
+  border: 0;
   border-radius: 8px;
-  cursor: pointer;
   background: rgba(0, 0, 0, .2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-news-banner:disabled {
+  cursor: default;
+}
+
+.home-news-banner:focus-visible,
+.home-background-rail button:focus-visible {
+  outline: 2px solid var(--ssmt-brand-accent);
+  outline-offset: 2px;
 }
 
 .home-news-banner img {
@@ -957,7 +983,8 @@ watch(showSettings, visible => {
   pointer-events: none;
 }
 
-.home-background-rail.is-visible {
+.home-background-rail.is-visible,
+.home-background-rail:focus-within {
   opacity: 1;
   transform: translateX(0);
   pointer-events: auto;
@@ -982,7 +1009,7 @@ watch(showSettings, visible => {
 }
 
 .home-background-arrow:hover {
-  color: var(--theme-accent, #75d6bb);
+  color: var(--theme-accent, var(--ssmt-brand-accent));
 }
 
 .home-background-playback {
@@ -1001,7 +1028,7 @@ watch(showSettings, visible => {
 }
 
 .home-background-playback:hover {
-  color: var(--theme-accent, #75d6bb);
+  color: var(--theme-accent, var(--ssmt-brand-accent));
 }
 
 .home-background-list {
@@ -1041,7 +1068,7 @@ watch(showSettings, visible => {
 
 .home-background-thumb.active {
   opacity: 1;
-  border-color: var(--theme-accent, #75d6bb);
+  border-color: var(--theme-accent, var(--ssmt-brand-accent));
 }
 
 .home-background-thumb-image {
@@ -1242,6 +1269,7 @@ watch(showSettings, visible => {
 .specify-installed-client:hover { color: var(--theme-accent); }
 .specify-installed-client:disabled { opacity: .45; cursor: default; }
 .start-game-btn {
+  appearance: none;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 30px;
@@ -1253,7 +1281,9 @@ watch(showSettings, visible => {
   display: flex;
   align-items: center;
   cursor: pointer;
+  font: inherit;
   font-family: 'Microsoft YaHei', sans-serif;
+  text-align: left;
 }
 
 .start-game-btn::before {
@@ -1284,6 +1314,15 @@ watch(showSettings, visible => {
   transform: translateY(0) scale(0.98);
 }
 
+.start-game-btn:focus-visible {
+  outline: 2px solid var(--ssmt-brand-accent);
+  outline-offset: 3px;
+}
+
+.start-game-btn:disabled {
+  cursor: default;
+}
+
 .start-game-btn .btn-text {
   font-size: 18px;
   font-weight: 700;
@@ -1306,6 +1345,7 @@ watch(showSettings, visible => {
 }
 
 .play-triangle {
+  display: block;
   width: 0;
   height: 0;
   border-style: solid;
@@ -1316,6 +1356,7 @@ watch(showSettings, visible => {
 }
 
 .loading-spinner {
+  display: block;
   width: 14px;
   height: 14px;
   border: 2px solid rgba(255, 255, 255, 0.1);

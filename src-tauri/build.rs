@@ -8,7 +8,8 @@ fn main() {
         &env::var("TARGET").unwrap_or_default(),
         &env::var("PROFILE").unwrap_or_default(),
         &env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default(),
-    ).unwrap_or_else(|error| panic!("{error}"));
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     build_directxtex_bridge();
     configure_windows_delay_load();
     copy_windivert_runtime_files();

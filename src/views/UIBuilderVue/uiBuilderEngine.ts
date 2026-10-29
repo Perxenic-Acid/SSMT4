@@ -2509,7 +2509,8 @@ void main(vs2ps input, out float4 result : SV_Target0)
     }
 
     function getWorkAreaDesignSize() {
-        const aspect = parseFloat(document.getElementById('global_aspect').value) || 1.777;
+        const aspectInput = document.getElementById('global_aspect') as HTMLInputElement | null;
+        const aspect = parseFloat(aspectInput?.value || '') || 1.777;
         return {
             width: BASE_HEIGHT * aspect,
             height: BASE_HEIGHT
@@ -7058,7 +7059,9 @@ void main(vs2ps input, out float4 result : SV_Target0)
     function toggleTheme() { root.classList.toggle('light-mode'); }
     
     function updateAspectRatio() {
-        const aspect = parseFloat(document.getElementById('global_aspect').value) || 1.777;
+        const aspectInput = document.getElementById('global_aspect') as HTMLInputElement | null;
+        if(!aspectInput || !workArea?.isConnected) return;
+        const aspect = parseFloat(aspectInput.value) || 1.777;
         syncGridSnapYWithAspect();
         const design = getWorkAreaDesignSize();
         workArea.style.width = `${design.width}px`;
@@ -7099,6 +7102,7 @@ void main(vs2ps input, out float4 result : SV_Target0)
     }
 
     function resize() {
+        if(!root.isConnected || !workArea?.isConnected) return;
         const design = getWorkAreaDesignSize();
         const targetW = design.width;
         const viewport = document.querySelector('.viewport');
@@ -7123,9 +7127,12 @@ void main(vs2ps input, out float4 result : SV_Target0)
     updateAspectRatio();
 
     function getGridSnapInputs() {
-        const aspect = parseFloat(document.getElementById('global_aspect').value) || 1.777;
-        const snapX = parseFloat(document.getElementById('grid_snap_x').value);
-        const snapY = parseFloat(document.getElementById('grid_snap_y').value);
+        const aspectInput = document.getElementById('global_aspect') as HTMLInputElement | null;
+        const snapXInput = document.getElementById('grid_snap_x') as HTMLInputElement | null;
+        const snapYInput = document.getElementById('grid_snap_y') as HTMLInputElement | null;
+        const aspect = parseFloat(aspectInput?.value || '') || 1.777;
+        const snapX = parseFloat(snapXInput?.value || '');
+        const snapY = parseFloat(snapYInput?.value || '');
         return {
             aspect,
             snapX: Number.isFinite(snapX) ? snapX : 0,
@@ -7252,6 +7259,7 @@ void main(vs2ps input, out float4 result : SV_Target0)
     }
 
     function updateGridVis() {
+        if(!workArea?.isConnected) return;
         const cfg = getGridSnapConfig();
         if(!cfg.enabled) {
             workArea.style.backgroundSize = '';
@@ -12046,6 +12054,7 @@ void main(vs2ps input, out float4 result : SV_Target0)
 
     function renderAll() {
         try {
+        if(!root.isConnected || !workArea?.isConnected) return;
         invalidateLinkedValuesCache();
         flushHistorySnapshot('render');
         syncPreviewClock();

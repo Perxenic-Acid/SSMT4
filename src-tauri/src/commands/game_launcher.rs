@@ -540,7 +540,8 @@ pub async fn configure_zzmi_launch_settings(
     options: ConfigureZzmiLaunchSettingsOptions,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || configure_zzmi_launch_settings_blocking(options))
-        .await.map_err(|error| error.to_string())?
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn configure_zzmi_launch_settings_blocking(
@@ -558,7 +559,8 @@ pub async fn configure_wwmi_launch_settings(
     options: ConfigureWwmiLaunchSettingsOptions,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || configure_wwmi_launch_settings_blocking(options))
-        .await.map_err(|error| error.to_string())?
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn configure_wwmi_launch_settings_blocking(
@@ -606,9 +608,11 @@ pub async fn execute_external_program(
     args: Option<Vec<String>>,
     work_dir: Option<String>,
 ) -> Result<ExternalProgramOutput, String> {
-    tauri::async_runtime::spawn_blocking(move || execute_external_program_blocking(program_path, args, work_dir))
-        .await
-        .map_err(|error| format!("后台启动任务失败：{error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_external_program_blocking(program_path, args, work_dir)
+    })
+    .await
+    .map_err(|error| format!("后台启动任务失败：{error}"))?
 }
 
 fn execute_external_program_blocking(
@@ -649,7 +653,10 @@ fn execute_external_program_blocking(
 }
 
 #[tauri::command]
-pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunch>) -> Result<(), String> {
+pub async fn launch_programs(
+    app: tauri::AppHandle,
+    programs: Vec<ProgramToLaunch>,
+) -> Result<(), String> {
     crate::hoyoplay::task::assert_launch_allowed(None)?;
     for prog in programs {
         let wait_only = prog.wait_only.unwrap_or(false);
@@ -718,13 +725,18 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
             let capture = super::launch_console::is_console_program(&program_path);
             if capture {
                 let request = super::launch_console::ConsoleRequest {
-                    path: prog.path.clone(), args: args_str.to_string(), work_dir: work_dir_str.clone(),
+                    path: prog.path.clone(),
+                    args: args_str.to_string(),
+                    work_dir: work_dir_str.clone(),
                     log_sources: prog.log_sources.clone(),
                 };
                 let handle = app.clone();
                 let elevated = prog.run_as_administrator.unwrap_or(false);
-                tauri::async_runtime::spawn_blocking(move || super::launch_console::launch(handle, request, elevated))
-                    .await.map_err(|error| error.to_string())??;
+                tauri::async_runtime::spawn_blocking(move || {
+                    super::launch_console::launch(handle, request, elevated)
+                })
+                .await
+                .map_err(|error| error.to_string())??;
             } else {
                 let escaped_path = prog.path.replace('\'', "''");
                 let escaped_work_dir = work_dir_str.replace('\'', "''");
@@ -760,15 +772,17 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
                     let mut command = std::process::Command::new("powershell");
                     command.args(["-NoProfile", "-Command", &ps_script]);
                     crate::utils::independent_process::output(&mut command)
-                }).await.map_err(|error| error.to_string())?
-                    .map_err(|e| {
-                        let msg = format!(
-                            "Failed to launch shell command. {}. os_error={}",
-                            program_summary, e
-                        );
-                        eprintln!("[GameLauncher] {}", msg);
-                        msg
-                    })?;
+                })
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|e| {
+                    let msg = format!(
+                        "Failed to launch shell command. {}. os_error={}",
+                        program_summary, e
+                    );
+                    eprintln!("[GameLauncher] {}", msg);
+                    msg
+                })?;
 
                 if !output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -787,7 +801,10 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
 
             if let Some(delay_ms) = prog.post_launch_delay_ms.filter(|delay| *delay > 0) {
                 let delay_ms = delay_ms.min(10_000);
-                println!("[GameLauncher] Waiting {delay_ms} ms after launching {}", prog.path);
+                println!(
+                    "[GameLauncher] Waiting {delay_ms} ms after launching {}",
+                    prog.path
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
         }
@@ -805,7 +822,9 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
                     sys = tauri::async_runtime::spawn_blocking(move || {
                         sys.refresh_processes_specifics(ProcessRefreshKind::new());
                         sys
-                    }).await.map_err(|error| error.to_string())?;
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
 
                     for (_pid, process) in sys.processes() {
                         let proc_name = std::path::Path::new(process.name())
@@ -838,11 +857,10 @@ pub async fn launch_programs(app: tauri::AppHandle, programs: Vec<ProgramToLaunc
 }
 
 #[tauri::command]
-pub async fn file_md5(
-    path: String,
-) -> Result<String, String> {
+pub async fn file_md5(path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || SSMTFileUtils::file_md5(path))
-        .await.map_err(|error| error.to_string())?
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -855,12 +873,19 @@ mod tests {
     async fn external_program_wait_does_not_block_other_commands() {
         let task = tokio::spawn(execute_external_program(
             "powershell".into(),
-            Some(vec!["-NoProfile".into(), "-Command".into(), "Start-Sleep -Milliseconds 300; Write-Output ready".into()]),
+            Some(vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                "Start-Sleep -Milliseconds 300; Write-Output ready".into(),
+            ]),
             None,
         ));
         let start = std::time::Instant::now();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        assert!(start.elapsed() < std::time::Duration::from_millis(250), "单线程调度器被子进程等待阻塞");
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(250),
+            "单线程调度器被子进程等待阻塞"
+        );
         assert!(!task.is_finished());
         let output = task.await.unwrap().unwrap();
         assert_eq!(output.code, 0);

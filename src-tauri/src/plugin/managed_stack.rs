@@ -2,9 +2,9 @@ use super::dlss5::{
     inspect_game_executable, Dlss5ManagedState, Dlss5State, DLSS5_DEPENDENCY_ID, DLSS5_PLUGIN_ID,
 };
 use super::hoyoshade::{HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
+use super::managed_cold_files;
 use super::managed_reshade;
 use super::managed_reshade_journal;
-use super::managed_cold_files;
 use super::registry::PluginRegistry;
 use serde::Serialize;
 use serde_json::Value;
@@ -23,12 +23,16 @@ static WATCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 const SESSION_MARKER: &str = "cleanup-session.txt";
 
 fn marker_path(game_executable: &Path) -> Result<PathBuf, String> {
-    let root = game_executable.parent().ok_or("game executable has no parent")?;
+    let root = game_executable
+        .parent()
+        .ok_or("game executable has no parent")?;
     Ok(root.join("_SSMT_Graphics_Backup").join(SESSION_MARKER))
 }
 
 fn matches_session(game_executable: &Path, session: &str) -> bool {
-    marker_path(game_executable).ok().and_then(|path| fs::read_to_string(path).ok())
+    marker_path(game_executable)
+        .ok()
+        .and_then(|path| fs::read_to_string(path).ok())
         .is_some_and(|value| value == session)
 }
 
@@ -38,44 +42,60 @@ fn refresh_processes(system: &mut System) {
 
 fn is_target_running(system: &System, target: &Path) -> bool {
     let expected = target.to_string_lossy();
-    let expected_name = target.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let expected_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
     system.processes().values().any(|process| {
-        process
-            .exe()
-            .map_or_else(
-                || process.name().eq_ignore_ascii_case(expected_name),
-                |exe| exe.to_string_lossy().eq_ignore_ascii_case(&expected),
-            )
+        process.exe().map_or_else(
+            || process.name().eq_ignore_ascii_case(expected_name),
+            |exe| exe.to_string_lossy().eq_ignore_ascii_case(&expected),
+        )
     })
 }
 
 fn watch_game_exit(game_executable: PathBuf) -> Result<(), String> {
-    let session = format!("{}-{}-{}", std::process::id(),
+    let session = format!(
+        "{}-{}-{}",
+        std::process::id(),
         WATCH_GENERATION.fetch_add(1, Ordering::Relaxed),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| error.to_string())?.as_nanos());
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos()
+    );
     let marker = marker_path(&game_executable)?;
-    fs::write(&marker, &session).map_err(|error| format!("cannot record graphics session: {error}"))?;
+    fs::write(&marker, &session)
+        .map_err(|error| format!("cannot record graphics session: {error}"))?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut command = Command::new(executable);
-    command.arg("--ssmt-graphics-cleanup")
+    command
+        .arg("--ssmt-graphics-cleanup")
         .arg(game_executable)
         .arg(std::process::id().to_string())
         .arg(&session)
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     crate::utils::independent_process::spawn(&mut command)
         .map_err(|error| format!("cannot start graphics cleanup helper: {error}"))?;
     Ok(())
 }
 
-pub fn cleanup_helper(game_executable: &Path, parent_pid: u32, session: &str) -> Result<(), String> {
+pub fn cleanup_helper(
+    game_executable: &Path,
+    parent_pid: u32,
+    session: &str,
+) -> Result<(), String> {
     let mut system = System::new();
     let deadline = Instant::now() + Duration::from_secs(180);
     let mut found = false;
     let mut absent_since: Option<Instant> = None;
     loop {
         std::thread::sleep(Duration::from_secs(1));
-        if !matches_session(game_executable, session) { return Ok(()); }
+        if !matches_session(game_executable, session) {
+            return Ok(());
+        }
         refresh_processes(&mut system);
         let running = is_target_running(&system, game_executable);
         if running {
@@ -83,13 +103,18 @@ pub fn cleanup_helper(game_executable: &Path, parent_pid: u32, session: &str) ->
             absent_since = None;
         } else if found {
             let since = absent_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= Duration::from_secs(5) { break; }
-        } else if system.process(Pid::from_u32(parent_pid)).is_none() || Instant::now() >= deadline {
+            if since.elapsed() >= Duration::from_secs(5) {
+                break;
+            }
+        } else if system.process(Pid::from_u32(parent_pid)).is_none() || Instant::now() >= deadline
+        {
             break;
         }
     }
     for _ in 0..60 {
-        if !matches_session(game_executable, session) { return Ok(()); }
+        if !matches_session(game_executable, session) {
+            return Ok(());
+        }
         refresh_processes(&mut system);
         if !is_target_running(&system, game_executable) {
             match restore(game_executable) {
@@ -105,7 +130,10 @@ pub fn cleanup_helper(game_executable: &Path, parent_pid: u32, session: &str) ->
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    Err(format!("graphics cleanup did not complete for {}", game_executable.display()))
+    Err(format!(
+        "graphics cleanup did not complete for {}",
+        game_executable.display()
+    ))
 }
 
 pub fn recover_stale_sessions() -> Result<(), String> {
@@ -114,7 +142,9 @@ pub fn recover_stale_sessions() -> Result<(), String> {
     refresh_processes(&mut system);
     let mut errors = Vec::new();
     for executable in registry.managed_game_executables_for_plugin(DLSS5_PLUGIN_ID) {
-        if is_target_running(&system, &executable) { continue; }
+        if is_target_running(&system, &executable) {
+            continue;
+        }
         let result = match inspect_game_executable(&executable) {
             Dlss5State::Managed(state) => {
                 restore(&executable).and_then(|_| managed_cold_files::park_installation(&state))
@@ -126,7 +156,11 @@ pub fn recover_stale_sessions() -> Result<(), String> {
             errors.push(format!("{}: {error}", executable.display()));
         }
     }
-    if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,7 +196,9 @@ fn dependency_path(
     // DLSS5 使用 HoYoShade 的注入器作为托管 ReShade 宿主；这不等于启用
     // HoYoShade 的效果贡献。仅在本游戏启用 DLSS5 时允许读取该已安装宿主。
     let used_as_dlss5_host = plugin_id == HOYOSHADE_PLUGIN_ID
-        && registry.find(DLSS5_PLUGIN_ID).is_some_and(|dlss5| dlss5.enabled);
+        && registry
+            .find(DLSS5_PLUGIN_ID)
+            .is_some_and(|dlss5| dlss5.enabled);
     if !plugin.enabled && !used_as_dlss5_host {
         return Err(format!("plugin is disabled: {plugin_id}"));
     }
@@ -598,20 +634,30 @@ fn read_config(path: &Path, required: bool) -> Result<String, String> {
 }
 
 fn missing_managed_assets(state: &Dlss5ManagedState) -> Result<Vec<PathBuf>, String> {
-    let game_dir = state.manifest_path.parent().and_then(Path::parent)
+    let game_dir = state
+        .manifest_path
+        .parent()
+        .and_then(Path::parent)
         .ok_or("invalid DLSS5 manifest location")?;
     let mut missing = Vec::new();
     for relative in state.added_files.iter().chain(&state.replaced_files) {
         let path = game_dir.join(relative);
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
-            Ok(metadata) if metadata.file_type().is_symlink()
-                && managed_cold_files::is_parked(state, relative)? => {}
+            Ok(metadata)
+                if metadata.file_type().is_symlink()
+                    && managed_cold_files::is_parked(state, relative)? => {}
             Ok(_) => return Err(format!("unsafe DLSS5 managed file: {}", path.display())),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound
-                && managed_cold_files::is_parked(state, relative)? => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && managed_cold_files::is_parked(state, relative)? => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing.push(path),
-            Err(error) => return Err(format!("cannot inspect DLSS5 managed file {}: {error}", path.display())),
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect DLSS5 managed file {}: {error}",
+                    path.display()
+                ))
+            }
         }
     }
     Ok(missing)
@@ -636,21 +682,35 @@ pub fn prepare(
     let repaired_state = if missing.is_empty() {
         None
     } else {
-        let names = missing.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ");
+        let names = missing
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         let route = route_name(state)?;
-        install_route(registry, game_executable, route, "auto", false)
-            .map_err(|error| format!("DLSS5 files are missing ({names}); automatic repair failed: {error}"))?;
+        install_route(registry, game_executable, route, "auto", false).map_err(|error| {
+            format!("DLSS5 files are missing ({names}); automatic repair failed: {error}")
+        })?;
         let repaired = match inspect_game_executable(game_executable) {
             Dlss5State::Managed(repaired) if route_name(&repaired)? == route => repaired,
             _ => return Err("DLSS5 repair did not leave a valid managed installation".to_string()),
         };
         let remaining = missing_managed_assets(&repaired)?;
         if !remaining.is_empty() {
-            return Err(format!("DLSS5 repair left missing files: {}",
-                remaining.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ")));
+            return Err(format!(
+                "DLSS5 repair left missing files: {}",
+                remaining
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         inspect(registry, game_executable, &repaired)?;
-        eprintln!("[GraphicsStack] Repaired missing DLSS5 files for {}: {names}", game_executable.display());
+        eprintln!(
+            "[GraphicsStack] Repaired missing DLSS5 files for {}: {names}",
+            game_executable.display()
+        );
         Some(repaired)
     };
     let state = repaired_state.as_ref().unwrap_or(state);
@@ -674,7 +734,10 @@ pub fn prepare(
     let hoyo_addons = hoyo.join("reshade-shaders/Addons");
     let addon_dir_meta = fs::symlink_metadata(&hoyo_addons).map_err(|error| error.to_string())?;
     if !addon_dir_meta.is_dir() || addon_dir_meta.file_type().is_symlink() {
-        return Err(format!("invalid HoYoShade add-on directory: {}", hoyo_addons.display()));
+        return Err(format!(
+            "invalid HoYoShade add-on directory: {}",
+            hoyo_addons.display()
+        ));
     }
     if include_hoyoshade_effects {
         for entry in fs::read_dir(&hoyo_addons).map_err(|error| error.to_string())? {
@@ -685,8 +748,14 @@ pub fn prepare(
         }
     }
     if let Some(host) = host {
-        let game_root = game_executable.parent().ok_or("game executable has no parent")?;
-        let manifest_root = state.manifest_path.parent().and_then(Path::parent).ok_or("invalid DLSS5 manifest path")?;
+        let game_root = game_executable
+            .parent()
+            .ok_or("game executable has no parent")?;
+        let manifest_root = state
+            .manifest_path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("invalid DLSS5 manifest path")?;
         for name in &host.config.addon_names {
             if Path::new(name).file_name().and_then(|part| part.to_str()) != Some(name)
                 || name.contains(['/', '\\', ':'])
@@ -694,7 +763,8 @@ pub fn prepare(
                 return Err(format!("invalid DLSS5 add-on name: {name}"));
             }
             let addon_path = game_root.join(name);
-            let relative = addon_path.strip_prefix(manifest_root)
+            let relative = addon_path
+                .strip_prefix(manifest_root)
                 .map_err(|_| format!("DLSS5 add-on is outside the managed game: {name}"))?;
             addon_sources.push(managed_cold_files::source_path(state, relative)?);
         }
@@ -702,11 +772,20 @@ pub fn prepare(
         // Link only files that the Swapper manifest claims for this game instance.
         for name in ["nvngx_dlssnr.dll", "nvngx_dlss.dll", "dlss5-feed.cfg"] {
             let path = game_root.join(name);
-            if state.added_files.iter().chain(state.replaced_files.iter()).any(|relative| manifest_root.join(relative) == path) {
-                let relative = path.strip_prefix(manifest_root).map_err(|error| error.to_string())?;
+            if state
+                .added_files
+                .iter()
+                .chain(state.replaced_files.iter())
+                .any(|relative| manifest_root.join(relative) == path)
+            {
+                let relative = path
+                    .strip_prefix(manifest_root)
+                    .map_err(|error| error.to_string())?;
                 addon_sources.push(if managed_cold_files::is_cold_file(relative) {
                     managed_cold_files::source_path(state, relative)?
-                } else { path });
+                } else {
+                    path
+                });
             }
         }
     }
@@ -740,14 +819,18 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
             match fs::remove_file(&marker) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(format!("cannot retire graphics cleanup session: {error}")),
+                Err(error) => {
+                    return Err(format!("cannot retire graphics cleanup session: {error}"))
+                }
             }
             let _ = fs::remove_dir(marker.parent().ok_or("invalid graphics cleanup marker")?);
             Ok(restored)
-        },
+        }
         (Err(config), Ok(())) => Err(config),
         (Ok(_), Err(cold)) => Err(cold),
-        (Err(config), Err(cold)) => Err(format!("ReShade restore: {config}; cold-file restore: {cold}")),
+        (Err(config), Err(cold)) => Err(format!(
+            "ReShade restore: {config}; cold-file restore: {cold}"
+        )),
     }
 }
 
@@ -773,11 +856,17 @@ pub fn restore_swapper(registry: &PluginRegistry, game_executable: &Path) -> Res
     )?;
     match inspect_game_executable(game_executable) {
         Dlss5State::NotManaged => {
-            if let Some(state) = &previous { managed_cold_files::remove_store(state)?; }
+            if let Some(state) = &previous {
+                managed_cold_files::remove_store(state)?;
+            }
             Ok(())
         }
-        Dlss5State::Managed(_) => Err("Swapper reported success but its managed installation remains".to_string()),
-        Dlss5State::Broken { reason, .. } => Err(format!("Swapper restore left a broken installation: {reason}")),
+        Dlss5State::Managed(_) => {
+            Err("Swapper reported success but its managed installation remains".to_string())
+        }
+        Dlss5State::Broken { reason, .. } => Err(format!(
+            "Swapper restore left a broken installation: {reason}"
+        )),
     }
 }
 
@@ -898,12 +987,15 @@ pub fn install_route(
     outcome?;
     match inspect_game_executable(game_executable) {
         Dlss5State::Managed(installed)
-            if installed.external_host.is_some() && route_name(&installed)? == route => {
-                if let Err(error) = managed_cold_files::park_installation(&installed) {
-                    let rollback = restore_swapper(registry, game_executable);
-                    return Err(format!("cannot park DLSS5 cold files: {error}; rollback: {rollback:?}"));
-                }
+            if installed.external_host.is_some() && route_name(&installed)? == route =>
+        {
+            if let Err(error) = managed_cold_files::park_installation(&installed) {
+                let rollback = restore_swapper(registry, game_executable);
+                return Err(format!(
+                    "cannot park DLSS5 cold files: {error}; rollback: {rollback:?}"
+                ));
             }
+        }
         _ => return Err("Swapper did not leave a valid SSMT-owned manifest".to_string()),
     }
     inspect_routes(registry, game_executable, api_override)
@@ -911,15 +1003,18 @@ pub fn install_route(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::dlss5::Dlss5Route;
+    use super::*;
     use serde_json::json;
 
     #[test]
     fn gimi_rejects_cold_routes_before_resolving_external_tools() {
         let root = std::env::temp_dir().join(format!(
             "ssmt-gimi-no-cold-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let game = root.join("game");
         fs::create_dir_all(&game).unwrap();
@@ -941,7 +1036,9 @@ mod tests {
             replaced_files: Vec::new(),
             external_host: None,
         };
-        assert!(prepare(&registry, &executable, &state, true).unwrap_err().contains("只允许热注入"));
+        assert!(prepare(&registry, &executable, &state, true)
+            .unwrap_err()
+            .contains("只允许热注入"));
         assert_eq!(fs::read(&executable).unwrap(), b"original game");
         assert_eq!(fs::read_dir(&game).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
@@ -949,8 +1046,14 @@ mod tests {
 
     #[test]
     fn detects_files_missing_from_managed_installation() {
-        let root = std::env::temp_dir().join(format!("ssmt-dlss5-missing-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-dlss5-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         fs::create_dir_all(root.join("_DLSS5_Backup")).unwrap();
         fs::write(root.join("present.addon64"), b"present").unwrap();
         let state = Dlss5ManagedState {
@@ -960,11 +1063,17 @@ mod tests {
             game_api: "dxgi".into(),
             uses_reshade: true,
             uses_proxy: false,
-            added_files: vec![PathBuf::from("present.addon64"), PathBuf::from("missing.addon64")],
+            added_files: vec![
+                PathBuf::from("present.addon64"),
+                PathBuf::from("missing.addon64"),
+            ],
             replaced_files: Vec::new(),
             external_host: None,
         };
-        assert_eq!(missing_managed_assets(&state).unwrap(), vec![root.join("missing.addon64")]);
+        assert_eq!(
+            missing_managed_assets(&state).unwrap(),
+            vec![root.join("missing.addon64")]
+        );
         fs::write(root.join("missing.addon64"), b"repaired").unwrap();
         assert!(missing_managed_assets(&state).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();

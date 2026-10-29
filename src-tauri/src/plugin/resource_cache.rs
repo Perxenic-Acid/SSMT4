@@ -9,7 +9,9 @@ pub const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 struct StagingFile(PathBuf);
 
 impl Drop for StagingFile {
-    fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 fn cache_path(root: &Path, sha256: &str) -> Result<PathBuf, String> {
@@ -25,10 +27,15 @@ fn hash_file(path: &Path, limit: u64) -> Result<(u64, String), String> {
     let mut total = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        let count = std::io::Read::read(&mut file, &mut buffer).map_err(|error| error.to_string())?;
-        if count == 0 { break }
+        let count =
+            std::io::Read::read(&mut file, &mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
         total += count as u64;
-        if total > limit { return Err("resource exceeds size limit".into()) }
+        if total > limit {
+            return Err("resource exceeds size limit".into());
+        }
         digest.update(&buffer[..count]);
     }
     Ok((total, format!("{:x}", digest.finalize())))
@@ -53,7 +60,9 @@ pub async fn download_verified_with_progress(
     mut progress: impl FnMut(u64),
 ) -> Result<PathBuf, String> {
     let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
-    if parsed.scheme() != "https" { return Err("resource URL must use HTTPS".into()) }
+    if parsed.scheme() != "https" {
+        return Err("resource URL must use HTTPS".into());
+    }
     if expected_size == 0 || expected_size > MAX_ASSET_BYTES {
         return Err("resource size is invalid or too large".into());
     }
@@ -63,30 +72,45 @@ pub async fn download_verified_with_progress(
         let (size, actual) = hash_file(&destination, MAX_ASSET_BYTES)?;
         if size == expected_size && actual == expected {
             progress(expected_size);
-            return Ok(destination)
+            return Ok(destination);
         }
         // 损坏缓存仅在新下载完整校验后替换；重试不必要求玩家手动清缓存。
     }
     fs::create_dir_all(cache_root).map_err(|error| error.to_string())?;
-    let suffix = SystemTime::now().duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?.as_nanos();
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
     let staged_path = cache_root.join(format!(".download-{}-{suffix}.tmp", std::process::id()));
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&staged_path)
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged_path)
         .map_err(|error| error.to_string())?;
     let staged = StagingFile(staged_path);
-    let mut response = client.get(parsed).send().await.map_err(|error| error.to_string())?
-        .error_for_status().map_err(|error| error.to_string())?;
+    let mut response = client
+        .get(parsed)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?;
     if response.url().scheme() != "https" {
         return Err("resource download redirected outside HTTPS".into());
     }
-    if response.content_length().is_some_and(|length| length > expected_size) {
+    if response
+        .content_length()
+        .is_some_and(|length| length > expected_size)
+    {
         return Err("resource exceeds declared size".into());
     }
     let mut digest = Sha256::new();
     let mut total = 0u64;
     while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
         total += chunk.len() as u64;
-        if total > expected_size { return Err("resource exceeds declared size".into()) }
+        if total > expected_size {
+            return Err("resource exceeds declared size".into());
+        }
         file.write_all(&chunk).map_err(|error| error.to_string())?;
         digest.update(&chunk);
         progress(total);
@@ -98,7 +122,9 @@ pub async fn download_verified_with_progress(
     }
     if destination.exists() {
         let (size, actual) = hash_file(&destination, MAX_ASSET_BYTES)?;
-        if size == expected_size && actual == expected { return Ok(destination) }
+        if size == expected_size && actual == expected {
+            return Ok(destination);
+        }
     }
     fs::rename(&staged.0, &destination).map_err(|error| error.to_string())?;
     Ok(destination)
@@ -112,23 +138,44 @@ mod tests {
     fn cache_key_rejects_path_injection() {
         let root = Path::new("cache");
         assert!(cache_path(root, "../other").is_err());
-        assert_eq!(cache_path(root, &"A".repeat(64)).unwrap(), root.join(format!("{}.asset", "a".repeat(64))));
+        assert_eq!(
+            cache_path(root, &"A".repeat(64)).unwrap(),
+            root.join(format!("{}.asset", "a".repeat(64)))
+        );
     }
 
     #[tokio::test]
     async fn reuses_only_matching_cached_bytes() {
-        let root = std::env::temp_dir().join(format!("ssmt-resource-cache-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("ssmt-resource-cache-test-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let bytes = b"cached asset";
         let sha256 = format!("{:x}", Sha256::digest(bytes));
         let path = cache_path(&root, &sha256).unwrap();
         fs::write(&path, bytes).unwrap();
         let client = reqwest::Client::new();
-        assert_eq!(download_verified(&client, "https://127.0.0.1:1/unreachable", &sha256,
-            bytes.len() as u64, &root).await.unwrap(), path);
+        assert_eq!(
+            download_verified(
+                &client,
+                "https://127.0.0.1:1/unreachable",
+                &sha256,
+                bytes.len() as u64,
+                &root
+            )
+            .await
+            .unwrap(),
+            path
+        );
         fs::write(&path, b"damaged").unwrap();
-        assert!(download_verified(&client, "https://127.0.0.1:1/unreachable", &sha256,
-            bytes.len() as u64, &root).await.is_err());
+        assert!(download_verified(
+            &client,
+            "https://127.0.0.1:1/unreachable",
+            &sha256,
+            bytes.len() as u64,
+            &root
+        )
+        .await
+        .is_err());
         assert_eq!(fs::read(&path).unwrap(), b"damaged");
         fs::remove_dir_all(root).unwrap();
     }

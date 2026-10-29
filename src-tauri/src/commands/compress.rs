@@ -28,7 +28,13 @@ pub async fn extract_zip_archive(
     } else {
         &[]
     };
-    SSMTCompressUtils::extract_zip_archive_excluding(&zip_path, &dest_dir, excluded, |_current, _total| {}).map(|_| ())
+    SSMTCompressUtils::extract_zip_archive_excluding(
+        &zip_path,
+        &dest_dir,
+        excluded,
+        |_current, _total| {},
+    )
+    .map(|_| ())
 }
 
 /// 通用解压命令:按扩展名自动选择 zip / 7z / rar 解压器,把压缩包解压到

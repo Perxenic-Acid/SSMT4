@@ -99,7 +99,11 @@ fn manifest_for_setup(registry: &PluginRegistry, route: &str) -> Result<Manifest
     Ok(manifest)
 }
 
-fn route_for_registry(registry: &PluginRegistry, preset: &str, executable: &Path) -> Result<(String, String), String> {
+fn route_for_registry(
+    registry: &PluginRegistry,
+    preset: &str,
+    executable: &Path,
+) -> Result<(String, String), String> {
     if let Some(policy) = super::dlss5_policy::Policy::from_registry(registry)? {
         let route = policy.select(preset, executable)?;
         return Ok((route.route.clone(), route.api.clone()));
@@ -113,7 +117,9 @@ fn supports_route(default: &str, preset: &str, executable: &Path, selected: &str
         || (default == "native-bridge"
             && selected == "feeder"
             && preset.eq_ignore_ascii_case("WWMI")
-            && executable.file_name().and_then(|name| name.to_str())
+            && executable
+                .file_name()
+                .and_then(|name| name.to_str())
                 .is_some_and(|name| name.eq_ignore_ascii_case("Client-Win64-Shipping.exe")))
 }
 
@@ -213,17 +219,29 @@ fn selected<'a>(
         })
         .collect::<Vec<_>>();
     let mut names = HashSet::new();
-    if manifest.assets.len() > 64 || manifest.revision.is_empty() || assets.is_empty() { return Err("DLSS5 组件清单为空或过大".into()); }
+    if manifest.assets.len() > 64 || manifest.revision.is_empty() || assets.is_empty() {
+        return Err("DLSS5 组件清单为空或过大".into());
+    }
     for asset in &assets {
         let url = reqwest::Url::parse(&asset.url).map_err(|e| e.to_string())?;
-        if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
-            || asset.size == 0 || asset.size > 1024 * 1024 * 1024 || asset.files.is_empty() || asset.files.len() > 256
-            || asset.sha256.len() != 64 || !asset.sha256.bytes().all(|c| c.is_ascii_hexdigit()) { return Err("DLSS5 下载声明无效".into()); }
+        if url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || asset.size == 0
+            || asset.size > 1024 * 1024 * 1024
+            || asset.files.is_empty()
+            || asset.files.len() > 256
+            || asset.sha256.len() != 64
+            || !asset.sha256.bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err("DLSS5 下载声明无效".into());
+        }
         for file in &asset.files {
             if !safe_relative(&file.path)
                 || file.size == 0
                 || file.size > 256 * 1024 * 1024
-                || file.sha256.len() != 64 || !file.sha256.bytes().all(|c| c.is_ascii_hexdigit())
+                || file.sha256.len() != 64
+                || !file.sha256.bytes().all(|c| c.is_ascii_hexdigit())
                 || !names.insert(file.path.to_ascii_lowercase())
             {
                 return Err("DLSS5 组件清单含无效或重复目标".into());
@@ -257,7 +275,10 @@ fn setting_key(game_name: &str) -> String {
 }
 
 pub(super) fn active_route_key(game_name: &str) -> String {
-    format!("hotRoute.{:x}", Sha256::digest(game_name.trim().to_lowercase().as_bytes()))
+    format!(
+        "hotRoute.{:x}",
+        Sha256::digest(game_name.trim().to_lowercase().as_bytes())
+    )
 }
 
 // 老配置没有路线字段时继续使用 FSR2 Bridge；仅显式配置成功才切换。
@@ -283,9 +304,16 @@ fn load(game_name: &str) -> Result<Option<Installation>, String> {
         .get(DLSS5_PLUGIN_ID, &setting_key(game_name))
         .map_err(|error| error.to_string())?
         .map(|value| {
-            if value.is_null() { Ok(None) } else { serde_json::from_value(value).map(Some).map_err(|error| format!("DLSS5 组件设置无效：{error}")) }
+            if value.is_null() {
+                Ok(None)
+            } else {
+                serde_json::from_value(value)
+                    .map(Some)
+                    .map_err(|error| format!("DLSS5 组件设置无效：{error}"))
+            }
         })
-        .transpose().map(Option::flatten)
+        .transpose()
+        .map(Option::flatten)
 }
 
 pub(super) fn log_path(game_name: &str) -> Result<Option<PathBuf>, String> {
@@ -398,7 +426,8 @@ fn require_enabled(game: &str, executable: &Path) -> Result<(String, String), St
 
 #[tauri::command]
 pub async fn dlss5_hot_runtime_status(game_name: String) -> Result<Option<Installation>, String> {
-    super::commands::read_graphics_status(move || dlss5_hot_runtime_status_blocking(game_name)).await
+    super::commands::read_graphics_status(move || dlss5_hot_runtime_status_blocking(game_name))
+        .await
 }
 
 fn dlss5_hot_runtime_status_blocking(game_name: String) -> Result<Option<Installation>, String> {
@@ -444,11 +473,21 @@ pub async fn download_dlss5_hot_runtime(
         .map_err(|_| "DLSS5 组件正在配置，请稍候")?;
     let (default_route, _) = require_enabled(&game_name, Path::new(&game_executable))?;
     let requested = route.as_deref().unwrap_or(&default_route);
-    let route = requested.strip_prefix("ssmt-").unwrap_or(requested).to_string();
-    if !supports_route(&default_route, &game_scope_preset(&game_name), Path::new(&game_executable), &route) {
+    let route = requested
+        .strip_prefix("ssmt-")
+        .unwrap_or(requested)
+        .to_string();
+    if !supports_route(
+        &default_route,
+        &game_scope_preset(&game_name),
+        Path::new(&game_executable),
+        &route,
+    ) {
         return Err("所选 DLSS5 路线与当前游戏预设不匹配".into());
     }
-    let registry = PluginRegistry::from_default_location().map_err(|e| e.to_string())?.for_game(&game_name);
+    let registry = PluginRegistry::from_default_location()
+        .map_err(|e| e.to_string())?
+        .for_game(&game_name);
     let manifest = manifest_for_setup(&registry, &route)?;
     let assets = selected(&manifest, &route, &profile)?;
     let total_bytes = assets.iter().map(|asset| asset.size).sum();
@@ -574,7 +613,10 @@ fn prepare_at(
     dlls.push(root.join("ReShade64.dll"));
     Ok(HotRuntimePlan {
         dlls,
-        log_sources: vec![crate::commands::launch_logs::LaunchLogSource { name: "ReShade".into(), path: root.join("ReShade.log") }],
+        log_sources: vec![crate::commands::launch_logs::LaunchLogSource {
+            name: "ReShade".into(),
+            path: root.join("ReShade.log"),
+        }],
         environment: [
             (
                 "RESHADE_BASE_PATH_OVERRIDE".into(),
@@ -637,7 +679,11 @@ pub fn configure_dlss5_launch_settings(
     if !enabled(&registry.for_game(&game_name)) {
         return Ok(());
     }
-    route_for_registry(&registry.for_game(&game_name), &game_scope_preset(&game_name), executable)?;
+    route_for_registry(
+        &registry.for_game(&game_name),
+        &game_scope_preset(&game_name),
+        executable,
+    )?;
     ensure_stopped(executable)?;
     crate::commands::gimi_settings::configure_dlss5(
         &game_executable,
@@ -661,10 +707,13 @@ pub fn prepare_dlss5_hot_runtime(
     if !enabled(&registry) {
         return Ok(None);
     }
-    let lock = INSTALL_LOCK.try_lock().map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
+    let lock = INSTALL_LOCK
+        .try_lock()
+        .map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
     let (route, _) = route_for_registry(&registry, &game_scope_preset(&game_name), executable)?;
     if gimi_hot_runtime::applies(executable) && gimi_route(&game_name)? == "gimi-hot" {
-        return gimi_hot_runtime::prepare_locked(&registry, &game_name, executable, &lock).map(Some);
+        return gimi_hot_runtime::prepare_locked(&registry, &game_name, executable, &lock)
+            .map(Some);
     }
     ensure_stopped(executable)?;
     if !matches!(
@@ -677,7 +726,12 @@ pub fn prepare_dlss5_hot_runtime(
     let installation =
         load(&game_name)?.ok_or("DLSS5 组件尚未配置，请到插件市场的功能设置中自动下载并配置")?;
     require_owned(&installation)?;
-    if !supports_route(&route, &game_scope_preset(&game_name), executable, &installation.route) {
+    if !supports_route(
+        &route,
+        &game_scope_preset(&game_name),
+        executable,
+        &installation.route,
+    ) {
         return Err("DLSS5 组件与当前游戏预设不符，请重新配置".into());
     }
     let mut plan = prepare_at(&registry, &installation)?;
@@ -689,7 +743,9 @@ pub fn prepare_dlss5_hot_runtime(
         // 旧包的冻结适配；新包从声明读取本次参数约束。
         plan.required_launch_args.push("-dx11".into());
         plan.excluded_launch_args = ["-dx11", "-d3d11", "-dx12", "-d3d12", "-vulkan"]
-            .into_iter().map(String::from).collect();
+            .into_iter()
+            .map(String::from)
+            .collect();
     }
     Ok(Some(plan))
 }
@@ -701,8 +757,14 @@ mod tests {
     #[test]
     fn genshin_keeps_legacy_route_until_explicit_setup_and_exposes_both_implementations() {
         assert_eq!(decode_gimi_route(None).unwrap(), "gimi-hot");
-        assert_eq!(decode_gimi_route(Some("ssmt-feeder".into())).unwrap(), "ssmt-feeder");
-        assert_eq!(decode_gimi_route(Some("gimi-hot".into())).unwrap(), "gimi-hot");
+        assert_eq!(
+            decode_gimi_route(Some("ssmt-feeder".into())).unwrap(),
+            "ssmt-feeder"
+        );
+        assert_eq!(
+            decode_gimi_route(Some("gimi-hot".into())).unwrap(),
+            "gimi-hot"
+        );
         assert!(decode_gimi_route(Some("native".into())).is_err());
         assert!(decode_gimi_route(Some(serde_json::Value::Null)).is_err());
     }
@@ -768,7 +830,8 @@ mod tests {
     #[test]
     fn feeder_setup_updates_consumer_without_changing_legacy_baselines() {
         let temp = std::env::temp_dir().join(format!(
-            "ssmt-feeder-baseline-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            "ssmt-feeder-baseline-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
         ));
         let registry = PluginRegistry::new(temp.join("plugins")).unwrap();
         let feeder = manifest_for_setup(&registry, "feeder").unwrap();
@@ -776,8 +839,16 @@ mod tests {
         assert!(feeder.revision.ends_with("-feeder-rdx85rc5"));
         assert_eq!(bridge.revision, manifest().unwrap().revision);
         for profile in ["rtx30", "rtx50"] {
-            let consumer = selected(&feeder, "feeder", profile).unwrap().into_iter()
-                .find(|asset| asset.files.iter().any(|file| file.path == "renodx-dlss5.addon64")).unwrap();
+            let consumer = selected(&feeder, "feeder", profile)
+                .unwrap()
+                .into_iter()
+                .find(|asset| {
+                    asset
+                        .files
+                        .iter()
+                        .any(|file| file.path == "renodx-dlss5.addon64")
+                })
+                .unwrap();
             assert_eq!(consumer.files[0].size, 3039744);
             assert!(consumer.url.contains("8.5.0-rc5"));
         }
@@ -787,11 +858,36 @@ mod tests {
     #[test]
     fn wuwa_feeder_is_an_alternative_without_changing_other_presets() {
         let executable = Path::new("Client-Win64-Shipping.exe");
-        assert!(supports_route("native-bridge", "WWMI", executable, "feeder"));
-        assert!(supports_route("native-bridge", "WWMI", executable, "native-bridge"));
-        assert!(!supports_route("native-bridge", "WWMI", executable, "native"));
-        assert!(!supports_route("native-bridge", "ZZMI", executable, "feeder"));
-        assert!(!supports_route("native-bridge", "WWMI", Path::new("Other.exe"), "feeder"));
+        assert!(supports_route(
+            "native-bridge",
+            "WWMI",
+            executable,
+            "feeder"
+        ));
+        assert!(supports_route(
+            "native-bridge",
+            "WWMI",
+            executable,
+            "native-bridge"
+        ));
+        assert!(!supports_route(
+            "native-bridge",
+            "WWMI",
+            executable,
+            "native"
+        ));
+        assert!(!supports_route(
+            "native-bridge",
+            "ZZMI",
+            executable,
+            "feeder"
+        ));
+        assert!(!supports_route(
+            "native-bridge",
+            "WWMI",
+            Path::new("Other.exe"),
+            "feeder"
+        ));
     }
 
     #[test]

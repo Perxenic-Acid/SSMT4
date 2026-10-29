@@ -7,6 +7,16 @@
    ═══════════════════════════════════════════════ */
 
 :root {
+  /* ── SSMT brand and shell geometry ── */
+  --ssmt-brand-accent: #d8e94e;
+  --ssmt-brand-accent-rgb: 216, 233, 78;
+  --ssmt-brand-accent-ink: #171908;
+  --ssmt-brand-accent-soft: #eef7a0;
+  --ssmt-side-nav-width: 74px;
+  --ssmt-titlebar-height: 32px;
+  --ssmt-content-overlay-top: var(--ssmt-titlebar-height);
+  --ssmt-content-overlay-left: var(--ssmt-side-nav-width);
+
   /* 动效：短反馈、普通位移及布局重排分开控制，交接延迟用于入口切换。 */
   --motion-duration-fast: 160ms;
   --motion-duration-standard: 240ms;
@@ -59,6 +69,13 @@
   --red-text: var(--t-danger-text, rgba(var(--theme-danger-rgb), 0.85));
   --red-hover-bg: rgba(var(--theme-danger-rgb), 0.14);
   --red-hover-border: rgba(var(--theme-danger-rgb), 0.30);
+}
+
+html[data-ui-mode='classic'] {
+  --ssmt-brand-accent: #75d6bb;
+  --ssmt-brand-accent-rgb: 117, 214, 187;
+  --ssmt-brand-accent-ink: #0f201c;
+  --ssmt-brand-accent-soft: #e0fff7;
 }
 
 @media (prefers-reduced-motion: reduce) {

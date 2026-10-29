@@ -13,6 +13,17 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function loadModule(relative) {
+  const exports = {};
+  const compiled = ts.transpileModule(readFileSync(new URL(relative, import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  vm.runInNewContext(compiled, { exports });
+  return exports;
+}
+
+const pluginMarketplaceModel = loadModule('../../src/views/PluginMarketplace/pluginMarketplaceModel.ts');
+
 function component(t, relative, bindings, mocks, props = {}) {
   const source = parse(readFileSync(new URL(relative, import.meta.url), 'utf8')).descriptor.scriptSetup.content;
   const compiled = ts.transpileModule(`${source}\nObject.assign(exports, { ${bindings.join(',')} });`, {
@@ -90,6 +101,7 @@ function marketplace(t, options = {}) {
     'riskDialogOpen', 'riskAccepted', 'riskPlugin', 'togglePlugin', 'confirmRiskyEnable', 'uninstallPlugin',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
+    '@tauri-apps/api/app': { getVersion: async () => '4.2.2' },
     '@tauri-apps/plugin-opener': { openUrl: options.openUrl ?? (() => { throw new Error('Unexpected external download'); }), openPath: options.openPath },
     '@tauri-apps/plugin-dialog': {}, 'element-plus': {
       ElMessage: { success() {}, warning() {}, error: message => { throw new Error(message); } },
@@ -97,7 +109,12 @@ function marketplace(t, options = {}) {
     },
     '@element-plus/icons-vue': {}, 'vue-i18n': i18n,
     'vue-router': { useRoute: () => ({ query: options.query ?? {} }) },
-    '../../plugin/logs': options.logs ?? {}, '../../store/GamePreset': { getGamePresetPriority: () => 0 },
+    './pluginMarketplaceModel': pluginMarketplaceModel,
+    './PluginCompatibilityPanel.vue': {}, './PluginPermissionList.vue': {},
+    '../../plugin/logs': options.logs ?? {}, '../../store/GamePreset': {
+      getGamePresetPriority: () => 0,
+      getGamePresetDisplayName: game => game,
+    },
     '../../store/AppStateManager': { AppStateManager: { appSettings } },
     '../../store/ResourceManager': { ResourceManager: { loadGameConfig: options.loadGameConfig ?? (() => { throw new Error('Unexpected config read'); }) } },
   });
