@@ -1,6 +1,6 @@
 use super::{
-    dlss5_hot_runtime::{catalog, INSTALL_LOCK},
     dlss5::DLSS5_PLUGIN_ID,
+    dlss5_hot_runtime::{catalog, INSTALL_LOCK},
     managed_reshade,
     registry::PluginRegistry,
     settings::PluginSettingsStore,
@@ -240,8 +240,11 @@ fn prepare_at(
     let reshade = root.join("state/reshade-runtime");
     fs::create_dir_all(&reshade).map_err(|error| error.to_string())?;
     let mut composed = super::hot_reshade::compose(
-        registry, &root.join(&addon),
-        &["nr-before-sr.zh-CN.addon64".into()], "", "",
+        registry,
+        &root.join(&addon),
+        &["nr-before-sr.zh-CN.addon64".into()],
+        "",
+        "",
     )?;
     for (section, key, value) in [
         (
@@ -272,14 +275,26 @@ fn prepare_at(
     }
     let ini_path = opti.join("OptiScaler.ini");
     let mut ini = if ini_path.try_exists().map_err(|error| error.to_string())? {
-        let relative = ini_path.strip_prefix(&root).map_err(|error| error.to_string())?;
+        let relative = ini_path
+            .strip_prefix(&root)
+            .map_err(|error| error.to_string())?;
         read_text(&checked_path(&root, &relative.to_string_lossy())?)?
     } else {
-        read_text(&checked_path(&root, "components/OptiScaler/OptiScaler.ini")?)?
+        read_text(&checked_path(
+            &root,
+            "components/OptiScaler/OptiScaler.ini",
+        )?)?
     };
     configure_optiscaler(&mut ini, &opti);
-    composed.extra_files.insert(opti.join("OptiScaler.ini"), ini.into_bytes());
-    super::hot_reshade::save_config(&reshade, composed, "", &["nr-before-sr.zh-CN.addon64".into()])?;
+    composed
+        .extra_files
+        .insert(opti.join("OptiScaler.ini"), ini.into_bytes());
+    super::hot_reshade::save_config(
+        &reshade,
+        composed,
+        "",
+        &["nr-before-sr.zh-CN.addon64".into()],
+    )?;
     let bridge_log = bridge.with_extension("log");
     let dlls = vec![
         root.join("components/ReShade/ReShade64.dll"),
@@ -367,7 +382,9 @@ pub fn import_gimi_hot_runtime(
     source_directory: String,
     profile: String,
 ) -> Result<HotRuntimeInstallation, String> {
-    let _lock = INSTALL_LOCK.try_lock().map_err(|_| "热组件正在配置或清理，请稍候")?;
+    let _lock = INSTALL_LOCK
+        .try_lock()
+        .map_err(|_| "热组件正在配置或清理，请稍候")?;
     let registry = PluginRegistry::from_default_location()
         .map_err(|error| error.to_string())?
         .for_game(&game_name);
@@ -491,7 +508,9 @@ pub fn prepare_gimi_hot_runtime(
     if !enabled(&registry) {
         return Ok(None);
     }
-    let lock = INSTALL_LOCK.try_lock().map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
+    let lock = INSTALL_LOCK
+        .try_lock()
+        .map_err(|_| "DLSS5 热组件正在配置或清理，本次跳过该贡献")?;
     prepare_locked(&registry, &game_name, Path::new(&game_executable), &lock).map(Some)
 }
 
@@ -528,8 +547,8 @@ pub(super) fn prepare_locked(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::hoyoshade::{HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
+    use super::*;
 
     #[test]
     fn compatibility_revision_is_profile_specific_and_rejects_unknown_profiles() {
@@ -709,11 +728,19 @@ mod tests {
         let mut registry = registry_with_bridge(&temp, &real_bridge());
         let localized = std::env::var_os("SSMT_HOT_TEST_OPTISCALER");
         if let Some(dll) = &localized {
-            let package = registry.find(DLSS5_PLUGIN_ID).unwrap().package_root.join("optiscaler");
+            let package = registry
+                .find(DLSS5_PLUGIN_ID)
+                .unwrap()
+                .package_root
+                .join("optiscaler");
             fs::create_dir(&package).unwrap();
             let bytes = fs::read(dll).unwrap();
             fs::write(package.join("OptiScaler.dll"), &bytes).unwrap();
-            fs::write(package.join("OptiScaler.dll.sha256"), format!("{:x}", Sha256::digest(&bytes))).unwrap();
+            fs::write(
+                package.join("OptiScaler.dll.sha256"),
+                format!("{:x}", Sha256::digest(&bytes)),
+            )
+            .unwrap();
         }
         let plan = prepare_at(&registry, &installation).unwrap();
         let opti_config = plan.dlls[2].parent().unwrap().join("OptiScaler.ini");
@@ -725,11 +752,18 @@ mod tests {
             verify(&original.join("OptiScaler.dll"), COMMON[2].1).unwrap();
             let dll_directory = plan.dlls[2].parent().unwrap();
             verify(&dll_directory.join("nvngx_dlss.dll"), COMMON[3].1).unwrap();
-            verify(&dll_directory.join("D3D12_Optiscaler/D3D12Core.dll"), COMMON[4].1).unwrap();
+            verify(
+                &dll_directory.join("D3D12_Optiscaler/D3D12Core.dll"),
+                COMMON[4].1,
+            )
+            .unwrap();
             let mut saved = opti_ini.clone();
             managed_reshade::set_entry(&mut saved, "Menu", "Language", "en");
             fs::write(&opti_config, &saved).unwrap();
-            assert_eq!(prepare_at(&registry, &installation).unwrap().dlls, plan.dlls);
+            assert_eq!(
+                prepare_at(&registry, &installation).unwrap().dlls,
+                plan.dlls
+            );
             assert_eq!(read_text(&opti_config).unwrap(), saved);
         }
         for line in [
@@ -777,7 +811,10 @@ mod tests {
             .contains("LoadFromDllMain=nr-before-sr.zh-CN.addon64"));
         if let Some(fixture) = std::env::var_os("SSMT_HOT_FSR2_FIXTURE") {
             // 只在显式的实组件回归中执行独立测试进程，不启动游戏。
-            assert!(localized.is_none(), "旧崩溃 RVA 仅对应原始组件，不适用于汉化重编译版本");
+            assert!(
+                localized.is_none(),
+                "旧崩溃 RVA 仅对应原始组件，不适用于汉化重编译版本"
+            );
             let mut diagnostics = read_text(&opti_config).unwrap();
             managed_reshade::set_entry(&mut diagnostics, "Log", "LogToFile", "true");
             managed_reshade::set_entry(&mut diagnostics, "Log", "LogLevel", "2");
@@ -892,7 +929,8 @@ mod tests {
             // 只检查组合器实际登记的贡献，不能向目录塞入未知 Add-on 再期待删除。
             let ownership: std::collections::BTreeMap<String, String> = serde_json::from_str(
                 &read_text(&config.parent().unwrap().join("ReShade.ssmt-addons.json")).unwrap(),
-            ).unwrap();
+            )
+            .unwrap();
             for name in ownership.keys() {
                 assert!(installation.root.join(&addon).join(name).is_file());
             }
@@ -905,8 +943,13 @@ mod tests {
             }
             // 界面字体、截图目录等用户状态允许保留；停用后不能继续贡献效果搜索路径。
             let saved = read_text(&config).unwrap();
-            let shade_root = canonical_path(Path::new(&shade)).unwrap().to_string_lossy().to_string();
-            for line in saved.lines().filter(|line| line.starts_with("EffectSearchPaths=") || line.starts_with("TextureSearchPaths=")) {
+            let shade_root = canonical_path(Path::new(&shade))
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            for line in saved.lines().filter(|line| {
+                line.starts_with("EffectSearchPaths=") || line.starts_with("TextureSearchPaths=")
+            }) {
                 assert!(!line.contains(&shade_root));
             }
             assert_eq!(fs::read(shade_ini_path).unwrap(), shade_before);

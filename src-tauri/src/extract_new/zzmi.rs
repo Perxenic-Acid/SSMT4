@@ -240,7 +240,9 @@ impl ZZMINewExtractor {
                 .find(|g| g.first_index == first_index && g.pointlist_index == pointlist_index)
             {
                 if !group.trianglelist_index_list.contains(trianglelist_index) {
-                    group.trianglelist_index_list.push(trianglelist_index.clone());
+                    group
+                        .trianglelist_index_list
+                        .push(trianglelist_index.clone());
                 }
             } else {
                 groups.push(ComponentGroup {
@@ -875,11 +877,8 @@ impl ZZMINewExtractor {
 
         possible_d3d11_game_type_list.retain(|gt| data_type_filter.allows(gt.gpu_pre_skinning));
 
-        let components = self.collect_zzmi_components(
-            draw_ib,
-            trianglelist_index_list,
-            pointlist_index,
-        )?;
+        let components =
+            self.collect_zzmi_components(draw_ib, trianglelist_index_list, pointlist_index)?;
 
         self.export_unity_vs_submeshes(
             "ZZMI",

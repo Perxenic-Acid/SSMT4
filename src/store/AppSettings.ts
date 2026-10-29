@@ -48,6 +48,7 @@ export type ImageBlurMode = 'all' | 'nsfw' | 'none'
 export type GameLaunchMode = 'always-pure' | 'ctrl-pure' | 'always-normal'
 export type ModelExtractionLogLanguage = 'zh-CN' | 'en'
 export type RuntimeOverlayLanguage = 'auto' | 'zh_s' | 'en'
+export type SsmtUiMode = 'modern' | 'classic'
 export const DEFAULT_LAUNCH_CONSOLE_SHORTCUT = 'Ctrl+Shift+L'
 export type GameBananaTranslationProvider = 'openai' | 'compatible' | 'claude' | 'deepseek' | 'gemini' | 'google'
 export type GameBananaTranslationFontStyle = 'regular' | 'italic' | 'bold' | 'bold-italic'
@@ -83,6 +84,9 @@ export const normalizeAppUiScale = (value: unknown): number => {
 	const clampedValue = Math.min(APP_UI_SCALE_MAX, Math.max(APP_UI_SCALE_MIN, numericValue))
 	return Math.round(clampedValue / APP_UI_SCALE_STEP) * APP_UI_SCALE_STEP
 }
+
+export const normalizeSsmtUiMode = (value: unknown): SsmtUiMode =>
+	value === 'classic' ? 'classic' : 'modern'
 
 const normalizeWorkspaceAccessProxyPort = (value: unknown): number => {
 	const numericValue = typeof value === 'number' ? value : Number(value)
@@ -267,6 +271,7 @@ export class AppSettings {
 	contentOpacity: number = 0.5
 	globalDimMaskStrength: number = 2.5
 	uiScale: number = 1
+	uiMode: SsmtUiMode = 'modern'
 	DBMTWorkFolder: string = ''
 	workspaceAccessProxyPort: number = 0
 	workspaceAccessAttribution: string = ''
@@ -367,6 +372,7 @@ export class AppSettings {
 
 		this.globalDimMaskStrength = init?.globalDimMaskStrength ?? this.globalDimMaskStrength
 		this.uiScale = normalizeAppUiScale(init?.uiScale)
+		this.uiMode = normalizeSsmtUiMode(init?.uiMode)
 		this.DBMTWorkFolder = init?.DBMTWorkFolder ?? this.DBMTWorkFolder
 		this.workspaceAccessProxyPort = normalizeWorkspaceAccessProxyPort(init?.workspaceAccessProxyPort)
 		this.workspaceAccessAttribution = normalizeWorkspaceAccessAttribution(init?.workspaceAccessAttribution)
@@ -504,6 +510,7 @@ export class AppSettings {
 			contentOpacity: this.contentOpacity,
 			globalDimMaskStrength: this.globalDimMaskStrength,
 			uiScale: this.uiScale,
+			uiMode: this.uiMode,
 			DBMTWorkFolder: this.DBMTWorkFolder,
 			workspaceAccessProxyPort: normalizeWorkspaceAccessProxyPort(this.workspaceAccessProxyPort),
 			workspaceAccessAttribution: normalizeWorkspaceAccessAttribution(this.workspaceAccessAttribution),

@@ -3679,7 +3679,7 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
       :model-value="workspaceMergeDialog"
       width="min(680px, 94vw)"
       :close-on-click-modal="!workspaceMergeBusy"
-      @update:model-value="(visible) => { if (!visible && !workspaceMergeBusy) workspaceMergeDialog = false; }"
+      @update:model-value="(visible: boolean) => { if (!visible && !workspaceMergeBusy) workspaceMergeDialog = false; }"
     >
       <template #header>{{ t('workPage.dialog.workspaceMergeTitle') }}</template>
       <el-form label-position="top">
@@ -3723,7 +3723,7 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
       </template>
     </el-dialog>
 
-    <el-dialog class="workspace-access-dialog" :model-value="workspaceAccessDialog !== null" @update:model-value="(visible) => { if (!visible) workspaceAccessDialog = null; }" width="min(760px, 94vw)" :close-on-click-modal="!workspaceAccessBusy">
+    <el-dialog class="workspace-access-dialog" :model-value="workspaceAccessDialog !== null" @update:model-value="(visible: boolean) => { if (!visible) workspaceAccessDialog = null; }" width="min(760px, 94vw)" :close-on-click-modal="!workspaceAccessBusy">
       <template #header>
         <span>{{ workspaceAccessDialog === 'upload' ? t('workPage.dialog.workspacePublishTitle') : t('workPage.dialog.workspaceLibraryTitle') }}</span>
       </template>

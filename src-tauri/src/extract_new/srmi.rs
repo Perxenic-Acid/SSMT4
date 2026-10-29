@@ -2566,26 +2566,52 @@ mod tests {
             format!("element[{i}]:\n  SemanticName: {name}\n  SemanticIndex: {index}\n  Format: {format}\n  InputSlot: {slot}\n  AlignedByteOffset: {offset}\n  InputSlotClass: {class}\n")
         }).collect();
         fs::write(&txt, &layout).unwrap();
-        let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/GameType/SRMI");
+        let resources =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/GameType/SRMI");
         for (name, expected) in [
             ("CPU_P12_N8_TA8_C4_T4_T1-4_", true),
             ("CPU_P12_N12_TA16_T4_", false),
             ("CPU_P12_TA4_T4_", false),
         ] {
-            let game_type = D3D11GameType::from_json_file(resources.join(format!("{name}.json"))).unwrap();
-            assert_eq!(extractor.category_matches_migoto_input_layout(&game_type, "Position", "vb0", &txt).unwrap(), expected, "{name}");
+            let game_type =
+                D3D11GameType::from_json_file(resources.join(format!("{name}.json"))).unwrap();
+            assert_eq!(
+                extractor
+                    .category_matches_migoto_input_layout(&game_type, "Position", "vb0", &txt)
+                    .unwrap(),
+                expected,
+                "{name}"
+            );
         }
 
         // 即使语义、格式、偏移全部相同，实例数据也不能用作逐顶点属性。
-        let mut instance_type = D3D11GameType::from_parts("Instance", vec![
-            D3D11Element::new("TEXCOORD", "R32_UINT", "vb1", "trianglelist", "Texcoord", "Texcoord", "4"),
-        ]);
-        instance_type.element_name_d3d11_element_dict.values_mut().for_each(|element| element.semantic_index = 3);
-        assert!(!extractor.category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt).unwrap());
+        let mut instance_type = D3D11GameType::from_parts(
+            "Instance",
+            vec![D3D11Element::new(
+                "TEXCOORD",
+                "R32_UINT",
+                "vb1",
+                "trianglelist",
+                "Texcoord",
+                "Texcoord",
+                "4",
+            )],
+        );
+        instance_type
+            .element_name_d3d11_element_dict
+            .values_mut()
+            .for_each(|element| element.semantic_index = 3);
+        assert!(!extractor
+            .category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt)
+            .unwrap());
         fs::write(&txt, layout.replace("per-instance", "per-vertex")).unwrap();
-        assert!(extractor.category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt).unwrap());
+        assert!(extractor
+            .category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt)
+            .unwrap());
         fs::write(&txt, "stride: 4\nvertex count: 1382\n").unwrap();
-        assert!(extractor.category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt).unwrap());
+        assert!(extractor
+            .category_matches_migoto_input_layout(&instance_type, "Texcoord", "vb1", &txt)
+            .unwrap());
         fs::remove_dir_all(dir).unwrap();
     }
 

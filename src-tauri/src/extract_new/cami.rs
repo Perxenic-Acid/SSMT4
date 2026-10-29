@@ -485,140 +485,140 @@ impl CamiNewExtractor {
             {
                 // 单个子网格的数据异常只跳过自身，不影响同一 IB 的其他子网格。
                 let submesh_result: Result<(), String> = (|| {
-                let tmp_ib_txt_file_path = self.fa.log.get_deduped_filepath(tmp_ib_txt_file_name);
-                if tmp_ib_txt_file_path.is_empty() {
-                    return Ok(());
-                }
-
-                // 卡拉彼丘同一个 IB 会被多个不同绘制复用，各绘制有自己的顶点缓冲。
-                // 每个子网格必须使用"它所属的那次绘制"的槽位文件：绘制索引即
-                // ib txt 文件名的前 6 位。
-                let owner_trianglelist_index: String =
-                    tmp_ib_txt_file_name.chars().take(6).collect();
-
-                let mut category_buf_file_name_dict: HashMap<String, String> = HashMap::new();
-                for category_slot in d3d11_game_type.category_slot_dict.values() {
-                    let category_file_name = self
-                        .fa
-                        .data
-                        .filter_first_file(
-                            &format!("{}-{}", owner_trianglelist_index, category_slot),
-                            ".buf",
-                        )
-                        .unwrap_or_default();
-                    if category_file_name.is_empty() {
-                        continue;
+                    let tmp_ib_txt_file_path =
+                        self.fa.log.get_deduped_filepath(tmp_ib_txt_file_name);
+                    if tmp_ib_txt_file_path.is_empty() {
+                        return Ok(());
                     }
-                    category_buf_file_name_dict
-                        .insert(category_slot.clone(), category_file_name.clone());
-                }
 
-                let tmp_ib_txt_file = IndexBufferTxtFile::new(&tmp_ib_txt_file_path, true)?;
-                let index_count = tmp_ib_txt_file.index_number_count as usize;
+                    // 卡拉彼丘同一个 IB 会被多个不同绘制复用，各绘制有自己的顶点缓冲。
+                    // 每个子网格必须使用"它所属的那次绘制"的槽位文件：绘制索引即
+                    // ib txt 文件名的前 6 位。
+                    let owner_trianglelist_index: String =
+                        tmp_ib_txt_file_name.chars().take(6).collect();
 
-                let unique_str_folder_name = format!(
-                    "{}-{}-{}",
-                    draw_ib, tmp_ib_txt_file.index_count, tmp_ib_txt_file.first_index
-                );
-                let game_type_output_path = PathBuf::from(&self.workspace_path)
-                    .join(&unique_str_folder_name)
-                    .join(&game_type_folder_name);
-                SSMTFileUtils::create_folder_if_not_exists(&game_type_output_path)?;
+                    let mut category_buf_file_name_dict: HashMap<String, String> = HashMap::new();
+                    for category_slot in d3d11_game_type.category_slot_dict.values() {
+                        let category_file_name = self
+                            .fa
+                            .data
+                            .filter_first_file(
+                                &format!("{}-{}", owner_trianglelist_index, category_slot),
+                                ".buf",
+                            )
+                            .unwrap_or_default();
+                        if category_file_name.is_empty() {
+                            continue;
+                        }
+                        category_buf_file_name_dict
+                            .insert(category_slot.clone(), category_file_name.clone());
+                    }
 
-                let name_prefix = unique_str_folder_name.clone();
+                    let tmp_ib_txt_file = IndexBufferTxtFile::new(&tmp_ib_txt_file_path, true)?;
+                    let index_count = tmp_ib_txt_file.index_number_count as usize;
 
-                // Export IB (divided per submesh)
-                let output_ib_buf_file_path =
-                    game_type_output_path.join(format!("{}.ib", name_prefix));
-                let mut ib_buf_file =
-                    IndexBufferBufFile::from_file(&ib_buf_file_path, &ib_file_format)?;
-                ib_buf_file.self_divide(
-                    tmp_ib_txt_file.first_index.parse::<usize>().unwrap_or(0),
-                    index_count,
-                );
-                ib_buf_file.save_to_file_uint32(&output_ib_buf_file_path, 0)?;
+                    let unique_str_folder_name = format!(
+                        "{}-{}-{}",
+                        draw_ib, tmp_ib_txt_file.index_count, tmp_ib_txt_file.first_index
+                    );
+                    let game_type_output_path = PathBuf::from(&self.workspace_path)
+                        .join(&unique_str_folder_name)
+                        .join(&game_type_folder_name);
+                    SSMTFileUtils::create_folder_if_not_exists(&game_type_output_path)?;
 
-                // Export raw category buffers per submesh
-                for category_name in d3d11_game_type.ordered_category_name_list.iter() {
-                    let category_slot = d3d11_game_type
-                        .category_slot_dict
-                        .get(category_name)
-                        .cloned()
-                        .unwrap_or_default();
-                    let category_buf_file_name = category_buf_file_name_dict
-                        .get(&category_slot)
-                        .cloned()
-                        .unwrap_or_default();
-                    let category_output_buf_file_path = game_type_output_path
-                        .join(format!("{}-{}.buf", name_prefix, category_name));
-                    self.export_category_buffer(
-                        category_name,
-                        &category_buf_file_name,
-                        d3d11_game_type.gpu_pre_skinning,
-                        &category_output_buf_file_path,
-                    )?;
-                }
+                    let name_prefix = unique_str_folder_name.clone();
 
-                // Build SubMeshJson per submesh
-                let mut submesh_json = SubMeshJson::new();
-                submesh_json.game_preset = game_preset.to_string();
-                submesh_json.vertex_limit_vb = vertex_limit_vb.clone();
-                submesh_json.work_game_type = d3d11_game_type.game_type_name.clone();
-                submesh_json.gpu_pre_skinning = d3d11_game_type.gpu_pre_skinning;
-                submesh_json.index_buffer_list.push(SubMeshIndexBuffer {
-                    dxgi_format: "DXGI_FORMAT_R32_UINT".to_string(),
-                    file_name: format!("{}.ib", name_prefix),
-                });
+                    // Export IB (divided per submesh)
+                    let output_ib_buf_file_path =
+                        game_type_output_path.join(format!("{}.ib", name_prefix));
+                    let mut ib_buf_file =
+                        IndexBufferBufFile::from_file(&ib_buf_file_path, &ib_file_format)?;
+                    ib_buf_file.self_divide(
+                        tmp_ib_txt_file.first_index.parse::<usize>().unwrap_or(0),
+                        index_count,
+                    );
+                    ib_buf_file.save_to_file_uint32(&output_ib_buf_file_path, 0)?;
 
-                for category_name in d3d11_game_type.ordered_category_name_list.iter() {
-                    let category_slot = d3d11_game_type
-                        .category_slot_dict
-                        .get(category_name)
-                        .cloned()
-                        .unwrap_or_default();
-                    let category_buf_file_name = category_buf_file_name_dict
-                        .get(&category_slot)
-                        .cloned()
-                        .unwrap_or_default();
-                    let category_hash = self.build_category_hash_from_buf_file_name(
-                        d3d11_game_type,
-                        category_name,
-                        &category_buf_file_name,
-                    )?;
-                    submesh_json
-                        .category_hash_dict
-                        .insert(category_name.clone(), category_hash);
-                    submesh_json.category_draw_category_map.insert(
-                        category_name.clone(),
-                        d3d11_game_type
-                            .category_draw_category_dict
+                    // Export raw category buffers per submesh
+                    for category_name in d3d11_game_type.ordered_category_name_list.iter() {
+                        let category_slot = d3d11_game_type
+                            .category_slot_dict
                             .get(category_name)
                             .cloned()
-                            .unwrap_or_default(),
-                    );
-                    submesh_json
-                        .category_buffer_list
-                        .push(SubMeshCategoryBuffer {
-                            file_name: format!("{}-{}.buf", name_prefix, category_name),
-                            buffer_type: "Normal".to_string(),
-                            d3d11_element_list: self.build_submesh_elements_for_category(
-                                d3d11_game_type,
-                                category_name,
-                            ),
-                        });
-                }
+                            .unwrap_or_default();
+                        let category_buf_file_name = category_buf_file_name_dict
+                            .get(&category_slot)
+                            .cloned()
+                            .unwrap_or_default();
+                        let category_output_buf_file_path = game_type_output_path
+                            .join(format!("{}-{}.buf", name_prefix, category_name));
+                        self.export_category_buffer(
+                            category_name,
+                            &category_buf_file_name,
+                            d3d11_game_type.gpu_pre_skinning,
+                            &category_output_buf_file_path,
+                        )?;
+                    }
 
-                submesh_json
-                    .save_to_file(game_type_output_path.join(format!("{}.json", name_prefix)))
-                    .map_err(|e| format!("Failed to save submesh json for {}: {}", name_prefix, e))?;
-                Ok(())
+                    // Build SubMeshJson per submesh
+                    let mut submesh_json = SubMeshJson::new();
+                    submesh_json.game_preset = game_preset.to_string();
+                    submesh_json.vertex_limit_vb = vertex_limit_vb.clone();
+                    submesh_json.work_game_type = d3d11_game_type.game_type_name.clone();
+                    submesh_json.gpu_pre_skinning = d3d11_game_type.gpu_pre_skinning;
+                    submesh_json.index_buffer_list.push(SubMeshIndexBuffer {
+                        dxgi_format: "DXGI_FORMAT_R32_UINT".to_string(),
+                        file_name: format!("{}.ib", name_prefix),
+                    });
+
+                    for category_name in d3d11_game_type.ordered_category_name_list.iter() {
+                        let category_slot = d3d11_game_type
+                            .category_slot_dict
+                            .get(category_name)
+                            .cloned()
+                            .unwrap_or_default();
+                        let category_buf_file_name = category_buf_file_name_dict
+                            .get(&category_slot)
+                            .cloned()
+                            .unwrap_or_default();
+                        let category_hash = self.build_category_hash_from_buf_file_name(
+                            d3d11_game_type,
+                            category_name,
+                            &category_buf_file_name,
+                        )?;
+                        submesh_json
+                            .category_hash_dict
+                            .insert(category_name.clone(), category_hash);
+                        submesh_json.category_draw_category_map.insert(
+                            category_name.clone(),
+                            d3d11_game_type
+                                .category_draw_category_dict
+                                .get(category_name)
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                        submesh_json
+                            .category_buffer_list
+                            .push(SubMeshCategoryBuffer {
+                                file_name: format!("{}-{}.buf", name_prefix, category_name),
+                                buffer_type: "Normal".to_string(),
+                                d3d11_element_list: self.build_submesh_elements_for_category(
+                                    d3d11_game_type,
+                                    category_name,
+                                ),
+                            });
+                    }
+
+                    submesh_json
+                        .save_to_file(game_type_output_path.join(format!("{}.json", name_prefix)))
+                        .map_err(|e| {
+                            format!("Failed to save submesh json for {}: {}", name_prefix, e)
+                        })?;
+                    Ok(())
                 })();
 
                 if let Err(error) = submesh_result {
-                    crate::extract_log!(
-                        "跳过子网格 {}: {}",
-                        tmp_ib_txt_file_name, error
-                    );
+                    crate::extract_log!("跳过子网格 {}: {}", tmp_ib_txt_file_name, error);
                 }
             }
         }
@@ -779,7 +779,11 @@ mod tests {
 
         // 角色绘制：ib=f4dca227, index_count=72903, first_index=41742
         let out_dir = workspace.join("f4dca227-72903-41742");
-        assert!(out_dir.exists(), "output folder missing: {}", out_dir.display());
+        assert!(
+            out_dir.exists(),
+            "output folder missing: {}",
+            out_dir.display()
+        );
 
         let type_dir = std::fs::read_dir(&out_dir)
             .unwrap()
@@ -809,14 +813,20 @@ mod tests {
                 vertex_counts.push(size / stride);
                 break;
             }
-            assert!(found, "{} buffer not exported in {}", category, type_dir.display());
+            assert!(
+                found,
+                "{} buffer not exported in {}",
+                category,
+                type_dir.display()
+            );
         }
         assert!(
-            vertex_counts.iter().all(|&v| v == vertex_counts[0] && v > 0),
+            vertex_counts
+                .iter()
+                .all(|&v| v == vertex_counts[0] && v > 0),
             "inconsistent vertex counts: {:?}",
             vertex_counts
         );
         eprintln!("round-trip ok, vertex count = {}", vertex_counts[0]);
     }
-
 }

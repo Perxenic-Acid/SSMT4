@@ -87,6 +87,7 @@ async function harness(t, options = {}) {
         return createHash('md5').update(await fs.readFile(args.path)).digest('hex');
       }
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
+      if (command === 'plugin_launch_injected_dlls') return { dlls: [], warnings: [] };
       if (command === 'prepare_player_tweaks_launch') return null;
       if (command === 'configure_gimi_launch_settings') return null;
       if (command === 'configure_plugin_launch_contract') return null;
@@ -286,7 +287,7 @@ test('online update failure shows its reason once without blocking launch', asyn
   const h = await harness(t, { remoteWarning: 'GitHub timed out' });
   await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));
   const warnings = h.messages.filter(({ kind }) => kind === 'warning');
-  assert.equal(warnings.length, 1);
+  assert.equal(warnings.length, 1, JSON.stringify(warnings));
   assert.ok(warnings[0].value.message.includes('GitHub timed out'));
   assert.equal(h.dialogs.length, 0);
   assert.ok(h.calls.some(call => call.command === 'launch_programs'));
@@ -487,7 +488,8 @@ test('unavailable DLSS5 and Shade resources still allow ordinary Mod launch', as
   await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));
   assert.ok(h.calls.some(call => call.command === 'launch_programs'));
   assert.equal(h.dialogs.length, 0);
-  assert.equal(h.messages.filter(message => message.kind === 'warning').length, 2);
+  const warnings = h.messages.filter(message => message.kind === 'warning');
+  assert.equal(warnings.length, 2, JSON.stringify(warnings));
 });
 
 test('DLSS5 preparation failure removes a prior hot plan without changing saved options', async t => {
@@ -511,7 +513,8 @@ test('already packed runtime passes UPX validation without repacking', async t =
   assert.equal(upxCalls.length, 1);
   assert.equal(upxCalls[0].args.args[0], '-t');
   assert.notEqual(upxCalls[0].args.args[1], h.target);
-  assert.equal(h.messages.some(({ kind }) => kind === 'warning'), false);
+  const warnings = h.messages.filter(({ kind }) => kind === 'warning');
+  assert.equal(warnings.length, 0, JSON.stringify(warnings));
   assert.equal(await fs.readFile(h.target, 'utf8'), 'adapted SSMT Runtime');
 });
 

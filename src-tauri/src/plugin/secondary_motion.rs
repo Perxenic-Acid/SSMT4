@@ -225,8 +225,7 @@ fn update_secondary_motion_character_blocking(
         .as_object_mut()
         .ok_or_else(|| "预设 characters 必须是对象".to_string())?;
     characters.insert(character_id.to_string(), character_settings);
-    let mut preset_bytes =
-        serde_json::to_vec_pretty(&preset).map_err(|error| error.to_string())?;
+    let mut preset_bytes = serde_json::to_vec_pretty(&preset).map_err(|error| error.to_string())?;
     preset_bytes.push(b'\n');
 
     let backup = preset_path.with_extension("json.bak");
@@ -380,7 +379,10 @@ fn mirror_secondary_motion_data(package_data_root: &Path) -> Result<(), String> 
 
 fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     if !source.is_dir() {
-        return Err(format!("Secondary Motion 数据目录不存在：{}", source.display()));
+        return Err(format!(
+            "Secondary Motion 数据目录不存在：{}",
+            source.display()
+        ));
     }
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     let mut pending = vec![source.to_path_buf()];
@@ -406,8 +408,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
                 if let Some(parent) = destination_path.parent() {
                     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
                 }
-                fs::copy(&source_path, &destination_path)
-                    .map_err(|error| error.to_string())?;
+                fs::copy(&source_path, &destination_path).map_err(|error| error.to_string())?;
             }
         }
     }
@@ -662,9 +663,8 @@ fn bump_runtime_revision(data_root: &Path) -> Result<(), String> {
         .as_object_mut()
         .ok_or_else(|| "runtime/config.json 根节点必须是对象".to_string())?;
     object.insert("revision".into(), Value::from(revision.saturating_add(1)));
-    let mut bytes =
-        serde_json::to_vec_pretty(&Value::Object(object.clone()))
-            .map_err(|error| error.to_string())?;
+    let mut bytes = serde_json::to_vec_pretty(&Value::Object(object.clone()))
+        .map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     write_atomic(&config_path, &bytes)
 }
@@ -912,8 +912,7 @@ mod tests {
             br#"{"schema_version":1,"characters":{"chr_test":{"bones":{"right":"R_bone","left":"L_bone","allow_fallback_candidates":true},"axis":{"name":"Z","sign":1},"defaults":{"gait":{"walk":{"amplitude_deg":3.6,"frequency_hz":1.5}}}}}}"#,
         )
         .unwrap();
-        let (present, settings) =
-            read_character_settings(&root, "Default", "chr_test").unwrap();
+        let (present, settings) = read_character_settings(&root, "Default", "chr_test").unwrap();
         assert!(present);
         assert_eq!(settings["bones"]["right"], "R_bone");
         assert_eq!(settings["axis"]["name"], "Z");

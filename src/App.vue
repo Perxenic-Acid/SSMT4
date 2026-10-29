@@ -13,6 +13,8 @@ import { ResourceManager } from './store/ResourceManager';
 import type { HuntingMode } from './store/GameConfig';
 import CacheFolderPicker from './components/CacheFolderPicker.vue';
 import { getGamePresetDisplayName } from './store/GamePreset';
+import { LIQUID_GRAVITY_PROBE_ROUTE } from './plugin/liquidGravityProbe';
+import StartupExperience from './components/StartupExperience.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -21,6 +23,7 @@ const gameSwitchRevision = AppStateManager.gameSwitchRevision;
 const { t } = useI18n();
 const selectedFirstRunRole = ref<'author' | 'player' | 'both' | null>(null);
 const firstRunStep = ref(0);
+const startupVisible = ref(true);
 type FirstRunStepKey = 'language' | 'role' | 'general' | 'authorPreferences' | 'games' | 'migoto' | 'background' | 'nsfw';
 const firstRunSteps = computed<FirstRunStepKey[]>(() => {
   const role = selectedFirstRunRole.value;
@@ -179,6 +182,8 @@ const shouldShowGlobalDimLayer = computed(() => (
   || route.path === '/work'
   || route.path === '/mark-texture-full'
   || route.path === '/texture-mod-maker'
+  || route.path === '/plugins'
+  || route.path === LIQUID_GRAVITY_PROBE_ROUTE
   || route.path === '/xianzun'
   || route.path === '/ui-builder'
   || route.path.startsWith('/gamebanana')
@@ -195,6 +200,12 @@ const globalDimLayerBackground = computed(() => {
   // 内容页面需要稳定的最低对比度，不能因为用户把首页背景遮罩设为 0
   // 就让亮色游戏背景透过半透明面板冲淡文字。
   const contentFloor = shouldShowGlobalDimLayer.value;
+  if (appSettings.uiMode !== 'classic') {
+    const center = clamp(Math.max(0.06 * strength, contentFloor ? 0.28 : 0), 0, 0.42).toFixed(3);
+    const middle = clamp(Math.max(0.11 * strength, contentFloor ? 0.40 : 0), 0, 0.58).toFixed(3);
+    const edge = clamp(Math.max(0.16 * strength, contentFloor ? 0.54 : 0), 0, 0.70).toFixed(3);
+    return `radial-gradient(circle at 50% 50%, rgba(0, 0, 0, ${center}) 0%, rgba(0, 0, 0, ${middle}) 52%, rgba(0, 0, 0, ${edge}) 100%)`;
+  }
   const center = clamp(Math.max(0.12 * strength, contentFloor ? 0.50 : 0), 0, 0.62).toFixed(3);
   const middle = clamp(Math.max(0.24 * strength, contentFloor ? 0.62 : 0), 0, 0.88).toFixed(3);
   const edge = clamp(Math.max(0.34 * strength, contentFloor ? 0.72 : 0), 0, 0.96).toFixed(3);
@@ -203,6 +214,7 @@ const globalDimLayerBackground = computed(() => {
 });
 
 const appUiScale = computed(() => normalizeAppUiScale(appSettings.uiScale));
+const isClassicUi = computed(() => appSettings.uiMode === 'classic');
 const isEndfieldBackground = computed(() => appSettings.CurrentGameName === 'EFMI');
 const ENDFIELD_ART_WIDTH = 1503;
 const ENDFIELD_ART_HEIGHT = 900;
@@ -241,8 +253,13 @@ const scheduleBackgroundViewportSync = () => {
   });
 };
 
-watch(appUiScale, scale => {
-  document.documentElement.style.setProperty('--app-caption-height', `${32 * scale}px`);
+watch([appUiScale, isClassicUi], ([scale, classic]) => {
+  const captionHeight = 32 * scale;
+  const rootStyle = document.documentElement.style;
+  rootStyle.setProperty('--app-caption-height', `${captionHeight}px`);
+  rootStyle.setProperty('--ssmt-content-overlay-top', `${captionHeight}px`);
+  rootStyle.setProperty('--ssmt-content-overlay-left', `${classic ? 0 : 74 * scale}px`);
+  document.documentElement.dataset.uiMode = classic ? 'classic' : 'modern';
 }, { immediate: true });
 
 const normalizeStoredAppUiScale = (value: number) => {
@@ -333,7 +350,7 @@ onUnmounted(() => {
   </div>
 
   <!-- Home Ambient Shadow Layer -->
-  <div class="home-shadow-layer" v-if="route.path === '/'"></div>
+  <div class="home-shadow-layer" :class="{ 'is-classic-home-shadow': isClassicUi }" v-if="route.path === '/'"></div>
 
   <!-- Global Mask Layer for Game Library Page -->
   <transition name="fade">
@@ -496,7 +513,7 @@ onUnmounted(() => {
 
     <div class="app-ui-scale" :style="{ '--app-ui-scale': appUiScale }">
       <!-- WinUI3 shell: full-width caption bar on top, nav pane + content below -->
-      <div class="app-shell">
+      <div class="app-shell" :class="{ 'is-classic-ui': isClassicUi }">
         <!-- Reserves the caption bar's layout space; the bar itself is
              teleported to <body> so no popup/card can ever cover it. -->
         <div class="caption-bar-spacer" aria-hidden="true"></div>
@@ -520,12 +537,16 @@ onUnmounted(() => {
     </div>
   </el-config-provider>
 
+  <Teleport to="body">
+    <StartupExperience v-if="startupVisible" :enabled="!isClassicUi" @finished="startupVisible = false" />
+  </Teleport>
+
   <!-- Caption bar lives above every layer of the app (highest z-index), so
        window dragging / minimize / maximize / close stay usable no matter
        which card, dialog or overlay is open. It is scaled with the same
        --app-ui-scale factor so it pixel-matches the in-flow layout. -->
   <Teleport to="body">
-    <div class="caption-bar-host" :style="{ '--app-ui-scale': appUiScale }">
+    <div v-show="!startupVisible" class="caption-bar-host" :style="{ '--app-ui-scale': appUiScale }">
       <TitleBar />
       <div class="route-progress" :class="{ active: isNavigating }" aria-hidden="true"></div>
     </div>
@@ -706,10 +727,16 @@ textarea {
      Keeps the center bright and clean.
   */
   background:
-    /* 1. Seamless smooth fade from bottom (for potential footer text) */
-    linear-gradient(to top, rgba(0, 0, 0, 0.5) 0%, transparent 25%),
+    radial-gradient(circle at 78% 30%, rgba(var(--ssmt-brand-accent-rgb), .08), transparent 30%),
+    linear-gradient(90deg, rgba(5, 7, 10, .72) 0%, rgba(5, 7, 10, .52) 12%, rgba(5, 7, 10, .14) 30%, transparent 48%),
+    linear-gradient(to top, rgba(4, 5, 7, .58) 0%, transparent 30%),
+    radial-gradient(circle at 50% 45%, transparent 62%, rgba(4, 5, 7, .28) 130%);
+  background-size: auto;
+}
 
-    /* 2. Very subtle cinematic vignette (corners only, center is pure clean) */
+.home-shadow-layer.is-classic-home-shadow {
+  background:
+    linear-gradient(to top, rgba(0, 0, 0, 0.5) 0%, transparent 25%),
     radial-gradient(circle at 50% 50%, transparent 75%, rgba(0, 0, 0, 0.4) 140%);
 }
 
@@ -1251,6 +1278,12 @@ textarea {
   display: flex;
   overflow: hidden;
   position: relative;
+  padding-left: 0;
+  box-sizing: border-box;
+}
+
+.app-shell:not(.is-classic-ui) .app-shell-body {
+  padding-left: var(--ssmt-side-nav-width);
 }
 
 .app-ui-scale {
@@ -1352,9 +1385,11 @@ textarea {
   top: 0;
   left: 0;
   width: calc(100% / var(--app-ui-scale, 1));
+  height: calc(100vh / var(--app-ui-scale, 1));
   transform: scale(var(--app-ui-scale, 1));
   transform-origin: top left;
   z-index: 2147483647;
+  pointer-events: none;
 }
 
 /* Route-change progress hairline — a whisper of feedback while pages load */

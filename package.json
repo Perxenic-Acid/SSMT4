@@ -8,7 +8,9 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "node ./scripts/tauri-with-signing.mjs",
-    "check:render-perf": "node scripts/check-render-perf.mjs"
+    "check:render-perf": "node scripts/check-render-perf.mjs",
+    "check:ui-contracts": "bun test ./scripts/check-ui-contracts.test.ts",
+    "check:ui-runtime": "bun run scripts/check-ui-runtime.ts"
   },
   "dependencies": {
     "7zip-bin": "^5.2.0",

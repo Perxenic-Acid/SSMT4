@@ -74,17 +74,14 @@ pub async fn sync_endfield_background(
     let roaming_app_data = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_default();
-    let candidate = discover_endfield_background(
-        &games_root,
-        &roaming_app_data.join("Hypergryph"),
-    )?;
+    let candidate =
+        discover_endfield_background(&games_root, &roaming_app_data.join("Hypergryph"))?;
     let target_dir = app
         .path()
         .resolve("SSMT4GlobalConfigs/Games", BaseDirectory::LocalData)
         .map_err(|error| format!("无法定位 SSMT 游戏配置目录: {error}"))?
         .join(&game_name);
-    fs::create_dir_all(&target_dir)
-        .map_err(|error| format!("创建终末地背景目录失败: {error}"))?;
+    fs::create_dir_all(&target_dir).map_err(|error| format!("创建终末地背景目录失败: {error}"))?;
 
     sync_candidate(
         &candidate,
@@ -127,10 +124,7 @@ fn file_is_mp4(path: &Path) -> bool {
 
 fn sha256_file(path: &Path) -> Result<(String, u64), String> {
     let bytes = fs::read(path).map_err(|error| format!("读取背景文件失败: {error}"))?;
-    Ok((
-        format!("{:x}", Sha256::digest(&bytes)),
-        bytes.len() as u64,
-    ))
+    Ok((format!("{:x}", Sha256::digest(&bytes)), bytes.len() as u64))
 }
 
 async fn sync_candidate(
@@ -140,9 +134,9 @@ async fn sync_candidate(
     previous_video_url: Option<&str>,
     previous_video_path: Option<&str>,
 ) -> Result<EndfieldBackgroundUpdate, String> {
-    let image_reuse_path = previous_image_path
-        .map(PathBuf::from)
-        .filter(|path| is_direct_child(path, target_dir) && file_matches_md5(path, &candidate.background.image_md5));
+    let image_reuse_path = previous_image_path.map(PathBuf::from).filter(|path| {
+        is_direct_child(path, target_dir) && file_matches_md5(path, &candidate.background.image_md5)
+    });
     let mut changed = false;
     let mut created_image_path = None;
 
@@ -178,9 +172,7 @@ async fn sync_candidate(
                         stage_cached_image(candidate, target_dir)
                             .await
                             .map_err(|cache_error| {
-                                format!(
-                                    "终末地静态背景 MD5 与启动器元数据不一致; {cache_error}"
-                                )
+                                format!("终末地静态背景 MD5 与启动器元数据不一致; {cache_error}")
                             })?
                     }
                     Err(download_error) => stage_cached_image(candidate, target_dir)
@@ -188,11 +180,13 @@ async fn sync_candidate(
                         .map_err(|cache_error| format!("{download_error}; {cache_error}"))?,
                 }
             }
-            Err(download_error) => stage_cached_image(candidate, target_dir)
-                .await
-                .map_err(|cache_error| {
-                    format!("下载终末地静态背景失败: {download_error}; {cache_error}")
-                })?,
+            Err(download_error) => {
+                stage_cached_image(candidate, target_dir)
+                    .await
+                    .map_err(|cache_error| {
+                        format!("下载终末地静态背景失败: {download_error}; {cache_error}")
+                    })?
+            }
         };
         created_image_path = Some(image_path.clone());
         changed = true;
@@ -200,23 +194,19 @@ async fn sync_candidate(
         (image_path, sha256, bytes)
     };
 
-    let (video_path, video_sha256, video_bytes) = if let Some(url) = &candidate.background.video_url {
+    let (video_path, video_sha256, video_bytes) = if let Some(url) = &candidate.background.video_url
+    {
         validate_video_url(url)?;
-        let reuse_path = previous_video_path
-            .map(PathBuf::from)
-            .filter(|path| {
-                previous_video_url == Some(url.as_str())
-                    && is_direct_child(path, target_dir)
-                    && file_is_mp4(path)
-            });
+        let reuse_path = previous_video_path.map(PathBuf::from).filter(|path| {
+            previous_video_url == Some(url.as_str())
+                && is_direct_child(path, target_dir)
+                && file_is_mp4(path)
+        });
         if let Some(path) = reuse_path {
             let (sha256, bytes) = sha256_file(&path)?;
             (Some(path), Some(sha256), Some(bytes))
         } else {
-            let response = reqwest::Client::new()
-                .get(url)
-                .send()
-                .await;
+            let response = reqwest::Client::new().get(url).send().await;
             let response = match response {
                 Ok(response) => response,
                 Err(error) => {
@@ -337,10 +327,7 @@ async fn download_asset(
     })
 }
 
-async fn stage_cached_image(
-    candidate: &Candidate,
-    target_dir: &Path,
-) -> Result<PathBuf, String> {
+async fn stage_cached_image(candidate: &Candidate, target_dir: &Path) -> Result<PathBuf, String> {
     let cached = find_cached_image(&candidate.profile_root, &candidate.background.image_md5)
         .ok_or_else(|| "终末地背景下载失败，启动器中也没有可用的同 MD5 缓存".to_string())?;
     let bytes = fs::read(&cached).map_err(|error| format!("读取终末地背景缓存失败: {error}"))?;
@@ -373,8 +360,7 @@ fn commit_staged(staged: StagedAsset, destination: &Path) -> Result<PathBuf, Str
             let _ = fs::remove_file(&staged.path);
             return Ok(destination.to_path_buf());
         }
-        fs::remove_file(destination)
-            .map_err(|error| format!("替换旧背景文件失败: {error}"))?;
+        fs::remove_file(destination).map_err(|error| format!("替换旧背景文件失败: {error}"))?;
     }
     fs::rename(&staged.path, destination).map_err(|error| {
         let _ = fs::remove_file(&staged.path);
@@ -516,10 +502,15 @@ fn read_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn read_files(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = fs::read_dir(root).map_err(|error| format!("读取启动器 LevelDB 失败: {error}"))?;
+    let entries =
+        fs::read_dir(root).map_err(|error| format!("读取启动器 LevelDB 失败: {error}"))?;
     let mut files = Vec::new();
     for entry in entries.flatten() {
-        if entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+        if entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
             files.push(entry.path());
         }
     }
@@ -537,10 +528,8 @@ fn decode_leveldb(bytes: &[u8]) -> Vec<String> {
 }
 
 fn best_endfield_background(text: &str) -> Option<(MainBackground, usize)> {
-    let main_pattern = regex::Regex::new(
-        r#"(?is)"main_bg_image"\s*:\s*\{(?P<body>[^{}]{0,8192})\}"#,
-    )
-    .ok()?;
+    let main_pattern =
+        regex::Regex::new(r#"(?is)"main_bg_image"\s*:\s*\{(?P<body>[^{}]{0,8192})\}"#).ok()?;
     let url_pattern = regex::Regex::new(r#""url"\s*:\s*"([^"]+)""#).ok()?;
     let md5_pattern = regex::Regex::new(r#""md5"\s*:\s*"([0-9a-fA-F]{32})""#).ok()?;
     let video_pattern = regex::Regex::new(r#""video_url"\s*:\s*"([^"]+)""#).ok()?;
@@ -810,11 +799,9 @@ mod tests {
         )
         .unwrap();
         assert!(validate_image_url(&candidate.background.image_url).is_ok());
-        assert!(find_cached_image(
-            &candidate.profile_root,
-            &candidate.background.image_md5
-        )
-        .is_some());
+        assert!(
+            find_cached_image(&candidate.profile_root, &candidate.background.image_md5).is_some()
+        );
     }
 
     #[tokio::test]
@@ -829,16 +816,17 @@ mod tests {
             &roaming_app_data.join("Hypergryph"),
         )
         .unwrap();
-        let target = std::env::temp_dir().join(format!(
-            "ssmt-endfield-sync-smoke-{}",
-            std::process::id()
-        ));
+        let target =
+            std::env::temp_dir().join(format!("ssmt-endfield-sync-smoke-{}", std::process::id()));
         fs::create_dir_all(&target).unwrap();
         let first = sync_candidate(&candidate, &target, None, None, None)
             .await
             .unwrap();
         assert!(first.changed);
-        assert!(file_matches_md5(Path::new(&first.image_path), &first.image_md5));
+        assert!(file_matches_md5(
+            Path::new(&first.image_path),
+            &first.image_md5
+        ));
         assert!(first
             .video_path
             .as_deref()

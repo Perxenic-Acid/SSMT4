@@ -228,10 +228,13 @@ fn inspect(
             }
             let expected = game_executable.parent().unwrap_or(Path::new("")).join(name);
             if !added_files.iter().chain(&replaced_files).any(|file| {
-                file.to_string_lossy().replace('\\', "/")
+                file.to_string_lossy()
+                    .replace('\\', "/")
                     .eq_ignore_ascii_case(&expected.to_string_lossy().replace('\\', "/"))
             }) {
-                return Err(format!("DLSS5 external host add-on is not tracked by the installation: {name}"));
+                return Err(format!(
+                    "DLSS5 external host add-on is not tracked by the installation: {name}"
+                ));
             }
         }
         if added_files.iter().chain(replaced_files.iter()).any(|file| {
@@ -371,11 +374,7 @@ mod tests {
 
     #[test]
     fn only_current_dlss5_package_versions_skip_legacy_swapper_integrations() {
-        for dependency in [
-            DLSS5_DEPENDENCY_ID,
-            "dlss5-adapter",
-            "dlss5-payload",
-        ] {
+        for dependency in [DLSS5_DEPENDENCY_ID, "dlss5-adapter", "dlss5-payload"] {
             assert!(is_optional_integration_dependency(
                 DLSS5_PLUGIN_ID,
                 "0.2.1",
@@ -525,7 +524,9 @@ mod tests {
 
         value["added"] = json!([]);
         game.write_manifest(&value);
-        assert!(matches!(game.inspect(), Dlss5State::Broken { reason, .. } if reason.contains("not tracked")));
+        assert!(
+            matches!(game.inspect(), Dlss5State::Broken { reason, .. } if reason.contains("not tracked"))
+        );
 
         value["added"] = json!(["Game/dlss5-feed.addon64", "Game/ReShade.ini"]);
         game.write_manifest(&value);

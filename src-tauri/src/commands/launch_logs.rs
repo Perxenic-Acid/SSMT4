@@ -1,5 +1,5 @@
 //! 可选启动计划的只读日志来源。只在目标 PID 已确认后跟随，不接管 DLL 的标准输入。
-use super::launch_console::{ConsoleEvent, ConsoleLog, StreamText, log_output, nonce};
+use super::launch_console::{log_output, nonce, ConsoleEvent, ConsoleLog, StreamText};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},

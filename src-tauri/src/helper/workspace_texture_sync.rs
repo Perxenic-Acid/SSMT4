@@ -452,10 +452,7 @@ fn sync_workspace_deduped_textures_and_json_impl(
                 match IndexBufferTxtFile::new(&ib_txt_filepath, true) {
                     Ok(file) => file,
                     Err(error) => {
-                        crate::extract_log!(
-                            "跳过无法解析的 IB txt {}: {}",
-                            ib_txt_filename, error
-                        );
+                        crate::extract_log!("跳过无法解析的 IB txt {}: {}", ib_txt_filename, error);
                         continue;
                     }
                 }
@@ -467,7 +464,8 @@ fn sync_workspace_deduped_textures_and_json_impl(
             if skip_non_trianglelist_ib && ib_txt_file.topology != "trianglelist" {
                 crate::extract_log!(
                     "跳过非 trianglelist 的 IB txt: {} (topology={})",
-                    ib_txt_filename, ib_txt_file.topology
+                    ib_txt_filename,
+                    ib_txt_file.topology
                 );
                 continue;
             }

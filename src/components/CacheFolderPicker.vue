@@ -81,12 +81,12 @@ const chooseCustomPath = async () => {
 }
 
 .cache-picker-option:hover {
-  border-color: rgba(117, 214, 187, .45);
+  border-color: rgba(var(--ssmt-brand-accent-rgb), .45);
 }
 
 .cache-picker-option.is-selected {
-  border-color: rgba(117, 214, 187, .85);
-  background: rgba(117, 214, 187, .09);
+  border-color: rgba(var(--ssmt-brand-accent-rgb), .85);
+  background: rgba(var(--ssmt-brand-accent-rgb), .09);
 }
 
 .cache-picker-option strong {
@@ -98,7 +98,7 @@ const chooseCustomPath = async () => {
   font-size: 12px;
   line-height: 1.5;
   word-break: break-all;
-  color: rgba(117, 214, 187, .85);
+  color: rgba(var(--ssmt-brand-accent-rgb), .85);
   background: rgba(0, 0, 0, .28);
   border-radius: 8px;
   padding: 8px 10px;
@@ -117,8 +117,8 @@ const chooseCustomPath = async () => {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #75d6bb;
-  box-shadow: 0 0 8px rgba(117, 214, 187, .9);
+  background: var(--ssmt-brand-accent);
+  box-shadow: 0 0 8px rgba(var(--ssmt-brand-accent-rgb), .9);
 }
 
 .cache-picker-path-row {

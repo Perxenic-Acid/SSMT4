@@ -329,9 +329,8 @@ impl MarkTextureHelper {
         // and assign component numbers.
         let mut component_map: HashMap<String, BTreeMap<String, String>> = HashMap::new();
         for (draw_ib, mut submesh_list) in draw_ib_submesh_map {
-            submesh_list.sort_by(|left, right| {
-                left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0))
-            });
+            submesh_list
+                .sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
 
             let mut component_dict: BTreeMap<String, String> = BTreeMap::new();
             for (component_index, (submesh_name, _)) in submesh_list.iter().enumerate() {

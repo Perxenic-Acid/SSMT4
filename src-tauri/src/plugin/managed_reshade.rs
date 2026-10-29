@@ -403,7 +403,8 @@ mod tests {
 
     #[test]
     fn source_preset_paths_are_rebased_on_both_sides_and_across_collection_steps() {
-        let source = "[GENERAL]\nPresetPath=C:\\HoYo\\Presets\\Mod OFF.ini\nPresetPath=Presets\\Other.ini\n";
+        let source =
+            "[GENERAL]\nPresetPath=C:\\HoYo\\Presets\\Mod OFF.ini\nPresetPath=Presets\\Other.ini\n";
         let shade = compose("", source, "", "Techniques=Shade@Shade.fx\n", &[]).unwrap();
         let combined = compose(
             &shade.game_ini,
@@ -411,11 +412,20 @@ mod tests {
             &shade.preset_ini,
             "Techniques=Feed@feed.fx\n",
             &[],
-        ).unwrap();
-        assert_eq!(get_entry(&combined.game_ini, "GENERAL", "PresetPath").as_deref(), Some(".\\ReShadePreset.ini"));
+        )
+        .unwrap();
+        assert_eq!(
+            get_entry(&combined.game_ini, "GENERAL", "PresetPath").as_deref(),
+            Some(".\\ReShadePreset.ini")
+        );
         assert_eq!(combined.game_ini.matches("PresetPath=").count(), 1);
-        assert!(combined.preset_ini.contains("Techniques=Feed@feed.fx,Shade@Shade.fx"));
-        assert_eq!(compose(&combined.game_ini, "", &combined.preset_ini, "", &[]).unwrap(), combined);
+        assert!(combined
+            .preset_ini
+            .contains("Techniques=Feed@feed.fx,Shade@Shade.fx"));
+        assert_eq!(
+            compose(&combined.game_ini, "", &combined.preset_ini, "", &[]).unwrap(),
+            combined
+        );
     }
 
     #[test]

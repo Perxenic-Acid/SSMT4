@@ -2280,7 +2280,10 @@
 .ui-builder-app #modal {
   display: none;
   position: fixed;
-  inset: 0;
+  top: var(--ssmt-content-overlay-top);
+  right: 0;
+  bottom: 0;
+  left: var(--ssmt-content-overlay-left);
   background: rgba(4, 7, 12, 0.62);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -2669,7 +2672,10 @@
 /* ── 自绘制弹窗(uib-dialog,全局作用域:Teleport 到 body) ── */
 .uib-dialog-overlay {
   position: fixed;
-  inset: 0;
+  top: var(--ssmt-content-overlay-top);
+  right: 0;
+  bottom: 0;
+  left: var(--ssmt-content-overlay-left);
   z-index: 30000;
   display: flex;
   align-items: center;
