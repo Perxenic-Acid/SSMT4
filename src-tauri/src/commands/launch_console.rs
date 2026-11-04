@@ -450,8 +450,13 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
     let token = nonce();
     let id = nonce();
     let mut log_sources: Option<Vec<_>> = Some(
-        request.log_sources.iter().take(4).cloned()
-            .map(super::launch_logs::LogTail::new).collect(),
+        request
+            .log_sources
+            .iter()
+            .take(4)
+            .cloned()
+            .map(super::launch_logs::LogTail::new)
+            .collect(),
     );
     let log_folder = crate::config::path_manager::PathManager::ssmt_cache_root(&app).join("Logs");
     let mut log = match ConsoleLog::new(&log_folder, &id) {
@@ -650,9 +655,16 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
                             crate::plugin::launch_event_bus::parse_json_line(&lines[..end])
                         {
                             if matches!(event.event.as_str(), "target_created" | "target_detected")
-                                && event.pid.is_some_and(|pid| pid > 0) {
-                                if let (Some(pid), Some(sources)) = (event.pid, log_sources.take()) {
-                                    super::launch_logs::follow(event_app.clone(), sources, pid, &session_id);
+                                && event.pid.is_some_and(|pid| pid > 0)
+                            {
+                                if let (Some(pid), Some(sources)) = (event.pid, log_sources.take())
+                                {
+                                    super::launch_logs::follow(
+                                        event_app.clone(),
+                                        sources,
+                                        pid,
+                                        &session_id,
+                                    );
                                 }
                             }
                             event

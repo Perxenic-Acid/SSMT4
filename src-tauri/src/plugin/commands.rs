@@ -6,10 +6,12 @@ use super::graphics_stack::{
 use super::hoyoshade::{HoYoShadeBridge, HOYOSHADE_DEPENDENCY_ID, HOYOSHADE_PLUGIN_ID};
 use super::logging::PluginLogWriter;
 use super::managed_stack::{self, Dlss5RouteScan, ManagedStackStatus};
-use super::package_installer::{inspect_ssmtpkg, install_verified_ssmtpkg, PackageInspection};
-use super::official_release;
 use super::marketplace::MarketplaceEntry;
-use super::registry::{game_scope_preset, ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME};
+use super::official_release;
+use super::package_installer::{inspect_ssmtpkg, install_verified_ssmtpkg, PackageInspection};
+use super::registry::{
+    game_scope_preset, ExternalDependencyState, PluginRegistry, MANIFEST_FILE_NAME,
+};
 use super::settings::PluginSettingsStore;
 use super::PluginManifest;
 use serde::{Deserialize, Serialize};
@@ -57,16 +59,23 @@ fn inspect_dlss5_last_run_log(path: &std::path::Path) -> Result<Dlss5LastRunStat
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let metadata = file.metadata().map_err(|error| error.to_string())?;
     let observed_at_ms = metadata.modified().ok().and_then(|time| {
-        time.duration_since(UNIX_EPOCH).ok().map(|duration| duration.as_millis())
+        time.duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_millis())
     });
     // ReShade.log 可非常大；只读取最后 1 MiB，避免设置页扫描整份日志。
     const MAX_LOG_BYTES: u64 = 1024 * 1024;
-    file.seek(SeekFrom::Start(metadata.len().saturating_sub(MAX_LOG_BYTES)))
-        .map_err(|error| error.to_string())?;
+    file.seek(SeekFrom::Start(
+        metadata.len().saturating_sub(MAX_LOG_BYTES),
+    ))
+    .map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    file.read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
     let log = String::from_utf8_lossy(&bytes);
-    let (verdict, reason) = if log.contains("[DLSS 5 Feed] stopped: Direct3D 11 multithread protection is unavailable") {
+    let (verdict, reason) = if log
+        .contains("[DLSS 5 Feed] stopped: Direct3D 11 multithread protection is unavailable")
+    {
         ("inactive", "d3d11_interposer_race")
     } else if log.contains("[DLSS 5 Feed] stopped:") {
         ("inactive", "feeder_stopped")
@@ -223,9 +232,10 @@ fn inspect_graphics_for_launch(
         .transpose()?
         .unwrap_or(false);
     // 只有启用了 DLSS5 才读取其游戏文件，普通启动不受外部安装记录影响。
-    let dlss5_enabled = !skip_dlss5 && registry
-        .find(DLSS5_PLUGIN_ID)
-        .is_some_and(|plugin| plugin.enabled);
+    let dlss5_enabled = !skip_dlss5
+        && registry
+            .find(DLSS5_PLUGIN_ID)
+            .is_some_and(|plugin| plugin.enabled);
     let state = GameGraphicsState {
         dlss5: if dlss5_enabled {
             inspect_game_executable(game_executable)
@@ -233,7 +243,10 @@ fn inspect_graphics_for_launch(
             Dlss5State::NotManaged
         },
     };
-    if dlss5_enabled && (super::gimi_hot_runtime::applies(game_executable) || super::dlss5_hot_runtime::applies(game_executable)) {
+    if dlss5_enabled
+        && (super::gimi_hot_runtime::applies(game_executable)
+            || super::dlss5_hot_runtime::applies(game_executable))
+    {
         let clean = matches!(state.dlss5, Dlss5State::NotManaged);
         return Ok(GraphicsLaunchInspection {
             hoyoshade_requested,
@@ -261,7 +274,11 @@ fn inspect_graphics_for_launch(
         });
     }
     let host_requested = hoyoshade_requested
-        || (dlss5_enabled && matches!(state.dlss5, Dlss5State::Managed(_) | Dlss5State::Broken { .. }));
+        || (dlss5_enabled
+            && matches!(
+                state.dlss5,
+                Dlss5State::Managed(_) | Dlss5State::Broken { .. }
+            ));
     let resolution = GraphicsStackResolver::resolve(
         &state,
         GraphicsLaunchContributions {
@@ -309,9 +326,11 @@ pub async fn inspect_graphics_launch(
     game_name: String,
     game_executable: String,
 ) -> Result<GraphicsLaunchInspection, String> {
-    tauri::async_runtime::spawn_blocking(move || inspect_graphics_launch_blocking(game_name, game_executable))
-        .await
-        .map_err(|error| format!("后台启动任务失败：{error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_graphics_launch_blocking(game_name, game_executable)
+    })
+    .await
+    .map_err(|error| format!("后台启动任务失败：{error}"))?
 }
 
 fn inspect_graphics_launch_blocking(
@@ -332,11 +351,16 @@ fn inspect_graphics_launch_blocking(
             ),
         });
     };
-    inspect_graphics_for_executable(&registry.for_game(&game_name), &PathBuf::from(game_executable))
+    inspect_graphics_for_executable(
+        &registry.for_game(&game_name),
+        &PathBuf::from(game_executable),
+    )
 }
 
 #[tauri::command]
-pub async fn inspect_dlss5_game_state(game_executable: String) -> Result<Dlss5GameStateSnapshot, String> {
+pub async fn inspect_dlss5_game_state(
+    game_executable: String,
+) -> Result<Dlss5GameStateSnapshot, String> {
     read_graphics_status(move || inspect_dlss5_game_state_blocking(game_executable)).await
 }
 
@@ -349,7 +373,9 @@ pub(super) async fn read_graphics_status<T: Send + 'static>(
         .map_err(|error| format!("读取图形组件状态失败：{error}"))?
 }
 
-fn inspect_dlss5_game_state_blocking(game_executable: String) -> Result<Dlss5GameStateSnapshot, String> {
+fn inspect_dlss5_game_state_blocking(
+    game_executable: String,
+) -> Result<Dlss5GameStateSnapshot, String> {
     let game_executable = PathBuf::from(game_executable);
     if !game_executable.is_file() {
         return Err(format!(
@@ -487,11 +513,12 @@ pub fn inspect_managed_graphics_stack(
 }
 
 #[tauri::command]
-pub async fn restore_managed_graphics_stack(
-    game_executable: String,
-) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || managed_stack::restore(&PathBuf::from(game_executable)))
-        .await.map_err(|error| error.to_string())?
+pub async fn restore_managed_graphics_stack(game_executable: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        managed_stack::restore(&PathBuf::from(game_executable))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -516,7 +543,12 @@ fn inspect_dlss5_route_options_blocking(
         .for_game(&game_name);
     let executable = PathBuf::from(game_executable);
     if super::dlss5_hot_runtime::applies(&executable) {
-        let mut scan = super::dlss5_hot_runtime::route_scan(&registry, &game_scope_preset(&game_name), &executable, &api_override)?;
+        let mut scan = super::dlss5_hot_runtime::route_scan(
+            &registry,
+            &game_scope_preset(&game_name),
+            &executable,
+            &api_override,
+        )?;
         if super::gimi_hot_runtime::applies(&executable) {
             scan.installed_route = super::dlss5_hot_runtime::gimi_route(&game_name).ok();
         }
@@ -533,8 +565,8 @@ pub fn install_managed_dlss5_route(
     api_override: String,
     anti_cheat_acknowledged: bool,
 ) -> Result<Dlss5RouteScan, String> {
-    let mut registry = PluginRegistry::from_default_location()
-        .map_err(|error| error.to_string())?;
+    let mut registry =
+        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
     let executable = PathBuf::from(game_executable);
     let result = managed_stack::install_route(
         &registry.for_game(&game_name),
@@ -543,19 +575,27 @@ pub fn install_managed_dlss5_route(
         &api_override,
         anti_cheat_acknowledged,
     )?;
-    if let Err(error) = registry.set_managed_game_executable(&game_name, DLSS5_PLUGIN_ID, Some(&executable)) {
+    if let Err(error) =
+        registry.set_managed_game_executable(&game_name, DLSS5_PLUGIN_ID, Some(&executable))
+    {
         let rollback = managed_stack::restore_swapper(&registry.for_game(&game_name), &executable);
-        return Err(format!("cannot record DLSS5 installation: {error}; rollback: {rollback:?}"));
+        return Err(format!(
+            "cannot record DLSS5 installation: {error}; rollback: {rollback:?}"
+        ));
     }
     Ok(result)
 }
 
 #[tauri::command]
 pub fn restore_dlss5_install(game_name: String, game_executable: String) -> Result<(), String> {
-    let mut registry = PluginRegistry::from_default_location()
-        .map_err(|error| error.to_string())?;
-    managed_stack::restore_swapper(&registry.for_game(&game_name), &PathBuf::from(game_executable))?;
-    registry.set_managed_game_executable(&game_name, DLSS5_PLUGIN_ID, None)
+    let mut registry =
+        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    managed_stack::restore_swapper(
+        &registry.for_game(&game_name),
+        &PathBuf::from(game_executable),
+    )?;
+    registry
+        .set_managed_game_executable(&game_name, DLSS5_PLUGIN_ID, None)
         .map_err(|error| error.to_string())
 }
 
@@ -619,7 +659,10 @@ fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<Installe
         if plugin.manifest.id == PLAYER_TWEAKS_ID {
             match super::player_tweaks::features(installed, &preset) {
                 Ok(features) => plugin.features = features,
-                Err(_) => { plugin.enabled = false; plugin.lifecycle_status = PluginLifecycleStatus::Broken; }
+                Err(_) => {
+                    plugin.enabled = false;
+                    plugin.lifecycle_status = PluginLifecycleStatus::Broken;
+                }
             }
         }
         if !plugin.app_scoped && !plugin.manifest.compatibility.supports_game(&preset) {
@@ -661,7 +704,8 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
         .map(|plugin| InstalledPluginSnapshot {
             manifest: {
                 let mut manifest = plugin.manifest.clone();
-                manifest.contributions.host_extensions = super::host_graphics::settings_extensions(plugin);
+                manifest.contributions.host_extensions =
+                    super::host_graphics::settings_extensions(plugin);
                 manifest.external_dependencies = plugin.manifest.display_dependencies();
                 manifest
             },
@@ -756,7 +800,9 @@ pub fn plugin_registry_snapshot() -> Result<Vec<InstalledPluginSnapshot>, String
 }
 
 #[tauri::command]
-pub fn plugin_registry_snapshot_for_game(game_name: String) -> Result<Vec<InstalledPluginSnapshot>, String> {
+pub fn plugin_registry_snapshot_for_game(
+    game_name: String,
+) -> Result<Vec<InstalledPluginSnapshot>, String> {
     let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
     Ok(snapshot_for_game(&registry, &game_name))
 }
@@ -779,7 +825,10 @@ pub fn plugin_ui_routes(game_name: String) -> Result<Vec<PluginUiRouteSnapshot>,
 }
 
 #[tauri::command]
-pub fn plugin_capabilities(plugin_id: String, game_name: String) -> Result<PluginCapabilitiesSnapshot, String> {
+pub fn plugin_capabilities(
+    plugin_id: String,
+    game_name: String,
+) -> Result<PluginCapabilitiesSnapshot, String> {
     let registry = PluginRegistry::from_default_location()
         .map_err(|error| error.to_string())?
         .for_game(&game_name);
@@ -802,7 +851,8 @@ pub fn set_plugin_enabled_for_game(
     enabled: bool,
     game_executable: Option<String>,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
-    let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let mut registry =
+        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
     if enabled {
         if let Some(plugin) = registry.find(&id) {
             if !plugin.manifest.contributions.injected_dlls.is_empty()
@@ -812,39 +862,62 @@ pub fn set_plugin_enabled_for_game(
             }
         }
     }
-    let cleanup_dlss5 = id == DLSS5_PLUGIN_ID && !enabled
+    let cleanup_dlss5 = id == DLSS5_PLUGIN_ID
+        && !enabled
         && (registry.game_enabled(&game_name, &id)
             || registry.managed_game_executable(&game_name, &id).is_some());
     if cleanup_dlss5 {
-        let executable = registry.managed_game_executable(&game_name, &id).map(Path::to_path_buf)
-            .or_else(|| game_executable.as_deref().map(str::trim).filter(|path| !path.is_empty()).map(PathBuf::from))
-            .ok_or("game executable path is required to disable DLSS5 and restore its managed files")?;
+        let executable = registry
+            .managed_game_executable(&game_name, &id)
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                game_executable
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from)
+            })
+            .ok_or(
+                "game executable path is required to disable DLSS5 and restore its managed files",
+            )?;
         if !executable.is_file() {
-            return Err(format!("game executable does not exist: {}", executable.display()));
+            return Err(format!(
+                "game executable does not exist: {}",
+                executable.display()
+            ));
         }
         match inspect_game_executable(&executable) {
             Dlss5State::Managed(state) if state.external_host.is_some() => {
                 managed_stack::restore_swapper(&registry.for_game(&game_name), &executable)?;
             }
             Dlss5State::Broken { reason, .. } => {
-                return Err(format!("cannot safely disable DLSS5 before repairing its installation: {reason}"));
+                return Err(format!(
+                    "cannot safely disable DLSS5 before repairing its installation: {reason}"
+                ));
             }
             // 没有 SSMT 宿主标记的安装可能由玩家自行管理，不能擅自移除。
             Dlss5State::Managed(_) | Dlss5State::NotManaged => {}
         }
     }
-    if id == PLAYER_TWEAKS_ID && !enabled && registry.find(&id).is_some()
-        && game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI") {
+    if id == PLAYER_TWEAKS_ID
+        && !enabled
+        && registry.find(&id).is_some()
+        && game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI")
+    {
         super::star_rail_tweaks::release_for_game(&game_name)?;
     }
-    if registry.find(&id).is_some_and(|plugin| plugin.manifest.is_app_scoped()) {
+    if registry
+        .find(&id)
+        .is_some_and(|plugin| plugin.manifest.is_app_scoped())
+    {
         registry.set_enabled(&id, enabled)
     } else {
         registry.set_game_enabled(&game_name, &id, enabled)
     }
     .map_err(|error| error.to_string())?;
     if cleanup_dlss5 {
-        registry.set_managed_game_executable(&game_name, &id, None)
+        registry
+            .set_managed_game_executable(&game_name, &id, None)
             .map_err(|error| error.to_string())?;
     }
     Ok(snapshot_for_game(&registry, &game_name))
@@ -871,9 +944,11 @@ pub async fn prepare_hoyoshade_launch(
     graphics_decision: Option<GraphicsLaunchDecision>,
     skip_dlss5: Option<bool>,
 ) -> Result<Option<PluginLaunchProgram>, String> {
-    tauri::async_runtime::spawn_blocking(move || prepare_hoyoshade_launch_blocking(game_name, game_executable, graphics_decision, skip_dlss5))
-        .await
-        .map_err(|error| format!("后台启动任务失败：{error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_hoyoshade_launch_blocking(game_name, game_executable, graphics_decision, skip_dlss5)
+    })
+    .await
+    .map_err(|error| format!("后台启动任务失败：{error}"))?
 }
 
 fn prepare_hoyoshade_launch_blocking(
@@ -882,11 +957,13 @@ fn prepare_hoyoshade_launch_blocking(
     graphics_decision: Option<GraphicsLaunchDecision>,
     skip_dlss5: Option<bool>,
 ) -> Result<Option<PluginLaunchProgram>, String> {
-    let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name)) else {
+    let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name))
+    else {
         return Ok(None);
     };
     let game_executable = PathBuf::from(game_executable);
-    let hot_route = super::gimi_hot_runtime::applies(&game_executable) || super::dlss5_hot_runtime::applies(&game_executable);
+    let hot_route = super::gimi_hot_runtime::applies(&game_executable)
+        || super::dlss5_hot_runtime::applies(&game_executable);
     let skip_dlss5 = skip_dlss5.unwrap_or(false) && hot_route;
     if hot_route
         && !skip_dlss5
@@ -935,7 +1012,12 @@ fn prepare_hoyoshade_launch_blocking(
         }
         match inspect_game_executable(&game_executable) {
             Dlss5State::Managed(state) => {
-                managed_stack::prepare(&registry, &game_executable, &state, inspection.hoyoshade_requested)?;
+                managed_stack::prepare(
+                    &registry,
+                    &game_executable,
+                    &state,
+                    inspection.hoyoshade_requested,
+                )?;
                 // 提权后的 Unity 进程不一定能枚举 OptiScaler 代理，且崩铁可能
                 // 通过 D3D12 路径加载它。等待精确的 `dxgi.dll` 模块会把本来
                 // 可用的 HoYoShade 注入变成超时；托管注入器已经会等待目标进程，
@@ -967,13 +1049,19 @@ pub async fn prepare_plugin_host_config(
     game_name: String,
     runtime_directory: String,
 ) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || prepare_plugin_host_config_blocking(game_name, runtime_directory))
-        .await
-        .map_err(|error| format!("后台启动任务失败：{error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_plugin_host_config_blocking(game_name, runtime_directory)
+    })
+    .await
+    .map_err(|error| format!("后台启动任务失败：{error}"))?
 }
 
-fn prepare_plugin_host_config_blocking(game_name: String, runtime_directory: String) -> Result<Option<String>, String> {
-    let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name)) else {
+fn prepare_plugin_host_config_blocking(
+    game_name: String,
+    runtime_directory: String,
+) -> Result<Option<String>, String> {
+    let Some(registry) = installed_plugin_registry()?.map(|registry| registry.for_game(&game_name))
+    else {
         return Ok(None);
     };
     let config = registry.generate_plugin_host_config();
@@ -1013,26 +1101,36 @@ pub fn install_plugin_package(
     if !disclaimer_accepted {
         return Err("third-party plugin disclaimer must be accepted".into());
     }
-    let inspection = inspect_ssmtpkg(&PathBuf::from(&archive_path)).map_err(|error| error.to_string())?;
+    let inspection =
+        inspect_ssmtpkg(&PathBuf::from(&archive_path)).map_err(|error| error.to_string())?;
     if inspection.manifest.id.starts_with("ssmt.") {
         return Err("ssmt.* is reserved for packages from the Native Release".into());
     }
     if inspection.sha256 != reviewed_sha256.to_ascii_lowercase() {
         return Err("package changed since safety review".into());
     }
-    if !inspection.manifest.compatibility.supports(&app.package_info().version.to_string(), super::SUPPORTED_PLATFORM, None) {
+    if !inspection.manifest.compatibility.supports(
+        &app.package_info().version.to_string(),
+        super::SUPPORTED_PLATFORM,
+        None,
+    ) {
         return Err("plugin is incompatible with this SSMT version or platform".into());
     }
     let mut registry =
         PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
-    install_verified_ssmtpkg(&mut registry, &PathBuf::from(archive_path), &reviewed_sha256)
-        .map_err(|error| error.to_string())?;
+    install_verified_ssmtpkg(
+        &mut registry,
+        &PathBuf::from(archive_path),
+        &reviewed_sha256,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(snapshot(&registry))
 }
 
 #[tauri::command]
 pub fn inspect_plugin_package(archive_path: String) -> Result<PackageInspection, String> {
-    let inspection = inspect_ssmtpkg(&PathBuf::from(archive_path)).map_err(|error| error.to_string())?;
+    let inspection =
+        inspect_ssmtpkg(&PathBuf::from(archive_path)).map_err(|error| error.to_string())?;
     if inspection.manifest.id.starts_with("ssmt.") {
         return Err("ssmt.* is reserved for packages from the Native Release".into());
     }
@@ -1040,13 +1138,16 @@ pub fn inspect_plugin_package(archive_path: String) -> Result<PackageInspection,
 }
 
 #[tauri::command]
-pub async fn local_plugin_packages() -> Result<Vec<super::local_packages::LocalPluginPackage>, String> {
-    let Some(directory) = super::local_packages::development_directory(cfg!(debug_assertions)) else {
+pub async fn local_plugin_packages(
+) -> Result<Vec<super::local_packages::LocalPluginPackage>, String> {
+    let Some(directory) = super::local_packages::development_directory(cfg!(debug_assertions))
+    else {
         return Ok(Vec::new());
     };
     // 包检查会解压并计算压缩包哈希，不能占用 WebView 的交互线程。
     tauri::async_runtime::spawn_blocking(move || super::local_packages::discover(&directory))
-        .await.map_err(|error| format!("读取开发插件目录失败：{error}"))?
+        .await
+        .map_err(|error| format!("读取开发插件目录失败：{error}"))?
 }
 
 #[tauri::command]
@@ -1056,19 +1157,24 @@ pub fn install_local_plugin(
     reviewed_sha256: String,
     disclaimer_accepted: bool,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
-    if !disclaimer_accepted { return Err("local plugin disclaimer must be accepted".into()); }
+    if !disclaimer_accepted {
+        return Err("local plugin disclaimer must be accepted".into());
+    }
     let directory = super::local_packages::development_directory(cfg!(debug_assertions))
         .ok_or("本地构建包仅限开发模式；请从官方目录或第三方包入口安装插件")?;
     // 本地构建保留 ID 以复用已有贡献，但安装来源仍未验证；不能借此安装任意路径的 ssmt.* 包。
-    let package = super::local_packages::reviewed(
-        &directory,
-        &id, &reviewed_sha256,
-    )?;
-    if !package.inspection.manifest.compatibility.supports(&app.package_info().version.to_string(), super::SUPPORTED_PLATFORM, None) {
+    let package = super::local_packages::reviewed(&directory, &id, &reviewed_sha256)?;
+    if !package.inspection.manifest.compatibility.supports(
+        &app.package_info().version.to_string(),
+        super::SUPPORTED_PLATFORM,
+        None,
+    ) {
         return Err("plugin is incompatible with this SSMT version or platform".into());
     }
-    let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
-    install_verified_ssmtpkg(&mut registry, &package.archive_path, &reviewed_sha256).map_err(|error| error.to_string())?;
+    let mut registry =
+        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    install_verified_ssmtpkg(&mut registry, &package.archive_path, &reviewed_sha256)
+        .map_err(|error| error.to_string())?;
     Ok(snapshot(&registry))
 }
 
@@ -1078,9 +1184,20 @@ pub async fn official_plugin_catalog() -> Result<Vec<MarketplaceEntry>, String> 
 }
 
 #[tauri::command]
-pub async fn install_official_plugin(app: tauri::AppHandle, id: String, version: String) -> Result<Vec<InstalledPluginSnapshot>, String> {
-    let mut registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
-    official_release::install_official(&mut registry, &id, &version, &app.package_info().version.to_string()).await?;
+pub async fn install_official_plugin(
+    app: tauri::AppHandle,
+    id: String,
+    version: String,
+) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    let mut registry =
+        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    official_release::install_official(
+        &mut registry,
+        &id,
+        &version,
+        &app.package_info().version.to_string(),
+    )
+    .await?;
     Ok(snapshot(&registry))
 }
 
@@ -1094,22 +1211,40 @@ pub fn uninstall_plugin(
     }
     let plugins_root = crate::config::path_manager::PathManager::ssmt_plugins_folder();
     let global_root = crate::config::path_manager::PathManager::ssmt_global_config_folder();
-    uninstall_plugin_from_roots(&plugin_id, game_name.as_deref(), &plugins_root, &global_root)
+    uninstall_plugin_from_roots(
+        &plugin_id,
+        game_name.as_deref(),
+        &plugins_root,
+        &global_root,
+    )
 }
 
 fn any_configured_game_process_running() -> bool {
     let games_root = crate::config::path_manager::PathManager::global_config_games_folder();
-    let Ok(entries) = fs::read_dir(games_root) else { return false };
+    let Ok(entries) = fs::read_dir(games_root) else {
+        return false;
+    };
     let mut names = HashSet::new();
     for entry in entries.flatten() {
         if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             continue;
         }
         let config_path = entry.path().join("Config.json");
-        let Ok(raw) = fs::read_to_string(config_path) else { continue };
-        let Ok(config) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
-        let Some(path) = config.get("targetExePath").and_then(serde_json::Value::as_str) else { continue };
-        let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else { continue };
+        let Ok(raw) = fs::read_to_string(config_path) else {
+            continue;
+        };
+        let Ok(config) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(path) = config
+            .get("targetExePath")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
         names.insert(name.to_ascii_lowercase());
     }
     if names.is_empty() {
@@ -1117,9 +1252,10 @@ fn any_configured_game_process_running() -> bool {
     }
     let mut system = System::new();
     system.refresh_processes_specifics(ProcessRefreshKind::new());
-    system.processes().values().any(|process| {
-        names.contains(&process.name().to_ascii_lowercase())
-    })
+    system
+        .processes()
+        .values()
+        .any(|process| names.contains(&process.name().to_ascii_lowercase()))
 }
 
 fn remove_owned_path(path: &Path, directory: bool) -> Result<(), String> {
@@ -1136,7 +1272,10 @@ fn remove_owned_path(path: &Path, directory: bool) -> Result<(), String> {
     .map_err(|error| format!("删除卸载目标失败 {}：{error}", path.display()))
 }
 
-fn cached_package_paths_for_plugin(cache_root: &Path, plugin_id: &str) -> Result<Vec<PathBuf>, String> {
+fn cached_package_paths_for_plugin(
+    cache_root: &Path,
+    plugin_id: &str,
+) -> Result<Vec<PathBuf>, String> {
     let entries = match fs::read_dir(cache_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -1145,7 +1284,11 @@ fn cached_package_paths_for_plugin(cache_root: &Path, plugin_id: &str) -> Result
     let mut paths = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() || !path.extension().is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("asset")) {
+        if !path.is_file()
+            || !path
+                .extension()
+                .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("asset"))
+        {
             continue;
         }
         let owned = inspect_ssmtpkg(&path)
@@ -1167,7 +1310,10 @@ fn cached_manifest_plugin_id(path: &Path) -> Option<String> {
         return None;
     }
     let mut bytes = Vec::new();
-    entry.take(MAX_MANIFEST_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    entry
+        .take(MAX_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
     if bytes.len() as u64 > MAX_MANIFEST_BYTES {
         return None;
     }
@@ -1202,11 +1348,16 @@ fn uninstall_plugin_from_roots(
 
     let data_dir = global_root.join("PluginData").join(plugin_id);
     remove_owned_path(&data_dir, true)?;
-    let log_file = global_root.join("PluginLogs").join(format!("{plugin_id}.log"));
+    let log_file = global_root
+        .join("PluginLogs")
+        .join(format!("{plugin_id}.log"));
     remove_owned_path(&log_file, false)?;
-    let log_tmp = global_root.join("PluginLogs").join(format!("{plugin_id}.log.tmp"));
+    let log_tmp = global_root
+        .join("PluginLogs")
+        .join(format!("{plugin_id}.log.tmp"));
     remove_owned_path(&log_tmp, false)?;
-    for cached in cached_package_paths_for_plugin(&global_root.join("PluginAssetCache"), plugin_id)? {
+    for cached in cached_package_paths_for_plugin(&global_root.join("PluginAssetCache"), plugin_id)?
+    {
         remove_owned_path(&cached, false)?;
     }
 
@@ -1219,11 +1370,12 @@ fn uninstall_plugin_from_roots(
         .remove_namespace(plugin_id)
         .map_err(|error| error.to_string())?;
 
-    let snapshots = if let Some(game_name) = game_name.map(str::trim).filter(|name| !name.is_empty()) {
-        snapshot_for_game(&registry, game_name)
-    } else {
-        snapshot(&registry)
-    };
+    let snapshots =
+        if let Some(game_name) = game_name.map(str::trim).filter(|name| !name.is_empty()) {
+            snapshot_for_game(&registry, game_name)
+        } else {
+            snapshot(&registry)
+        };
     Ok(snapshots)
 }
 
@@ -1283,11 +1435,10 @@ pub fn set_plugin_setting(
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities_for_permissions, inspect_graphics_for_executable, inspect_graphics_for_launch, installed_plugin_registry_at,
-        lifecycle_status,
-        should_launch_hoyoshade, Dlss5GameStateSnapshot, GraphicsLaunchDecision,
-        GraphicsLaunchInspection, PluginLifecycleStatus, inspect_dlss5_last_run_log,
-        uninstall_plugin_from_roots,
+        capabilities_for_permissions, inspect_dlss5_last_run_log, inspect_graphics_for_executable,
+        inspect_graphics_for_launch, installed_plugin_registry_at, lifecycle_status,
+        should_launch_hoyoshade, uninstall_plugin_from_roots, Dlss5GameStateSnapshot,
+        GraphicsLaunchDecision, GraphicsLaunchInspection, PluginLifecycleStatus,
     };
     use crate::plugin::graphics_stack::{
         CompatibilityLevel, GraphicsCompatibilityIssue, GraphicsStackResolution,
@@ -1308,7 +1459,10 @@ mod tests {
         std::env::temp_dir().join(format!(
             "ssmt-plugin-uninstall-{label}-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ))
     }
 
@@ -1325,14 +1479,21 @@ mod tests {
 
     fn write_cached_package(path: &Path, id: &str) {
         let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
-        zip.start_file("ssmt-plugin.json", zip::write::FileOptions::default()).unwrap();
-        zip.write_all(format!(r#"{{
+        zip.start_file("ssmt-plugin.json", zip::write::FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            format!(
+                r#"{{
           "schemaVersion":1,"id":"{id}","name":"Cached fixture",
           "description":"full inspection intentionally rejects this cache",
           "version":"1.0.0","author":"Test",
           "compatibility":{{"ssmt":">=4.0.0","platforms":["windows-x64"]}},
           "contributions":{{}},"externalDependencies":[],"permissions":[]
-        }}"#).as_bytes()).unwrap();
+        }}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
         zip.finish().unwrap();
     }
 
@@ -1347,11 +1508,13 @@ mod tests {
             registry.install_directory_package(&package).unwrap();
             registry.set_game_enabled("GIMI", id, true).unwrap();
         }
-        let enabled_error = uninstall_plugin_from_roots(
-            "example.remove", None, &plugins_root, &global_root,
-        ).unwrap_err();
+        let enabled_error =
+            uninstall_plugin_from_roots("example.remove", None, &plugins_root, &global_root)
+                .unwrap_err();
         assert!(enabled_error.contains("请先禁用"));
-        registry.set_game_enabled("GIMI", "example.remove", false).unwrap();
+        registry
+            .set_game_enabled("GIMI", "example.remove", false)
+            .unwrap();
 
         let data = global_root.join("PluginData/example.remove/presets");
         fs::create_dir_all(&data).unwrap();
@@ -1366,13 +1529,19 @@ mod tests {
         write_cached_package(&cached, "example.remove");
         let mut settings = crate::plugin::settings::PluginSettingsStore::new(
             global_root.join("plugin-settings.json"),
-        ).unwrap();
-        settings.set("example.remove", "native_injection_risk_ack_v1",
-            serde_json::json!({"accepted":true})).unwrap();
+        )
+        .unwrap();
+        settings
+            .set(
+                "example.remove",
+                "native_injection_risk_ack_v1",
+                serde_json::json!({"accepted":true}),
+            )
+            .unwrap();
 
-        let snapshots = uninstall_plugin_from_roots(
-            "example.remove", None, &plugins_root, &global_root,
-        ).unwrap();
+        let snapshots =
+            uninstall_plugin_from_roots("example.remove", None, &plugins_root, &global_root)
+                .unwrap();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].manifest.id, "example.keep");
         assert!(!plugins_root.join("example.remove").exists());
@@ -1385,8 +1554,14 @@ mod tests {
         assert!(restarted.find("example.keep").is_some());
         let settings = crate::plugin::settings::PluginSettingsStore::new(
             global_root.join("plugin-settings.json"),
-        ).unwrap();
-        assert_eq!(settings.get("example.remove", "native_injection_risk_ack_v1").unwrap(), None);
+        )
+        .unwrap();
+        assert_eq!(
+            settings
+                .get("example.remove", "native_injection_risk_ack_v1")
+                .unwrap(),
+            None
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1435,7 +1610,11 @@ mod tests {
         let status = inspect_dlss5_last_run_log(&log).unwrap();
         assert_eq!(status.verdict, "inactive");
         assert_eq!(status.reason, "d3d11_interposer_race");
-        fs::write(&log, "addon loaded\n[DLSS 5 Bridge] stopped: resource build. The game renders normally.\n").unwrap();
+        fs::write(
+            &log,
+            "addon loaded\n[DLSS 5 Bridge] stopped: resource build. The game renders normally.\n",
+        )
+        .unwrap();
         let status = inspect_dlss5_last_run_log(&log).unwrap();
         assert_eq!(status.verdict, "inactive");
         assert_eq!(status.reason, "bridge_stopped");
@@ -1522,48 +1701,68 @@ mod tests {
                 combinations.push(vec![id.clone(), other.clone()]);
             }
         }
-        for (preset, name) in [("GIMI", "YuanShen.exe"), ("SRMI", "StarRail.exe"),
-            ("WWMI", "Client-Win64-Shipping.exe"), ("ZZMI", "ZenlessZoneZero.exe"), ("ZZMIDX12", "ZenlessZoneZero.exe")] {
-          let executable = game.join(name);
-          fs::write(&executable, b"fixture").unwrap();
-          for combination in &combinations {
-            for id in &ids {
-                let compatible = registry.find(id).unwrap().manifest.compatibility.supports_game(preset);
-                registry
-                    .set_game_enabled(preset, id, compatible && combination.contains(id))
-                    .unwrap();
-            }
-            let scoped = registry.for_game(preset);
-            let dlss5 = combination.iter().any(|id| id == "ssmt.dlss5.integration");
-            let shade = combination.iter().any(|id| id == super::super::hoyoshade::HOYOSHADE_PLUGIN_ID)
-                && scoped.find(super::super::hoyoshade::HOYOSHADE_PLUGIN_ID).is_some_and(|plugin|
-                    super::super::hoyoshade::HoYoShadeBridge::from_installed(plugin).unwrap().supports_process(name));
-            let clean = inspect_graphics_for_executable(&scoped, &executable).unwrap();
-            assert_eq!(clean.resolution.level, CompatibilityLevel::Compatible);
-            assert_eq!(clean.host_requested, dlss5 || shade);
-            fs::write(game.join("_DLSS5_Backup/manifest.json"), b"invalid").unwrap();
-            let broken = inspect_graphics_for_executable(&scoped, &executable).unwrap();
-            assert_eq!(
-                broken.resolution.level,
-                if dlss5 {
-                    CompatibilityLevel::Conflict
-                } else {
-                    CompatibilityLevel::Compatible
+        for (preset, name) in [
+            ("GIMI", "YuanShen.exe"),
+            ("SRMI", "StarRail.exe"),
+            ("WWMI", "Client-Win64-Shipping.exe"),
+            ("ZZMI", "ZenlessZoneZero.exe"),
+            ("ZZMIDX12", "ZenlessZoneZero.exe"),
+        ] {
+            let executable = game.join(name);
+            fs::write(&executable, b"fixture").unwrap();
+            for combination in &combinations {
+                for id in &ids {
+                    let compatible = registry
+                        .find(id)
+                        .unwrap()
+                        .manifest
+                        .compatibility
+                        .supports_game(preset);
+                    registry
+                        .set_game_enabled(preset, id, compatible && combination.contains(id))
+                        .unwrap();
                 }
-            );
-            let fallback = inspect_graphics_for_launch(&scoped, &executable, true).unwrap();
-            assert!(!fallback.dlss5_requested);
-            assert_eq!(fallback.host_requested, shade);
-            assert_eq!(fallback.resolution.level, CompatibilityLevel::Compatible);
-            fs::remove_file(game.join("_DLSS5_Backup/manifest.json")).unwrap();
-          }
+                let scoped = registry.for_game(preset);
+                let dlss5 = combination.iter().any(|id| id == "ssmt.dlss5.integration");
+                let shade = combination
+                    .iter()
+                    .any(|id| id == super::super::hoyoshade::HOYOSHADE_PLUGIN_ID)
+                    && scoped
+                        .find(super::super::hoyoshade::HOYOSHADE_PLUGIN_ID)
+                        .is_some_and(|plugin| {
+                            super::super::hoyoshade::HoYoShadeBridge::from_installed(plugin)
+                                .unwrap()
+                                .supports_process(name)
+                        });
+                let clean = inspect_graphics_for_executable(&scoped, &executable).unwrap();
+                assert_eq!(clean.resolution.level, CompatibilityLevel::Compatible);
+                assert_eq!(clean.host_requested, dlss5 || shade);
+                fs::write(game.join("_DLSS5_Backup/manifest.json"), b"invalid").unwrap();
+                let broken = inspect_graphics_for_executable(&scoped, &executable).unwrap();
+                assert_eq!(
+                    broken.resolution.level,
+                    if dlss5 {
+                        CompatibilityLevel::Conflict
+                    } else {
+                        CompatibilityLevel::Compatible
+                    }
+                );
+                let fallback = inspect_graphics_for_launch(&scoped, &executable, true).unwrap();
+                assert!(!fallback.dlss5_requested);
+                assert_eq!(fallback.host_requested, shade);
+                assert_eq!(fallback.resolution.level, CompatibilityLevel::Compatible);
+                fs::remove_file(game.join("_DLSS5_Backup/manifest.json")).unwrap();
+            }
         }
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn empty_installation_has_no_synthetic_player_tweaks_entry() {
-        let root = std::env::temp_dir().join(format!("ssmt-empty-market-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-empty-market-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
         let registry = PluginRegistry::new(&root).unwrap();
         for preset in ["GIMI", "SRMI", "WWMI", "ZZMI", "EFMI"] {
             assert!(super::snapshot_for_game(&registry, preset).is_empty());
@@ -1607,13 +1806,20 @@ mod tests {
             std::process::id()
         ));
         let plugins = root.join("plugins");
-        assert!(installed_plugin_registry_at(plugins.clone()).unwrap().is_none());
+        assert!(installed_plugin_registry_at(plugins.clone())
+            .unwrap()
+            .is_none());
         assert!(!plugins.exists());
 
         fs::create_dir_all(&plugins).unwrap();
         fs::write(plugins.join("registry-state.json"), b"invalid JSON").unwrap();
-        assert!(installed_plugin_registry_at(plugins.clone()).unwrap().is_none());
-        assert_eq!(fs::read(plugins.join("registry-state.json")).unwrap(), b"invalid JSON");
+        assert!(installed_plugin_registry_at(plugins.clone())
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            fs::read(plugins.join("registry-state.json")).unwrap(),
+            b"invalid JSON"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

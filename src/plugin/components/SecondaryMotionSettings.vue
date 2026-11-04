@@ -389,19 +389,19 @@ onMounted(() => {
                 <el-switch
                   v-if="typeof field.value === 'boolean'"
                   :model-value="field.value"
-                  @change="value => setPathValue(field.path, Boolean(value))"
+                  @change="(value: boolean | string | number) => setPathValue(field.path, Boolean(value))"
                 />
                 <el-input-number
                   v-else-if="typeof field.value === 'number'"
                   :model-value="field.value"
                   :controls="false"
                   :step="0.01"
-                  @change="value => setPathValue(field.path, Number(value ?? 0))"
+                  @change="(value: number | undefined) => setPathValue(field.path, Number(value ?? 0))"
                 />
                 <el-input
                   v-else
                   :model-value="String(field.value)"
-                  @input="value => setPathValue(field.path, String(value))"
+                  @input="(value: string) => setPathValue(field.path, String(value))"
                 />
               </label>
             </div>

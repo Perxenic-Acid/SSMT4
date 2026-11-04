@@ -4043,7 +4043,7 @@ watch(activeChannelPreviewItem, (item) => {
 }
 
 .menu-check {
-	color: rgb(117, 214, 187);
+	color: var(--ssmt-brand-accent);
 	font-weight: 800;
 }
 
@@ -4284,7 +4284,10 @@ watch(activeChannelPreviewItem, (item) => {
 
 .channel-preview-overlay {
 	position: fixed;
-	inset: 0;
+	top: var(--ssmt-content-overlay-top);
+	right: 0;
+	bottom: 0;
+	left: var(--ssmt-content-overlay-left);
 	z-index: 3000;
 	display: flex;
 	align-items: center;
@@ -4299,8 +4302,8 @@ watch(activeChannelPreviewItem, (item) => {
 	position: relative;
 	width: min(82vw, 1100px);
 	height: min(82vh, 850px);
-	max-width: calc(100vw - 32px);
-	max-height: calc(100vh - 32px);
+	max-width: calc(100vw - var(--ssmt-content-overlay-left) - 32px);
+	max-height: calc(100vh - var(--ssmt-content-overlay-top) - 32px);
 	overflow: hidden;
 	display: flex;
 	flex-direction: column;
@@ -4360,9 +4363,9 @@ watch(activeChannelPreviewItem, (item) => {
 }
 
 .channel-preview-toggle.is-active {
-	border-color: rgba(117, 214, 187, 0.5);
-	background: rgba(117, 214, 187, 0.16);
-	color: rgba(224, 255, 247, 0.96);
+	border-color: rgba(var(--ssmt-brand-accent-rgb), 0.5);
+	background: rgba(var(--ssmt-brand-accent-rgb), 0.16);
+	color: var(--ssmt-brand-accent-soft);
 }
 
 .channel-preview-stage {
@@ -4491,7 +4494,7 @@ watch(activeChannelPreviewItem, (item) => {
 
 .channel-preview-resize-handle:hover {
 	opacity: 1;
-	border-color: rgba(117, 214, 187, 0.82);
+	border-color: rgba(var(--ssmt-brand-accent-rgb), 0.82);
 }
 
 .channel-modal-card-preview canvas {

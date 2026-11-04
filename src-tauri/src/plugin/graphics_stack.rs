@@ -73,23 +73,35 @@ impl GraphicsStackResolver {
         if !contributions.hoyoshade {
             let (level, code, message, possible_actions) = match &state.dlss5 {
                 Dlss5State::Managed(managed)
-                    if !matches!(managed.route, Dlss5Route::Unknown(_)) => (
-                    CompatibilityLevel::RequiresManagedStack,
-                    "dlss5_managed_host_required",
-                    "DLSS5 需要准备托管 ReShade 宿主配置。".to_string(),
-                    vec![GraphicsConflictAction::PrepareManagedStack, GraphicsConflictAction::CancelLaunch],
-                ),
+                    if !matches!(managed.route, Dlss5Route::Unknown(_)) =>
+                {
+                    (
+                        CompatibilityLevel::RequiresManagedStack,
+                        "dlss5_managed_host_required",
+                        "DLSS5 需要准备托管 ReShade 宿主配置。".to_string(),
+                        vec![
+                            GraphicsConflictAction::PrepareManagedStack,
+                            GraphicsConflictAction::CancelLaunch,
+                        ],
+                    )
+                }
                 Dlss5State::Managed(_) => (
                     CompatibilityLevel::Conflict,
                     "dlss5_unknown_route",
                     "DLSS5 Route 未知，无法准备托管宿主。".to_string(),
-                    vec![GraphicsConflictAction::OpenDlss5Swapper, GraphicsConflictAction::CancelLaunch],
+                    vec![
+                        GraphicsConflictAction::OpenDlss5Swapper,
+                        GraphicsConflictAction::CancelLaunch,
+                    ],
                 ),
                 Dlss5State::Broken { reason, .. } => (
                     CompatibilityLevel::Conflict,
                     "dlss5_broken_manifest",
                     format!("DLSS5 状态无法安全读取：{reason}"),
-                    vec![GraphicsConflictAction::OpenDlss5Swapper, GraphicsConflictAction::CancelLaunch],
+                    vec![
+                        GraphicsConflictAction::OpenDlss5Swapper,
+                        GraphicsConflictAction::CancelLaunch,
+                    ],
                 ),
                 Dlss5State::NotManaged => unreachable!("handled above"),
             };
@@ -189,7 +201,13 @@ mod tests {
     }
 
     fn resolve(state: &GameGraphicsState, hoyoshade: bool) -> GraphicsStackResolution {
-        GraphicsStackResolver::resolve(state, GraphicsLaunchContributions { hoyoshade, dlss5: false })
+        GraphicsStackResolver::resolve(
+            state,
+            GraphicsLaunchContributions {
+                hoyoshade,
+                dlss5: false,
+            },
+        )
     }
 
     #[test]
@@ -277,7 +295,10 @@ mod tests {
 
     #[test]
     fn resolution_is_per_game_and_does_not_change_plugin_state() {
-        let contributions = GraphicsLaunchContributions { hoyoshade: true, dlss5: true };
+        let contributions = GraphicsLaunchContributions {
+            hoyoshade: true,
+            dlss5: true,
+        };
         let first = GraphicsStackResolver::resolve(&managed(Dlss5Route::Feeder), contributions);
         let second = GraphicsStackResolver::resolve(
             &GameGraphicsState {
@@ -294,7 +315,10 @@ mod tests {
     fn dlss5_alone_requires_managed_host_without_hoyoshade_effects() {
         let resolution = GraphicsStackResolver::resolve(
             &managed(Dlss5Route::Feeder),
-            GraphicsLaunchContributions { hoyoshade: false, dlss5: true },
+            GraphicsLaunchContributions {
+                hoyoshade: false,
+                dlss5: true,
+            },
         );
         assert_eq!(resolution.level, CompatibilityLevel::RequiresManagedStack);
         assert_eq!(resolution.issues[0].components, vec![DLSS5_PLUGIN_ID]);

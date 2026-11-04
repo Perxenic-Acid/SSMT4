@@ -11,6 +11,7 @@ import { pinia } from "./pinia";
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { bindI18nLocaleToSettings, i18n } from "./i18n";
 import { triggerSilentStartupAppUpdateCheck } from "./common/AppSelfUpdate";
+import { announceStartupVisible } from "./common/StartupExperience";
 
 const app = createApp(App);
 
@@ -53,6 +54,12 @@ app.component('VideoPlay', VideoPlay)
 app.use(router);
 app.mount("#app");
 
+let startupAnnounced = false;
+const revealStartupExperience = () => {
+  if (startupAnnounced) return;
+  startupAnnounced = true;
+  announceStartupVisible();
+};
 
 AppStateManager.initAppState().then(() => {
   // Warm sub-page chunks in the background so first-time page switches are fast
@@ -60,6 +67,7 @@ AppStateManager.initAppState().then(() => {
 
   const appWindow = tryGetCurrentWindow();
   if (!appWindow) {
+    revealStartupExperience();
     return;
   }
 
@@ -67,10 +75,12 @@ AppStateManager.initAppState().then(() => {
     try {
       await AppStateManager.prepareWindowForDisplay();
       await appWindow.show();
+      revealStartupExperience();
       await appWindow.setFocus();
 
       triggerSilentStartupAppUpdateCheck();
     } catch (err) {
+      revealStartupExperience();
       console.warn('Failed to show/focus window:', err);
     }
   }
@@ -81,6 +91,7 @@ AppStateManager.initAppState().then(() => {
   // Ensure window shows even if init fails.
   const appWindow = tryGetCurrentWindow();
   if (!appWindow) {
+    revealStartupExperience();
     return;
   }
 
@@ -92,6 +103,7 @@ AppStateManager.initAppState().then(() => {
       appWindow.show().catch((showErr: unknown) => {
         console.warn('Failed to show window after init error:', showErr);
       }).finally(() => {
+        revealStartupExperience();
         triggerSilentStartupAppUpdateCheck();
       });
     });

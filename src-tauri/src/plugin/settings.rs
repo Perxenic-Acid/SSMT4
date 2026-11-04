@@ -93,7 +93,11 @@ impl PluginSettingsStore {
         for (key, _) in &values {
             validate_key(key)?;
         }
-        self.state.namespaces.entry(plugin_id.to_string()).or_default().extend(values);
+        self.state
+            .namespaces
+            .entry(plugin_id.to_string())
+            .or_default()
+            .extend(values);
         write_state(&self.path, &self.state)
     }
 }
@@ -175,15 +179,33 @@ mod tests {
     fn route_and_installation_are_saved_together_and_invalid_batch_changes_nothing() {
         let path = path();
         let mut store = PluginSettingsStore::new(&path).unwrap();
-        store.set_many("ssmt.fixture", [
-            ("installation".into(), "old".into()), ("route".into(), "gimi-hot".into()),
-        ]).unwrap();
-        assert!(store.set_many("ssmt.fixture", [
-            ("installation".into(), "new".into()), ("../route".into(), "ssmt-feeder".into()),
-        ]).is_err());
+        store
+            .set_many(
+                "ssmt.fixture",
+                [
+                    ("installation".into(), "old".into()),
+                    ("route".into(), "gimi-hot".into()),
+                ],
+            )
+            .unwrap();
+        assert!(store
+            .set_many(
+                "ssmt.fixture",
+                [
+                    ("installation".into(), "new".into()),
+                    ("../route".into(), "ssmt-feeder".into()),
+                ]
+            )
+            .is_err());
         let disk = PluginSettingsStore::new(&path).unwrap();
-        assert_eq!(disk.get("ssmt.fixture", "installation").unwrap(), Some("old".into()));
-        assert_eq!(store.get("ssmt.fixture", "installation").unwrap(), Some("old".into()));
+        assert_eq!(
+            disk.get("ssmt.fixture", "installation").unwrap(),
+            Some("old".into())
+        );
+        assert_eq!(
+            store.get("ssmt.fixture", "installation").unwrap(),
+            Some("old".into())
+        );
         fs::remove_file(path).unwrap();
     }
 
@@ -196,7 +218,10 @@ mod tests {
         store.remove_namespace("ssmt.first").unwrap();
         let restored = PluginSettingsStore::new(&path).unwrap();
         assert_eq!(restored.get("ssmt.first", "key").unwrap(), None);
-        assert_eq!(restored.get("ssmt.second", "key").unwrap(), Some(Value::from(2)));
+        assert_eq!(
+            restored.get("ssmt.second", "key").unwrap(),
+            Some(Value::from(2))
+        );
         fs::remove_file(path).unwrap();
     }
 }

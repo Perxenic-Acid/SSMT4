@@ -6,35 +6,35 @@ use std::path::Path;
 
 pub mod commands;
 pub mod dlss5;
+pub mod dlss5_hot_runtime;
+mod dlss5_policy;
 pub mod external_manager;
+pub mod gimi_hot_runtime;
 pub mod graphics_stack;
 pub mod host_extensions;
 pub mod host_graphics;
-pub mod gimi_hot_runtime;
-pub mod dlss5_hot_runtime;
-mod dlss5_policy;
-mod shade_policy;
-pub mod player_tweaks;
 mod hot_reshade;
-mod managed_files;
 pub mod hoyoshade;
 pub mod launch_barrier;
 pub mod launch_coordinator;
 pub mod launch_event_bus;
-pub mod logging;
 pub mod local_packages;
-pub mod official_release;
+pub mod logging;
+pub mod managed_cold_files;
+mod managed_files;
 pub mod managed_reshade;
 pub mod managed_reshade_journal;
-pub mod managed_cold_files;
 pub mod managed_stack;
 pub mod marketplace;
+pub mod official_release;
 pub mod package_installer;
+pub mod player_tweaks;
 pub mod process_forwarder;
 pub mod registry;
 pub mod resource_cache;
 pub mod secondary_motion;
 pub mod settings;
+mod shade_policy;
 pub mod star_rail_tweaks;
 
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -67,7 +67,11 @@ pub struct PluginCompatibility {
 
 impl PluginCompatibility {
     pub fn supports_game(&self, game: &str) -> bool {
-        self.games.is_empty() || self.games.iter().any(|item| item.eq_ignore_ascii_case(game.trim()))
+        self.games.is_empty()
+            || self
+                .games
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(game.trim()))
     }
 
     pub fn supports(&self, ssmt_version: &str, platform: &str, game: Option<&str>) -> bool {
@@ -388,7 +392,10 @@ fn validate_contributions(
     for extension in &contributions.host_extensions {
         extension.validate()?;
         if !extension_ids.insert(&extension.id) {
-            return Err(PluginManifestError::DuplicateValue { field: "host extension id", value: extension.id.clone() });
+            return Err(PluginManifestError::DuplicateValue {
+                field: "host extension id",
+                value: extension.id.clone(),
+            });
         }
     }
     let dependency_ids: HashSet<&str> = dependencies
@@ -533,22 +540,33 @@ fn validate_external_dependencies(
     for dependency in dependencies {
         if let Some(raw) = &dependency.download_url {
             let valid = reqwest::Url::parse(raw).is_ok_and(|url| {
-                url.scheme() == "https" && url.has_host()
-                    && url.username().is_empty() && url.password().is_none()
+                url.scheme() == "https"
+                    && url.has_host()
+                    && url.username().is_empty()
+                    && url.password().is_none()
             });
-            if !valid || raw.len() > 4096 || raw.trim() != raw || raw.chars().any(char::is_control) {
-                return Err(PluginManifestError::InvalidExternalDependency(
-                    format!("download URL must use HTTPS without credentials: {}", dependency.id),
-                ));
+            if !valid || raw.len() > 4096 || raw.trim() != raw || raw.chars().any(char::is_control)
+            {
+                return Err(PluginManifestError::InvalidExternalDependency(format!(
+                    "download URL must use HTTPS without credentials: {}",
+                    dependency.id
+                )));
             }
         }
-        if dependency.download_hint.as_ref().is_some_and(|hint| hint.trim().is_empty() || hint.len() > 4096) {
-            return Err(PluginManifestError::InvalidExternalDependency(
-                format!("invalid download hint: {}", dependency.id),
-            ));
+        if dependency
+            .download_hint
+            .as_ref()
+            .is_some_and(|hint| hint.trim().is_empty() || hint.len() > 4096)
+        {
+            return Err(PluginManifestError::InvalidExternalDependency(format!(
+                "invalid download hint: {}",
+                dependency.id
+            )));
         }
         if let Some(features) = &dependency.required_for {
-            for feature in features { validate_plugin_id(feature)?; }
+            for feature in features {
+                validate_plugin_id(feature)?;
+            }
         }
         validate_plugin_id(&dependency.id).map_err(|_| {
             PluginManifestError::InvalidExternalDependency(format!("invalid id: {}", dependency.id))
@@ -679,7 +697,11 @@ fn validate_package_path(field: &'static str, path: &str) -> Result<(), PluginMa
     }
 
     for segment in path.replace('\\', "/").split('/') {
-        let stem = segment.split('.').next().unwrap_or_default().to_ascii_uppercase();
+        let stem = segment
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_uppercase();
         let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
             || (stem.len() == 4
                 && (stem.starts_with("COM") || stem.starts_with("LPT"))
@@ -688,7 +710,9 @@ fn validate_package_path(field: &'static str, path: &str) -> Result<(), PluginMa
             || segment == "."
             || segment == ".."
             || segment.ends_with(['.', ' '])
-            || segment.chars().any(|character| character < ' ' || "<>:\"|?*".contains(character))
+            || segment
+                .chars()
+                .any(|character| character < ' ' || "<>:\"|?*".contains(character))
             || reserved
         {
             return Err(PluginManifestError::InvalidPath {
@@ -713,7 +737,13 @@ mod tests {
 
     #[test]
     fn rejects_windows_aliases_in_package_paths() {
-        for path in ["CON.txt", "tools/COM1.dll", "module. ", "a<file>.dll", "dir/name:stream"] {
+        for path in [
+            "CON.txt",
+            "tools/COM1.dll",
+            "module. ",
+            "a<file>.dll",
+            "dir/name:stream",
+        ] {
             assert!(validate_package_relative_path(path).is_err(), "{path}");
         }
         assert!(validate_package_relative_path("native/example.dll").is_ok());
@@ -794,7 +824,10 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(manifest.contributions.injected_dlls[0].path, "plugin/sbm.dll");
+        assert_eq!(
+            manifest.contributions.injected_dlls[0].path,
+            "plugin/sbm.dll"
+        );
         assert!(!manifest.is_app_scoped());
 
         let mut invalid = manifest.clone();
@@ -802,8 +835,9 @@ mod tests {
         assert!(invalid.validate().is_err());
 
         invalid = manifest;
-        invalid.contributions.runtime_plugins =
-            vec![RuntimePluginContribution { path: "plugin/sbm.dll".into() }];
+        invalid.contributions.runtime_plugins = vec![RuntimePluginContribution {
+            path: "plugin/sbm.dll".into(),
+        }];
         assert!(invalid.validate().is_err());
     }
 
@@ -929,11 +963,21 @@ mod tests {
         let original = valid_manifest();
         assert!(original.external_dependencies[0].download_url.is_none());
         let mut manifest = original;
-        manifest.external_dependencies[0].download_url = Some("https://example.com/releases?version=1".into());
+        manifest.external_dependencies[0].download_url =
+            Some("https://example.com/releases?version=1".into());
         manifest.external_dependencies[0].download_hint = Some("下载并解压后选择目录。".into());
         let json = serde_json::to_string(&manifest).unwrap();
         assert_eq!(PluginManifest::from_json_str(&json).unwrap(), manifest);
-        for url in ["http://example.com", "javascript:alert(1)", "file:///C:/tool.exe", "https://user:pass@example.com", "https://user@example.com", "https://", " https://example.com", "https://example.com/\npath"] {
+        for url in [
+            "http://example.com",
+            "javascript:alert(1)",
+            "file:///C:/tool.exe",
+            "https://user:pass@example.com",
+            "https://user@example.com",
+            "https://",
+            " https://example.com",
+            "https://example.com/\npath",
+        ] {
             manifest.external_dependencies[0].download_url = Some(url.into());
             assert!(manifest.validate().is_err(), "accepted unsafe URL: {url}");
         }
