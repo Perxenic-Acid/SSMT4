@@ -26,9 +26,11 @@ DLL 和缓存索引先写同目录暂存文件，校验完成后 rename 提交�
 更新失败用一次非模态横幅显示原因，继续选用可用的本地 Runtime；没有任何可用 DLL
 时才停止注入。纯净启动不进入此流程，也不新增插件扫描或插件文件要求。
 
-选择随包 DLL、已验证缓存和当前游戏 DLL 中数值文件版本最高的一份；同版本优先
-随包构建。较新的现有 DLL 直接保留，不因 UPX 改变哈希而被旧安装包覆盖。
-准备部署时仍使用现有的暂存、复制校验和 UPX 链，最后一次 rename 替换游戏 DLL。
+选择随包 DLL 和已验证缓存中数值文件版本最高的一份；同版本优先随包构建。
+未锁定时当前游戏 DLL 只是临时部署文件，不参与来源选择，避免旧 3Dmigoto 的
+不同版本体系阻止迁移。部署按 hardlink → symlink → copy 回退，并在注入完成后
+撤除目标文件；UPX 先处理独立缓存副本，不改写资源硬链接。异常清理和身份保护见
+[Runtime 临时部署](runtime-deployment.md)。
 DX12 目前只使用随包 DLL，不访问上述 DX11 Release；可以同样锁定现有版本。
 
 ## 区分开发资源与实际安装资源
@@ -38,7 +40,7 @@ DX12 目前只使用随包 DLL，不访问上述 DX11 Release；可以同样锁�
 | `runtime/x64/Release/d3d11.dll` | Runtime 的 debug / release 组件脚本 |
 | `src-tauri/resources/d3d11.dll` | 源码开发与后续应用构建的随包来源 |
 | 实际 `ssmt4.exe` 旁的 `resources/d3d11.dll` | 当前安装版的随包来源 |
-| 游戏所配置的 Migoto 目录中的 `d3d11.dll` | Run.exe 实际注入的文件 |
+| 游戏所配置的 Migoto 目录中的 `d3d11.dll` | Run.exe 实际注入的临时文件；锁定时为持久文件 |
 
 只运行 `scripts/stage-ssmt-runtime.ps1` 不会更新另一个安装目录。
 排查“debug 正确、SSMT 仍旧”时先确认运行中 `ssmt4.exe` 的完整路径，再比较上述 DLL

@@ -70,17 +70,22 @@ async function harness(t, options = {}) {
       await fs.rm(file);
     },
   };
-  const globalConfig = { SSMTResourcesFolder: async () => resourceDir };
+  const globalConfig = { SSMTResourcesFolder: async () => resourceDir, SSMT4GlobalConfigsFolder: async () => root };
   const mocks = {
     '@tauri-apps/api/path': { join: async (...parts) => path.join(...parts) },
     '@tauri-apps/plugin-fs': fsMocks,
     '@tauri-apps/api/core': { invoke: async (command, args) => {
       calls.push({ command, args });
       if (command === 'hoyoplay_check_launch') return null;
+      if (command === 'deploy_runtime_for_launch') {
+        if (['copy', 'replace'].includes(options.fail)) throw new Error('deployment denied');
+        await fs.copyFile(args.sourcePath, args.targetPath);
+        return 'copy';
+      }
+      if (command === 'cancel_runtime_deployment') return null;
       if (command === 'resolve_ssmt_runtime_source') {
         if (options.resolveError) throw new Error(options.resolveError);
-        return { sourcePath: options.keepNewer ? target : source, version: '1.2.2.24',
-          origin: options.keepNewer ? 'existing' : 'bundled', warning: options.remoteWarning };
+        return { sourcePath: source, version: '1.2.2.24', origin: 'bundled', warning: options.remoteWarning };
       }
       if (command === 'file_md5') {
         if (options.fail === 'hash' && args.path === source) throw new Error('hash denied');
@@ -88,6 +93,7 @@ async function harness(t, options = {}) {
       }
       if (command === 'inspect_graphics_launch') return { hostRequested: false, resolution: { level: 'compatible', issues: [] } };
       if (command === 'prepare_player_tweaks_launch') return null;
+      if (command === 'plugin_launch_injected_dlls') return null;
       if (command === 'configure_gimi_launch_settings') return null;
       if (command === 'configure_plugin_launch_contract') return null;
       if (command === 'prepare_plugin_graphics_plan') {
@@ -153,7 +159,7 @@ async function harness(t, options = {}) {
   mocks['../store/ResourceManager'] = { ResourceManager: resource };
   const ini = load('../../src/store/D3dxIniManager.ts', mocks);
   const migoto = load('../../src/store/MigotoManager.ts', {
-    ...mocks, './ResourceManager': { ResourceManager: resource }, './D3dxIniManager': ini,
+    ...mocks, './GlobalConfig': { GlobalConfig: globalConfig }, './ResourceManager': { ResourceManager: resource }, './D3dxIniManager': ini,
   }).MigotoManager;
   const launchPaths = load('../../src/common/LaunchPath.ts', mocks);
   const versions = load('../../src/common/UpdateCheckUtils.ts', {});
@@ -210,13 +216,12 @@ test('DX12 retains its bundled source and never calls DX11 packing', async t => 
   assert.equal(h.calls.some(call => call.command === 'resolve_ssmt_runtime_source'), false);
 });
 
-test('a newer deployed runtime is kept without repacking or bundled replacement', async t => {
+test('未锁定时遗留 DLL 不参与来源选择', async t => {
   const h = await harness(t, { keepNewer: true });
-  const result = await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config,
-    () => assert.fail('A newer existing DLL must not be repacked'));
-  assert.equal(result.status, 'unchanged');
+  const result = await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config);
+  assert.equal(result.status, 'updated');
   assert.equal(h.writes.length, 0);
-  assert.equal(await fs.readFile(h.target, 'utf8'), 'previous working Runtime');
+  assert.equal(await fs.readFile(h.target, 'utf8'), 'adapted SSMT Runtime');
 });
 
 for (const gamePreset of ['GIMI', 'ZZMIDX12']) {
@@ -242,7 +247,7 @@ test('runtime lock bootstraps a missing DLL from the bundle without going online
 
 test('runtime resolution failure preserves the deployed DLL instead of downgrading', async t => {
   const h = await harness(t, { resolveError: 'cache unreadable' });
-  assert.equal((await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config)).status, 'kept_existing');
+  assert.equal((await h.migoto.applySSMTRuntimeToMigotoDir('GIMI', h.migotoDir, h.config)).status, 'unavailable');
   assert.equal(h.writes.length, 0);
   assert.equal(await fs.readFile(h.target, 'utf8'), 'previous working Runtime');
 });
@@ -286,7 +291,7 @@ test('online update failure shows its reason once without blocking launch', asyn
   const h = await harness(t, { remoteWarning: 'GitHub timed out' });
   await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));
   const warnings = h.messages.filter(({ kind }) => kind === 'warning');
-  assert.equal(warnings.length, 1);
+  assert.equal(warnings.length, 1, JSON.stringify(warnings));
   assert.ok(warnings[0].value.message.includes('GitHub timed out'));
   assert.equal(h.dialogs.length, 0);
   assert.ok(h.calls.some(call => call.command === 'launch_programs'));
@@ -314,9 +319,9 @@ for (const fail of ['replace', 'run-replace', 'missing-source', 'upx', 'missing-
       assert.equal(await fs.readFile(path.join(h.migotoDir, 'Run.exe'), 'utf8'), 'old Run.exe');
     }
     assert.equal(h.dialogs.length, 0);
-    assert.ok(h.messages.some(({ kind, value }) => kind === 'warning' && value.message.includes('ssmtRuntimeUpdateFallback')));
+    assert.ok(h.messages.some(({ kind }) => kind === 'warning'));
     const programs = h.calls.find(call => call.command === 'launch_programs')?.args.programs;
-    assert.ok(programs?.some(program => program.path === path.join(h.migotoDir, 'Run.exe')));
+    assert.equal(!!programs?.some(program => program.path === path.join(h.migotoDir, 'Run.exe')), fail === 'run-replace');
     assert.equal(h.writes.some(write => write.to.endsWith('SSMT-PluginHost.dll')), false);
   });
 }

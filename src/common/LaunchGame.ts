@@ -546,7 +546,7 @@ export class LaunchGame {
             return null;
         }
 
-        // 静默发现 SSMT Runtime 发布并部署；锁定时保留当前 DLL，失败时使用已有版本。
+        // 静默发现 Runtime 发布并临时部署；锁定时保留用户 DLL，未锁定时不回退旧目标。
         // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
         const useUpx = getEffectiveUseUpx(migotoCfg);
         const environmentReady = await this.prepareGameEnvironment(
@@ -577,6 +577,7 @@ export class LaunchGame {
     ): Promise<'native' | 'direct' | false> {
         let managedStagedTarget: string | null = null;
         let launchSubmitted = false;
+        let runtimeDirectory: string | undefined;
         try {
             const pureMode =
                 appSettings.gameLaunchMode === "always-pure" ||
@@ -592,6 +593,7 @@ export class LaunchGame {
             if (!preflight) return false;
 
             const { migotoDir, config, targetExe, graphicsDecision } = preflight;
+            runtimeDirectory = migotoDir;
             const launchTargetProgram = config.launchTargetProgram !== false;
             const pureDirectTarget = pureMode && launchTargetProgram;
             if (!pureDirectTarget) {
@@ -950,6 +952,10 @@ export class LaunchGame {
             );
             throw e;
         } finally {
+            if (!launchSubmitted && runtimeDirectory) {
+                await invoke('cancel_runtime_deployment', { directory: runtimeDirectory }).catch(error =>
+                    console.warn('撤回未提交的 Runtime 部署失败：', error));
+            }
             if (managedStagedTarget && !launchSubmitted) {
                 try {
                     await invoke("restore_managed_graphics_stack", {

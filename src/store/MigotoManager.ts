@@ -1,6 +1,7 @@
 import { join } from '@tauri-apps/api/path'
 import { invoke } from '@tauri-apps/api/core'
-import { exists, remove, writeTextFile, copyFile, rename } from '@tauri-apps/plugin-fs'
+import { exists, remove, writeTextFile, copyFile, rename, mkdir } from '@tauri-apps/plugin-fs'
+import { GlobalConfig } from './GlobalConfig'
 import { D3dxIniManager } from './D3dxIniManager'
 import { ResourceManager } from './ResourceManager'
 import { PathHelper } from '../helper/PathHelper'
@@ -219,14 +220,30 @@ export class MigotoManager {
         sourcePath = resolved.sourcePath
         warning = resolved.warning || undefined
       } catch (error) {
-        // 来源解析失败时不能退回无条件覆盖：否则旧安装包又会盖掉较新的本地 DLL。
-        return { status: await exists(destPath) ? 'kept_existing' : 'unavailable', error }
+        return { status: 'unavailable', error }
       }
     }
-    if (sourcePath === destPath) return { status: 'unchanged', warning }
-    const result = await this.syncRuntimeFile(sourcePath, destPath,
-      dllSource.targetFileName === 'd3d11.dll' ? prepareStagedDll : undefined)
-    return { ...result, warning }
+    // 锁定但缺失时仍初始化一份持久 DLL，之后由用户管理。
+    if (effectiveConfig?.lockRuntimeUpdates === true) return this.syncRuntimeFile(sourcePath, destPath)
+    try {
+      if (dllSource.targetFileName === 'd3d11.dll' && prepareStagedDll) {
+        // 不能对硬链接执行 UPX：这会同时修改资源目录的原 DLL。
+        const packedDir = await join(await GlobalConfig.SSMT4GlobalConfigsFolder(), 'Runtime', 'packed')
+        await mkdir(packedDir, { recursive: true })
+        const sourceHash = await invoke<string>('file_md5', { path: sourcePath })
+        const packedPath = await join(packedDir, `${sourceHash}.dll`)
+        if (!(await exists(packedPath))) {
+          const packed = await this.syncRuntimeFile(sourcePath, packedPath, prepareStagedDll)
+          if (packed.status !== 'updated' && packed.status !== 'unchanged') return packed
+        }
+        sourcePath = packedPath
+      }
+      await invoke('deploy_runtime_for_launch', { sourcePath, targetPath: destPath })
+      return { status: 'updated', warning }
+    } catch (error) {
+      // 未锁定时不能悄悄注入旧 DLL，暂存失败应停止本次注入。
+      return { status: 'unavailable', error, warning }
+    }
   }
 
   /**

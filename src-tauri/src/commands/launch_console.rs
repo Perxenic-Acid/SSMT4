@@ -552,6 +552,9 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
     let event_app = app.clone();
     let machine_events =
         request.args.contains("--machine-readable") && program.eq_ignore_ascii_case("Run.exe");
+    let runtime_deployments = if machine_events {
+        super::runtime_deployment::claim(Path::new(&request.work_dir))
+    } else { Vec::new() };
     let publish = move |kind: &str, text: String, pid: Option<u32>, code: Option<i32>| {
         let _ = app.emit(
             "launch-console-event",
@@ -649,6 +652,9 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
                         if let Ok(Some(mut event)) =
                             crate::plugin::launch_event_bus::parse_json_line(&lines[..end])
                         {
+                            if matches!(event.event.as_str(), "launch_complete" | "launch_error") {
+                                super::runtime_deployment::cleanup(&runtime_deployments);
+                            }
                             if matches!(event.event.as_str(), "target_created" | "target_detected")
                                 && event.pid.is_some_and(|pid| pid > 0) {
                                 if let (Some(pid), Some(sources)) = (event.pid, log_sources.take()) {
@@ -732,6 +738,8 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
                 None,
             );
         }
+        // 异常退出也撤回本次资源；不依赖页面仍打开或前端监听成功。
+        super::runtime_deployment::cleanup(&runtime_deployments);
         if let Some(log) = log.as_mut() {
             let _ = log.flush();
         }

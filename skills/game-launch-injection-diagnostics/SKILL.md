@@ -5,6 +5,8 @@ description: 排查 SSMT 的游戏启动、官方启动器上下文、手动等�
 
 # 游戏启动与注入诊断
 
+Runtime 部署及注入后残留问题先读 [临时部署说明](../../docs/runtime-deployment.md)。未锁定时只使用随包资源或已验证发布缓存，不能将目标目录 DLL 当成来源比较版本。按 hardlink → symlink → copy 暂存，后端 Run.exe 完成事件撤除并核对文件身份；锁定文件不登记清理。UPX 必须先处理独立副本，不能修改资源硬链接。验证需覆盖异常退出、用户替换文件、链接回退和已加载模块撤除。
+
 涉及 3DMigoto 叠加层汉化时先读 [Runtime 提示汉化](../../docs/runtime-overlay-localization.md)。文本入口是 `Overlay.cpp` 而非 vendored PCRE2；扩充 `SSMTOverlayText` 精确格式目录并保持 printf 参数、技术值和英文日志。中文从系统微软雅黑生成缓存图集，沿用原始 D3D11 设备与现有状态恢复；缺字体回退英文，不逐帧扫描或生成字形。新头文件被未启用 `/utf-8` 的上游文件包含时使用 UTF-8 BOM，避免 CP936 错解注释尾字节后吞掉下一行。运行 `runtime/tests/overlay-localization` 的格式契约、WARP 字形及真实 Runtime 状态 / 缓存回归；不以离线预览宣称游戏共存与帧率通过。
 
 重载成功提示与红色加载告警须分别验收。反馈红字仍是英文时，从同次日志找到真实格式串，核对 `IniWarning` / `IniWarningW` 和窄宽字符、相邻字面量拼接及参数差异。格式契约检查对照 `IniHandler.cpp`、`Override.cpp` 和表达式错误源码覆盖目录，避免遗漏 `Duplicate section found` 等常见错误；嵌套原因只翻译解析器已知文本，变量、路径和表达式保留。增加告警的红色像素验证，英文详细日志继续保留。

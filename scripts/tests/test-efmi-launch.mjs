@@ -79,6 +79,7 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
   const iniManager = load('../../src/store/D3dxIniManager.ts', iniMocks);
   const migoto = load('../../src/store/MigotoManager.ts', {
     ...mocks,
+    './GlobalConfig': {},
     './D3dxIniManager': iniManager,
     './ResourceManager': mocks['../store/ResourceManager'],
   }).MigotoManager;

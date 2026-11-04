@@ -361,7 +361,7 @@ fn choose_source(
     if let Ok((_, path)) = cached_runtime(cache) {
         candidates.push((path, "github"));
     }
-    candidates.push((target.to_path_buf(), "existing"));
+    // 未锁定时注入目录只是临时部署位置，旧 DLL 不是更新来源。
     let mut selected = None;
     for (path, origin) in candidates {
         let Ok(bytes) = limited_read(&path, MAX_DLL) else {
@@ -381,7 +381,7 @@ fn choose_source(
         }
     }
     let (path, origin, version) =
-        selected.ok_or("没有可用的 SSMT Runtime：随包、缓存与游戏目录均缺失或无效")?;
+        selected.ok_or("没有可用的 SSMT Runtime：随包资源与已验证缓存均缺失或无效")?;
     let result = RuntimeSource {
         source_path: path.to_string_lossy().into_owned(),
         version: version.map(|item| item.to_string()).join("."),

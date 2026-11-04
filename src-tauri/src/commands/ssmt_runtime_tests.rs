@@ -164,17 +164,17 @@ fn archive_must_match_both_size_and_sha256_before_using_valid_x64_dll() {
 
 #[cfg(windows)]
 #[test]
-fn old_bundle_never_overwrites_newer_deployed_version() {
+fn unlocked_deployment_is_not_a_runtime_source_even_with_a_higher_version() {
     let fixture = Fixture::new();
     let bundle = fixture.0.join("bundled.dll");
     let target = fixture.0.join("target.dll");
     let cache = fixture.0.join("cache");
     fs::write(&bundle, dll([1, 2, 2, 23])).unwrap();
-    fs::write(&target, dll([1, 2, 2, 24])).unwrap();
+    fs::write(&target, dll([1, 3, 16, 0])).unwrap();
     let result = choose_source(&bundle, &target, &cache, Some("offline".into())).unwrap();
-    assert_eq!(result.origin, "existing");
-    assert_eq!(result.source_path, target.to_string_lossy());
-    assert_eq!(result.version, "1.2.2.24");
+    assert_eq!(result.origin, "bundled");
+    assert_eq!(result.source_path, bundle.to_string_lossy());
+    assert_eq!(result.version, "1.2.2.23");
     assert_eq!(result.warning.as_deref(), Some("offline"));
     fs::write(&bundle, dll([1, 2, 2, 25])).unwrap();
     assert_eq!(
