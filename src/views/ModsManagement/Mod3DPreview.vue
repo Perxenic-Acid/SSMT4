@@ -1237,7 +1237,7 @@ onBeforeUnmount(() => {
 .texture-picker__item small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; }
 .texture-picker__item--auto { justify-content:center; }
 .texture-picker__item--auto small { white-space:normal; }
-:global(.mod-preview-zoom-overlay) { position:fixed; top:32px; right:0; bottom:0; left:0; z-index:2147483000; background:rgba(3,6,12,.72); backdrop-filter:blur(3px); }
+:global(.mod-preview-zoom-overlay) { position:fixed; top:var(--ssmt-content-overlay-top); right:0; bottom:0; left:var(--ssmt-content-overlay-left); z-index:2147483000; background:rgba(3,6,12,.72); backdrop-filter:blur(3px); }
 :global(.mod-preview-zoom-canvas) { position:absolute; inset:18px; overflow:hidden; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:radial-gradient(circle at 50% 35%,rgba(91,113,155,.16),rgba(7,10,17,.82)); }
 :global(.mod-preview-zoom-canvas canvas) { display:block; width:100%; height:100%; }
 :global(.mod-light-orb--zoom) { top:14px; right:14px; width:72px; height:72px; }

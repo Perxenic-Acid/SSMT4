@@ -330,10 +330,7 @@ impl FrameAnalysisSingleLog {
     ///    —— 这条用来把同为渲染 draw 的候选（只读不写）剔除掉。
     ///
     /// 若无法匹配则回退到 `get_last_pointlist_index_by_hash` 原来的「取最后一个候选」行为。
-    pub fn get_pointlist_index_by_texcoord_hash(
-        &self,
-        trianglelist_index: &str,
-    ) -> Option<String> {
+    pub fn get_pointlist_index_by_texcoord_hash(&self, trianglelist_index: &str) -> Option<String> {
         let render_ia = self.get_ia_vertex_buffer_hash_map(trianglelist_index);
         let vb0_hash = render_ia.get("0").cloned().unwrap_or_default();
         let vb1_hash = render_ia.get("1").cloned().unwrap_or_default();

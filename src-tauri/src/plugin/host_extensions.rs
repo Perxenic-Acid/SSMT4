@@ -38,13 +38,23 @@ impl PluginManifest {
                 && matches!(self.version.as_str(), "0.1.0" | "0.1.1")
                 && dependency.id == super::hoyoshade::HOYOSHADE_DEPENDENCY_ID
             {
-                dependency.download_url.get_or_insert_with(|| "https://github.com/DuolaD/HoYoShade/releases".into());
-                dependency.download_hint.get_or_insert_with(|| "下载并解压 HoYoShade，按发布说明补齐效果库，再选择包含所列文件的目录。".into());
+                dependency
+                    .download_url
+                    .get_or_insert_with(|| "https://github.com/DuolaD/HoYoShade/releases".into());
+                dependency.download_hint.get_or_insert_with(|| {
+                    "下载并解压 HoYoShade，按发布说明补齐效果库，再选择包含所列文件的目录。".into()
+                });
             }
             if matches!(self.version.as_str(), "0.2.1" | "0.2.2")
-                && super::dlss5::is_optional_integration_dependency(&self.id, &self.version, &dependency.id)
+                && super::dlss5::is_optional_integration_dependency(
+                    &self.id,
+                    &self.version,
+                    &dependency.id,
+                )
             {
-                dependency.required_for.get_or_insert_with(|| vec!["external-manager".into()]);
+                dependency
+                    .required_for
+                    .get_or_insert_with(|| vec!["external-manager".into()]);
                 let hint = match dependency.id.as_str() {
                     "dlss5-swapper" => "仅用于旧外部管理器；原下载源当前不可用。热注入无需此工具，请使用上方组件配置入口。",
                     "dlss5-adapter" => "仅用于旧外部管理器；SSMT 专用适配器尚未独立发布。热注入无需此依赖。",
@@ -76,9 +86,15 @@ mod tests {
     use super::*;
     #[test]
     fn legacy_dependency_display_is_read_only_and_does_not_invent_downloads() {
-        let shade = PluginManifest::from_json_str(include_str!("../../../native/official-plugin-packages/ssmt.hoyoshade.bridge/0.1.0/ssmt-plugin.json")).unwrap();
+        let shade = PluginManifest::from_json_str(include_str!(
+            "../../../native/official-plugin-packages/ssmt.hoyoshade.bridge/0.1.0/ssmt-plugin.json"
+        ))
+        .unwrap();
         let original = shade.clone();
-        assert_eq!(shade.display_dependencies()[0].download_url.as_deref(), Some("https://github.com/DuolaD/HoYoShade/releases"));
+        assert_eq!(
+            shade.display_dependencies()[0].download_url.as_deref(),
+            Some("https://github.com/DuolaD/HoYoShade/releases")
+        );
         assert_eq!(shade, original);
         let mut other = shade;
         other.id = "example.other".into();
@@ -86,13 +102,19 @@ mod tests {
 
         let dlss = PluginManifest::from_json_str(include_str!("../../../native/official-plugin-packages/ssmt.dlss5.integration/0.2.1/ssmt-plugin.json")).unwrap();
         for dependency in dlss.display_dependencies() {
-            assert_eq!(dependency.required_for, Some(vec!["external-manager".into()]));
+            assert_eq!(
+                dependency.required_for,
+                Some(vec!["external-manager".into()])
+            );
             assert!(dependency.download_url.is_none());
             assert!(dependency.download_hint.is_some());
         }
         let mut cold = dlss;
         cold.version = "0.2.0".into();
-        assert!(cold.display_dependencies().iter().all(|dependency| dependency.download_hint.is_none()));
+        assert!(cold
+            .display_dependencies()
+            .iter()
+            .all(|dependency| dependency.download_hint.is_none()));
 
         for raw in [include_str!("../../../native/official-plugin-packages/ssmt.hoyoshade.bridge/0.1.1/ssmt-plugin.json"), include_str!("../../../native/official-plugin-packages/ssmt.dlss5.integration/0.2.2/ssmt-plugin.json")] {
             let manifest = PluginManifest::from_json_str(raw).unwrap();

@@ -406,8 +406,15 @@ impl SSMTCompressUtils {
             }
 
             let outpath = Self::archive_entry_output_path(dest_dir, &target_name)?;
-            if outpath.file_name().and_then(|name| name.to_str()).is_some_and(|name|
-                excluded_files.iter().any(|excluded| name.eq_ignore_ascii_case(excluded))) {
+            if outpath
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    excluded_files
+                        .iter()
+                        .any(|excluded| name.eq_ignore_ascii_case(excluded))
+                })
+            {
                 processed_entries += 1;
                 on_progress(processed_entries, total_entries);
                 continue;

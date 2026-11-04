@@ -334,6 +334,50 @@ const confirmCreateGame = async () => {
                 <div class="setting-identity">
                   <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
                   <div>
+                    <div class="setting-label">{{ t('settings.personalization.uiMode') }}</div>
+                    <div class="setting-description">{{ t('settings.personalization.uiModeHint') }}</div>
+                  </div>
+                </div>
+                <div class="setting-control ui-mode-control">
+                  <div class="ui-mode-switch" role="radiogroup" :aria-label="t('settings.personalization.uiMode')">
+                    <button
+                      type="button"
+                      class="ui-mode-option"
+                      :class="{ active: appSettings.uiMode === 'modern' }"
+                      role="radio"
+                      :aria-checked="appSettings.uiMode === 'modern'"
+                      @click="appSettings.uiMode = 'modern'"
+                    >
+                      <span class="ui-mode-icon"><el-icon><View /></el-icon></span>
+                      <span class="ui-mode-copy">
+                        <strong>{{ t('settings.personalization.uiModes.modern') }}</strong>
+                        <small>MODERN LAYOUT</small>
+                      </span>
+                      <span class="ui-mode-indicator" />
+                    </button>
+                    <button
+                      type="button"
+                      class="ui-mode-option"
+                      :class="{ active: appSettings.uiMode === 'classic' }"
+                      role="radio"
+                      :aria-checked="appSettings.uiMode === 'classic'"
+                      @click="appSettings.uiMode = 'classic'"
+                    >
+                      <span class="ui-mode-icon"><el-icon><Monitor /></el-icon></span>
+                      <span class="ui-mode-copy">
+                        <strong>{{ t('settings.personalization.uiModes.classic') }}</strong>
+                        <small>CLASSIC LAYOUT</small>
+                      </span>
+                      <span class="ui-mode-indicator" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-identity">
+                  <span class="setting-icon"><el-icon><Monitor /></el-icon></span>
+                  <div>
                     <div class="setting-label">{{ t('settings.personalization.language') }}</div>
                     <div class="setting-description">{{ t('settings.hints.language') }}</div>
                   </div>
@@ -614,7 +658,7 @@ const confirmCreateGame = async () => {
                 </div>
                 <div class="setting-control console-shortcut-control">
                   <el-switch :model-value="!!appSettings.launchConsoleShortcut" :disabled="consoleShortcutBusy" :aria-label="t('settings.general.launchConsoleShortcut')"
-                    @change="value => applyConsoleShortcut(value ? consoleShortcutDraft : '')" />
+                    @change="(value: boolean | string | number) => applyConsoleShortcut(value ? consoleShortcutDraft : '')" />
                   <el-input v-model="consoleShortcutDraft" readonly :disabled="consoleShortcutBusy" :placeholder="t('settings.general.recordShortcut')" :aria-label="t('settings.general.recordShortcut')" @keydown="recordConsoleShortcut" />
                   <el-button :loading="consoleShortcutBusy" :disabled="consoleShortcutDraft === appSettings.launchConsoleShortcut" @click="applyConsoleShortcut(consoleShortcutDraft)">{{ t('settings.general.applyShortcut') }}</el-button>
                   <el-button @click="LaunchMonitor.open()">{{ t('settings.general.openConsole') }}</el-button>
@@ -993,6 +1037,106 @@ const confirmCreateGame = async () => {
 
 .setting-row-wide {
   grid-template-columns: minmax(220px, 0.8fr) minmax(300px, 1.2fr);
+}
+
+.ui-mode-control {
+  width: min(100%, 360px);
+}
+
+.ui-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--t-border);
+  border-radius: 8px;
+  background: var(--t-surface-soft);
+}
+
+.ui-mode-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 8px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 50px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--t-page-text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, color .16s ease;
+}
+
+.ui-mode-option:hover {
+  border-color: color-mix(in srgb, var(--t-border) 72%, var(--ssmt-brand-accent));
+  background: var(--t-surface-hover);
+  color: var(--t-page-text);
+}
+
+.ui-mode-option.active {
+  border-color: color-mix(in srgb, var(--t-border) 55%, var(--ssmt-brand-accent));
+  background: color-mix(in srgb, var(--ssmt-brand-accent) 8%, var(--t-surface-raised));
+  color: var(--t-page-text);
+}
+
+.ui-mode-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--t-border);
+  border-radius: 6px;
+  background: var(--t-surface-soft);
+  color: var(--t-page-text-muted);
+  font-size: 16px;
+}
+
+.ui-mode-option.active .ui-mode-icon {
+  border-color: color-mix(in srgb, var(--ssmt-brand-accent) 48%, var(--t-border));
+  color: var(--ssmt-brand-accent);
+  background: color-mix(in srgb, var(--ssmt-brand-accent) 9%, var(--t-surface-soft));
+}
+
+.ui-mode-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.ui-mode-copy strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-mode-copy small {
+  overflow: hidden;
+  color: var(--t-page-text-muted);
+  font: 8px/1.2 ui-monospace, Consolas, monospace;
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-mode-indicator {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--t-border);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.ui-mode-option.active .ui-mode-indicator {
+  border-color: var(--ssmt-brand-accent);
+  background: var(--ssmt-brand-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ssmt-brand-accent) 48%, transparent);
 }
 
 .setting-identity {

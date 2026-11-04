@@ -1,15 +1,50 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from 'vue'
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onMounted,
+  ref,
+  watch,
+} from 'vue'
 import { useRoute } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
+import { getVersion } from '@tauri-apps/api/app'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openPath, openUrl } from '@tauri-apps/plugin-opener'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { FolderOpened, Refresh, Search, Setting, Document, Delete, Box, InfoFilled } from '@element-plus/icons-vue'
+import {
+  Box,
+  Delete,
+  Document,
+  FolderOpened,
+  InfoFilled,
+  Refresh,
+  Search,
+  Setting,
+} from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
+import { notifyPluginRegistryChanged } from '../../plugin/pluginRegistryEvents'
+import { LIQUID_GRAVITY_PROBE_PLUGIN_ID } from '../../plugin/liquidGravityProbe'
+import {
+  acceptLiquidGravityProbeConsent,
+  declineLiquidGravityProbeConsent,
+  hasLiquidGravityProbeConsent,
+  setLiquidGravityProbeEnabled,
+} from '../../plugin/liquidGravityProbeConsent'
 import { AppStateManager } from '../../store/AppStateManager'
+import { getGamePresetDisplayName } from '../../store/GamePreset'
 import { ResourceManager } from '../../store/ResourceManager'
+import PluginCompatibilityPanel from './PluginCompatibilityPanel.vue'
+import PluginPermissionList from './PluginPermissionList.vue'
+import LiquidGravityProbeDisclaimer from '../../components/LiquidGravityProbeDisclaimer.vue'
+import {
+  orderedPermissions,
+  permissionDefinitionFor,
+  type PluginCompatibilityItem,
+  versionRequirementState,
+} from './pluginMarketplaceModel'
 
 const PlayerTweaksCameraSettings = defineAsyncComponent(
   () => import('../../plugin/components/PlayerTweaksCameraSettings.vue'),
@@ -46,11 +81,12 @@ interface PluginManifest {
   version: string
   author: string
   description?: string
-  compatibility?: { games?: string[] }
+  compatibility?: { ssmt?: string; platforms?: string[]; games?: string[] }
   permissions: string[]
   externalDependencies: ExternalDependency[]
   contributions?: {
     hostExtensions?: Array<{ id: string; settingsComponent?: string | null }>
+    runtimePlugins?: Array<{ path: string }>
     injectedDlls?: Array<{ path: string }>
   }
 }
@@ -74,6 +110,9 @@ interface CatalogEntry {
   supportedGames: string[]
   permissions: string[]
   externalDependencies: ExternalDependency[]
+  supportedPlatforms?: string[]
+  minimumSsmtVersion?: string | null
+  maximumSsmtVersion?: string | null
   official?: boolean
   localArchive?: string
 }
@@ -97,6 +136,9 @@ interface OfficialCatalogEntry {
   author: string
   version: string
   supportedGames: string[]
+  supportedPlatforms: string[]
+  minimumSsmtVersion?: string | null
+  maximumSsmtVersion?: string | null
   permissions: string[]
   externalDependencies: ExternalDependency[]
 }
@@ -105,6 +147,12 @@ const { t } = useI18n()
 const route = useRoute()
 const selectedGameName = computed(() => AppStateManager.appSettings.CurrentGameName === 'Default'
   ? '' : AppStateManager.appSettings.CurrentGameName)
+const selectedGameLabel = computed(() => selectedGameName.value
+  ? getGamePresetDisplayName(selectedGameName.value, t)
+  : t('pluginMarketplace.hero.noGame'))
+const appVersion = ref('')
+const compatibilityCheckedAt = ref('')
+const isModernUi = computed(() => AppStateManager.appSettings.uiMode === 'modern')
 
 const catalog = ref<CatalogEntry[]>([])
 const localCatalog = ref<CatalogEntry[]>([])
@@ -119,6 +167,8 @@ const reviewInspection = ref<PackageInspection | null>(null)
 const activeTab = ref<'discover' | 'installed' | 'updates'>('discover')
 const detailTab = ref<'features' | 'dependencies' | 'permissions' | 'details'>(route.query.tab === 'dependencies' ? 'dependencies' : 'features')
 const searchQuery = ref('')
+const officialOnly = ref(false)
+const compatibleOnly = ref(false)
 const selectedId = ref(typeof route.query.plugin === 'string' ? route.query.plugin : '')
 const installed = ref<InstalledPlugin[]>([])
 const installedGameName = ref('')
@@ -134,6 +184,9 @@ const logLoading = ref(false)
 const riskDialogOpen = ref(false)
 const riskAccepted = ref(false)
 const riskPlugin = ref<InstalledPlugin | null>(null)
+const liquidDisclaimerOpen = ref(false)
+const liquidDisclaimerBusy = ref(false)
+const liquidDisclaimerPlugin = ref<InstalledPlugin | null>(null)
 const NATIVE_INJECTION_RISK_ACK_KEY = 'native_injection_risk_ack_v1'
 const settingsSectionRef = ref<HTMLElement | null>(null)
 const settingsAttention = ref(false)
@@ -152,6 +205,12 @@ const installedById = computed(() => {
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
 const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
 const selectedInjectedDlls = computed(() => selectedPlugin.value?.manifest.contributions?.injectedDlls ?? [])
+const selectedRuntimePlugins = computed(() => selectedPlugin.value?.manifest.contributions?.runtimePlugins ?? [])
+const selectedInjectionComponents = computed(() => [...selectedRuntimePlugins.value, ...selectedInjectedDlls.value])
+const selectedPermissions = computed(() => orderedPermissions([
+  ...(selectedPlugin.value?.manifest.permissions ?? []),
+  ...(selectedEntry.value?.permissions ?? []),
+]))
 const originalProjectUrls: Record<string, string> = {
   'ssmt.secondary-motion': 'https://github.com/Sp1cHless/Arknights-Endfield-Plugin-Secondary-bodyphysics',
 }
@@ -214,6 +273,8 @@ const allEntries = computed<CatalogEntry[]>(() => {
       author: plugin.manifest.author,
       version: plugin.manifest.version,
       supportedGames: plugin.manifest.compatibility?.games ?? [],
+      supportedPlatforms: plugin.manifest.compatibility?.platforms ?? [],
+      minimumSsmtVersion: plugin.manifest.compatibility?.ssmt,
       permissions: plugin.manifest.permissions,
       externalDependencies: plugin.manifest.externalDependencies,
     })
@@ -246,15 +307,237 @@ const monogramFor = (entry: CatalogEntry) => {
   const words = name.split(/[\s-]+/)
   return (words.length > 1 ? words.slice(0, 2).map(word => Array.from(word)[0]).join('') : Array.from(name).slice(0, 2).join('')).toLocaleUpperCase()
 }
+const entrySupportsGame = (entry: CatalogEntry) => {
+  const plugin = installedById.value.get(entry.id)
+  if (plugin?.appScoped) return true
+  if (!selectedGameName.value) return false
+  return entry.supportedGames.length === 0 || entry.supportedGames.includes(selectedGameName.value)
+}
+const entrySupportsPlatform = (entry: CatalogEntry) =>
+  !entry.supportedPlatforms?.length || entry.supportedPlatforms.includes('windows-x64')
+const entryHasBlockingLifecycle = (entry: CatalogEntry) => {
+  const lifecycle = rowLifecycleFor(entry)
+  return ['broken', 'incompatible', 'external_dependency_missing'].includes(lifecycle ?? '')
+}
+const entryIsCompatible = (entry: CatalogEntry) =>
+  !entryHasBlockingLifecycle(entry) && entrySupportsGame(entry) && entrySupportsPlatform(entry)
+const entryIsOfficial = (entry: CatalogEntry) =>
+  installedById.value.get(entry.id)?.official ?? entry.official ?? false
+const rowStateFor = (entry: CatalogEntry) => {
+  const lifecycle = rowLifecycleFor(entry)
+  if (lifecycle) return t(`pluginMarketplace.lifecycle.${lifecycle}`)
+  if (!entrySupportsPlatform(entry)) return t('pluginMarketplace.rowStates.platformUnsupported')
+  if (!entrySupportsGame(entry) && selectedGameName.value) return t('pluginMarketplace.rowStates.gameUnsupported')
+  return t('pluginMarketplace.status.notInstalled')
+}
+const rowStateTone = (entry: CatalogEntry) => {
+  const lifecycle = rowLifecycleFor(entry)
+  if (['broken', 'incompatible', 'external_dependency_missing'].includes(lifecycle ?? '')) return 'issue'
+  if (lifecycle === 'enabled') return 'enabled'
+  if (!entrySupportsPlatform(entry) || (!entrySupportsGame(entry) && selectedGameName.value)) return 'issue'
+  return ''
+}
+const listIsFiltered = computed(() => !!searchQuery.value.trim() || officialOnly.value || compatibleOnly.value)
 const countFor = (tab: typeof activeTab.value) => tab === 'installed' ? installedEntries.value.length
   : tab === 'updates' ? updateEntries.value.length : allEntries.value.length
 const visibleEntries = computed(() => {
   const entries = activeTab.value === 'installed' ? installedEntries.value
     : activeTab.value === 'updates' ? updateEntries.value : allEntries.value
   const query = searchQuery.value.trim().toLocaleLowerCase()
-  return query ? entries.filter(entry =>
-    [entry.name, entry.id, entry.author, entry.description].some(value => value.toLocaleLowerCase().includes(query))) : entries
+  return entries
+    .filter(entry => !officialOnly.value || entryIsOfficial(entry))
+    .filter(entry => !compatibleOnly.value || entryIsCompatible(entry))
+    .filter(entry => !query || [entry.name, entry.id, entry.author, entry.description]
+      .some(value => value.toLocaleLowerCase().includes(query)))
 })
+const selectedLifecycle = computed(() => selectedEntry.value && selectedPlugin.value
+  ? lifecycleFor(selectedEntry.value, selectedPlugin.value)
+  : undefined)
+const selectedHasIssue = computed(() => ['broken', 'incompatible', 'external_dependency_missing', 'update_available']
+  .includes(selectedLifecycle.value ?? ''))
+const selectedIssueHint = computed(() => selectedLifecycle.value
+  ? t(`pluginMarketplace.issueHints.${selectedLifecycle.value}`)
+  : '')
+const selectedDependencyIssue = computed(() => selectedPlugin.value
+  ? Object.values(selectedPlugin.value.externalDependencies).find(item => item.status !== 'ready')?.reason ?? ''
+  : '')
+const selectedStatusLabel = computed(() => !selectedPlugin.value
+  ? t('pluginMarketplace.status.notInstalled')
+  : selectedPlugin.value.enabled
+    ? t('pluginMarketplace.status.enabled')
+    : t(`pluginMarketplace.lifecycle.${selectedLifecycle.value ?? 'disabled'}`))
+const selectedStatusClass = computed(() => {
+  if (!selectedPlugin.value) return 'is-uninstalled'
+  if (selectedHasIssue.value) return 'is-issue'
+  return selectedPlugin.value.enabled ? 'is-enabled' : 'is-disabled'
+})
+const selectedInjectionValue = computed(() => {
+  if (selectedInjectionComponents.value.length) {
+    return t('pluginMarketplace.impact.injectionCount', { count: selectedInjectionComponents.value.length })
+  }
+  if (!selectedPlugin.value && selectedEntry.value?.permissions.includes('native.inject')) {
+    return t('pluginMarketplace.impact.injectionDeclared')
+  }
+  return t('pluginMarketplace.impact.injectionNone')
+})
+const selectedInjectionHint = computed(() => {
+  if (selectedInjectionComponents.value.length) return t('pluginMarketplace.impact.injectionHint')
+  if (!selectedPlugin.value && selectedEntry.value?.permissions.includes('native.inject')) {
+    return t('pluginMarketplace.impact.injectionDeclaredHint')
+  }
+  return t('pluginMarketplace.impact.injectionNoneHint')
+})
+const selectedDependencyValue = computed(() => selectedDependencies.value.length
+  ? t('pluginMarketplace.impact.dependencyCount', { count: selectedDependencies.value.length })
+  : t('pluginMarketplace.impact.none'))
+const dependencyStates = computed(() => selectedDependencies.value.map(dependency =>
+  selectedPlugin.value?.externalDependencies[dependency.id]?.status))
+const selectedRequiredDependencies = computed(() => selectedDependencies.value.filter(dependency => !optionalDependency(dependency)))
+const selectedMissingRequiredDependencies = computed(() => selectedRequiredDependencies.value.filter(dependency => {
+  const status = selectedPlugin.value?.externalDependencies[dependency.id]?.status
+  return status && status !== 'ready'
+}))
+const selectedDependencyHint = computed(() => {
+  if (!selectedDependencies.value.length) return t('pluginMarketplace.impact.noDependencies')
+  if (!selectedPlugin.value) return t('pluginMarketplace.impact.dependencyUnverified')
+  const ready = dependencyStates.value.filter(status => status === 'ready').length
+  const missing = dependencyStates.value.filter(status => status === 'missing' || status === 'invalid').length
+  if (selectedMissingRequiredDependencies.value.length) {
+    return t('pluginMarketplace.impact.dependencyMissing', { count: selectedMissingRequiredDependencies.value.length })
+  }
+  if (missing) return t('pluginMarketplace.impact.dependencyOptionalMissing', { count: missing })
+  return t('pluginMarketplace.impact.dependencyReady', { ready, total: selectedDependencies.value.length })
+})
+const selectedGameCompatible = computed(() => !!selectedEntry.value && entrySupportsGame(selectedEntry.value))
+const selectedPlatformCompatible = computed(() => !!selectedEntry.value && entrySupportsPlatform(selectedEntry.value))
+const selectedVersionCompatibility = computed(() => versionRequirementState(
+  appVersion.value,
+  selectedEntry.value?.minimumSsmtVersion,
+  selectedEntry.value?.maximumSsmtVersion,
+))
+const selectedVersionRequirementText = computed(() => {
+  const requirements = [
+    selectedEntry.value?.minimumSsmtVersion,
+    selectedEntry.value?.maximumSsmtVersion
+      ? t('pluginMarketplace.compatibility.values.maximumVersion', {
+        version: selectedEntry.value.maximumSsmtVersion,
+      })
+      : '',
+  ].filter(Boolean)
+  return requirements.length
+    ? requirements.join(' · ')
+    : t('pluginMarketplace.compatibility.values.unspecified')
+})
+const selectedCompatibilityStatus = computed<'ready' | 'limited' | 'blocked'>(() => {
+  if (!selectedEntry.value) return 'limited'
+  if (selectedHasIssue.value && selectedLifecycle.value !== 'update_available') return 'blocked'
+  if (!selectedGameCompatible.value
+    || !selectedPlatformCompatible.value
+    || selectedVersionCompatibility.value === 'blocked') return 'blocked'
+  if (!selectedPlugin.value || selectedLifecycle.value === 'update_available' || !selectedGameName.value) return 'limited'
+  if (selectedMissingRequiredDependencies.value.length) return 'blocked'
+  return 'ready'
+})
+const selectedCompatibilitySummary = computed(() => {
+  if (!selectedEntry.value) return ''
+  if (!selectedPlatformCompatible.value) return t('pluginMarketplace.compatibility.summary.unsupportedPlatform')
+  if (selectedVersionCompatibility.value === 'blocked') return t('pluginMarketplace.compatibility.summary.versionMismatch', {
+    version: appVersion.value || t('pluginMarketplace.compatibility.values.unknownVersion'),
+    range: selectedVersionRequirementText.value,
+  })
+  if (selectedGameName.value && !selectedGameCompatible.value) return t('pluginMarketplace.compatibility.summary.unsupportedGame', {
+    game: selectedGameLabel.value,
+  })
+  if (!selectedPlugin.value) return t('pluginMarketplace.compatibility.summary.notInstalled')
+  if (!selectedPlugin.value.appScoped && !selectedGameName.value) return t('pluginMarketplace.compatibility.summary.noGame')
+  if (selectedMissingRequiredDependencies.value.length) {
+    return selectedDependencyIssue.value || t('pluginMarketplace.compatibility.summary.dependenciesMissing', {
+      count: selectedMissingRequiredDependencies.value.length,
+    })
+  }
+  if (selectedHasIssue.value) return selectedIssueHint.value
+  return t('pluginMarketplace.compatibility.summary.ready')
+})
+const selectedCompatibilityItems = computed<PluginCompatibilityItem[]>(() => {
+  const entry = selectedEntry.value
+  if (!entry) return []
+
+  const supportedGames = entry.supportedGames.map(game => getGamePresetDisplayName(game, t)).join(' · ')
+  const supportedPlatforms = entry.supportedPlatforms?.join(' · ') || t('pluginMarketplace.compatibility.values.unspecified')
+  const dependencyState = !selectedDependencies.value.length
+    ? 'supported'
+    : !selectedPlugin.value ? 'unknown'
+      : selectedMissingRequiredDependencies.value.length ? 'blocked' : 'supported'
+  const hasDeclaredInjection = selectedPermissions.value.includes('native.inject')
+  const injectionState = selectedInjectionComponents.value.length
+    ? 'supported'
+    : hasDeclaredInjection ? 'limited' : 'supported'
+
+  return [
+    {
+      id: 'game',
+      label: t('pluginMarketplace.compatibility.rows.game'),
+      value: selectedPlugin.value?.appScoped
+        ? t('pluginMarketplace.appScope')
+        : selectedGameLabel.value,
+      hint: selectedPlugin.value?.appScoped
+        ? t('pluginMarketplace.compatibility.values.allGames')
+        : supportedGames || t('pluginMarketplace.compatibility.values.allGames'),
+      state: selectedGameCompatible.value ? 'supported' : 'blocked',
+    },
+    {
+      id: 'platform',
+      label: t('pluginMarketplace.compatibility.rows.platform'),
+      value: 'Windows · x64',
+      hint: supportedPlatforms,
+      state: selectedPlatformCompatible.value ? 'supported' : 'blocked',
+    },
+    {
+      id: 'injection',
+      label: t('pluginMarketplace.compatibility.rows.injection'),
+      value: selectedInjectionValue.value,
+      hint: selectedInjectionHint.value,
+      state: injectionState,
+    },
+    {
+      id: 'dependencies',
+      label: t('pluginMarketplace.compatibility.rows.dependencies'),
+      value: selectedDependencyValue.value,
+      hint: selectedDependencyHint.value,
+      state: dependencyState,
+    },
+    {
+      id: 'settings',
+      label: t('pluginMarketplace.compatibility.rows.settings'),
+      value: selectedSettings.value.some(Boolean)
+        ? t('pluginMarketplace.compatibility.values.settingsAvailable')
+        : t('pluginMarketplace.compatibility.values.settingsUnavailable'),
+      state: 'supported',
+    },
+    {
+      id: 'ssmt-version',
+      label: t('pluginMarketplace.compatibility.rows.version'),
+      value: appVersion.value ? `SSMT ${appVersion.value}` : t('pluginMarketplace.compatibility.values.unspecified'),
+      hint: selectedVersionRequirementText.value,
+      state: selectedVersionCompatibility.value,
+    },
+  ]
+})
+const selectedEnableBlockedReason = computed(() => {
+  if (!selectedPlugin.value) return ''
+  if (selectedCompatibilityStatus.value === 'blocked') return selectedCompatibilitySummary.value
+  if (!selectedPlugin.value.appScoped && !selectedGameName.value) return t('pluginMarketplace.compatibility.summary.noGame')
+  if (!selectedPlugin.value.appScoped && installedGameName.value !== selectedGameName.value) {
+    return t('pluginMarketplace.compatibility.summary.refreshRequired')
+  }
+  return ''
+})
+const selectedCanEnable = computed(() => !!selectedPlugin.value
+  && !loading.value
+  && (!selectedPlugin.value.enabled && selectedCompatibilityStatus.value !== 'blocked'
+    || selectedPlugin.value.enabled)
+  && (selectedPlugin.value.appScoped || !!selectedGameName.value)
+  && (selectedPlugin.value.appScoped || installedGameName.value === selectedGameName.value))
 
 const compareVersions = (left: string, right: string) => {
   const parse = (value: string) => value.split('.').map(part => Number.parseInt(part, 10) || 0)
@@ -266,9 +549,19 @@ const compareVersions = (left: string, right: string) => {
   return 0
 }
 
-const refreshInstalled = async () => {
+const markCompatibilityChecked = () => {
+  compatibilityCheckedAt.value = new Date().toLocaleString([], {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const refreshInstalled = async (): Promise<boolean> => {
   const requestId = ++refreshRequestId
   const gameName = selectedGameName.value
+  let succeeded = false
   loading.value = true
   try {
     const snapshot = await invoke<InstalledPlugin[]>('plugin_registry_snapshot_for_game', {
@@ -277,6 +570,8 @@ const refreshInstalled = async () => {
     if (requestId === refreshRequestId) {
       installed.value = snapshot
       installedGameName.value = gameName
+      succeeded = true
+      notifyPluginRegistryChanged()
     }
   } catch (error) {
     if (requestId === refreshRequestId) {
@@ -286,9 +581,10 @@ const refreshInstalled = async () => {
   } finally {
     if (requestId === refreshRequestId) loading.value = false
   }
+  return succeeded
 }
 
-const refreshCatalog = async () => {
+const refreshCatalog = async (): Promise<boolean> => {
   catalogLoading.value = true
   try {
     const entries = await invoke<OfficialCatalogEntry[]>('official_plugin_catalog')
@@ -299,13 +595,18 @@ const refreshCatalog = async () => {
       author: entry.author,
       version: entry.version,
       supportedGames: entry.supportedGames,
+      supportedPlatforms: entry.supportedPlatforms,
+      minimumSsmtVersion: entry.minimumSsmtVersion,
+      maximumSsmtVersion: entry.maximumSsmtVersion,
       permissions: entry.permissions,
       externalDependencies: entry.externalDependencies,
       official: true,
     }))
     catalogError.value = ''
+    return true
   } catch (error) {
     catalogError.value = String(error)
+    return false
   } finally {
     catalogLoading.value = false
   }
@@ -313,10 +614,11 @@ const refreshCatalog = async () => {
 
 const refreshAll = async () => {
   if (refreshing.value) return
-  await Promise.all([refreshInstalled(), refreshCatalog(), refreshLocalCatalog()])
+  const [installedReady] = await Promise.all([refreshInstalled(), refreshCatalog(), refreshLocalCatalog()])
+  if (installedReady) markCompatibilityChecked()
 }
 
-const refreshLocalCatalog = async () => {
+const refreshLocalCatalog = async (): Promise<boolean> => {
   localCatalogLoading.value = true
   try {
     const packages = await invoke<LocalPluginPackage[]>('local_plugin_packages')
@@ -327,13 +629,17 @@ const refreshLocalCatalog = async () => {
       author: inspection.manifest.author,
       version: inspection.manifest.version,
       supportedGames: inspection.manifest.compatibility?.games ?? [],
+      supportedPlatforms: inspection.manifest.compatibility?.platforms ?? [],
+      minimumSsmtVersion: inspection.manifest.compatibility?.ssmt,
       permissions: inspection.manifest.permissions,
       externalDependencies: inspection.manifest.externalDependencies,
       localArchive: archivePath,
     }))
     localCatalogError.value = ''
+    return true
   } catch (error) {
     localCatalogError.value = String(error)
+    return false
   } finally {
     localCatalogLoading.value = false
   }
@@ -454,6 +760,7 @@ const applyPluginToggle = async (plugin: InstalledPlugin) => {
     if (requestId === refreshRequestId) {
       installed.value = snapshot
       installedGameName.value = gameName
+      notifyPluginRegistryChanged()
     }
     ElMessage.success(plugin.enabled
       ? t('pluginMarketplace.messages.disabled')
@@ -467,6 +774,15 @@ const applyPluginToggle = async (plugin: InstalledPlugin) => {
 }
 
 const togglePlugin = async (plugin: InstalledPlugin) => {
+  if (
+    !plugin.enabled
+    && plugin.manifest.id === LIQUID_GRAVITY_PROBE_PLUGIN_ID
+    && !await hasLiquidGravityProbeConsent()
+  ) {
+    liquidDisclaimerPlugin.value = plugin
+    liquidDisclaimerOpen.value = true
+    return
+  }
   if (!plugin.enabled && plugin.manifest.permissions.includes('native.inject')) {
     riskPlugin.value = plugin
     riskAccepted.value = false
@@ -474,6 +790,41 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
     return
   }
   await applyPluginToggle(plugin)
+}
+
+const acceptLiquidDisclaimer = async () => {
+  const plugin = liquidDisclaimerPlugin.value
+  if (!plugin || liquidDisclaimerBusy.value) return
+  liquidDisclaimerBusy.value = true
+  try {
+    await acceptLiquidGravityProbeConsent()
+    liquidDisclaimerOpen.value = false
+    await applyPluginToggle(plugin)
+  } catch (error) {
+    ElMessage.error(String(error))
+  } finally {
+    liquidDisclaimerBusy.value = false
+    liquidDisclaimerPlugin.value = null
+  }
+}
+
+const declineLiquidDisclaimer = async () => {
+  if (liquidDisclaimerBusy.value) return
+  liquidDisclaimerBusy.value = true
+  try {
+    await declineLiquidGravityProbeConsent()
+    if (selectedGameName.value) {
+      await setLiquidGravityProbeEnabled(selectedGameName.value, false)
+      await refreshInstalled()
+    }
+    liquidDisclaimerOpen.value = false
+    ElMessage.info('已停用 Liquid Gravity Probe')
+  } catch (error) {
+    ElMessage.error(String(error))
+  } finally {
+    liquidDisclaimerBusy.value = false
+    liquidDisclaimerPlugin.value = null
+  }
 }
 
 const uninstallPlugin = async () => {
@@ -507,6 +858,7 @@ const uninstallPlugin = async () => {
     if (requestId === refreshRequestId) {
       installed.value = snapshot
       installedGameName.value = selectedGameName.value
+      notifyPluginRegistryChanged()
       if (logPlugin.value?.id === plugin.manifest.id) {
         logDialogOpen.value = false
         logPlugin.value = null
@@ -630,8 +982,9 @@ watch([
     if (requestId === graphicsConfigRequestId) graphicsConfigLoading.value = false
   }
 }, { immediate: true })
-watch(selectedGameName, () => {
-  if (initialized) void refreshInstalled()
+watch(selectedGameName, async () => {
+  if (!initialized) return
+  if (await refreshInstalled()) markCompatibilityChecked()
 })
 watch(visibleEntries, (entries) => {
   if (!entries.some(entry => entry.id === selectedId.value)) selectedId.value = entries[0]?.id ?? ''
@@ -640,32 +993,46 @@ watch(selectedId, () => { detailTab.value = 'features' })
 
 onMounted(async () => {
   initialized = true
+  try {
+    appVersion.value = await getVersion()
+  } catch (error) {
+    console.warn('Failed to read app version for plugin marketplace', error)
+  }
   await refreshAll()
 })
 </script>
 
 <template>
-  <main class="plugin-marketplace">
-    <details v-if="catalogError || localCatalogError" class="catalog-notice">
-      <summary><InfoFilled aria-hidden="true" /><span>{{ t('pluginMarketplace.catalogUnavailable') }}</span><span class="notice-details">{{ t('pluginMarketplace.showDetails') }}</span></summary>
-      <p v-if="catalogError">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</p>
-      <p v-if="localCatalogError">{{ t('pluginMarketplace.messages.localCatalogFailed', { error: localCatalogError }) }}</p>
-    </details>
-
-    <div class="marketplace-layout">
-      <aside class="marketplace-sidebar" :aria-label="t('pluginMarketplace.title')">
-        <div class="sidebar-search">
-          <el-input v-model="searchQuery" clearable :placeholder="t('pluginMarketplace.searchPlaceholder')"
-            :aria-label="t('pluginMarketplace.searchPlaceholder')" @keydown.esc="searchQuery = ''">
-            <template #prefix><Search class="search-icon" /></template>
-          </el-input>
-          <el-button class="search-action" :icon="Refresh" :loading="refreshing"
-            :title="t('pluginMarketplace.actions.refresh')" :aria-label="t('pluginMarketplace.actions.refresh')"
-            @click="refreshAll" />
-          <el-button class="search-action" :icon="FolderOpened" :disabled="loading"
-            :title="t('pluginMarketplace.actions.installFromFile')" :aria-label="t('pluginMarketplace.actions.installFromFile')"
-            @click="installFromFile" />
+  <main class="plugin-marketplace" :class="{ 'is-classic-ui': !isModernUi }">
+    <section class="marketplace-shell">
+      <header v-if="isModernUi" class="marketplace-heading">
+        <div class="marketplace-heading-copy">
+          <h1>{{ t('pluginMarketplace.title') }}</h1>
+          <div class="marketplace-brandline">
+            <span class="brandline-dot" aria-hidden="true" />
+            <span>SSMT{{ appVersion ? ` ${appVersion}` : '' }}</span>
+            <span aria-hidden="true">·</span>
+            <span>{{ selectedGameLabel }}</span>
+          </div>
         </div>
+        <span class="marketplace-platform">Windows x64</span>
+      </header>
+
+      <div v-if="isModernUi" class="marketplace-toolbar">
+        <el-input v-model="searchQuery" clearable :placeholder="t('pluginMarketplace.searchPlaceholder')"
+          :aria-label="t('pluginMarketplace.searchPlaceholder')" class="marketplace-search"
+          @keydown.esc="searchQuery = ''">
+          <template #prefix><Search class="search-icon" /></template>
+        </el-input>
+        <el-button class="toolbar-action" :icon="Refresh" :loading="refreshing"
+          :title="t('pluginMarketplace.actions.refresh')" :aria-label="t('pluginMarketplace.actions.refresh')"
+          @click="refreshAll" />
+        <el-button class="install-action" :icon="FolderOpened" :disabled="loading" @click="installFromFile">
+          {{ t('pluginMarketplace.actions.installFromFile') }}
+        </el-button>
+      </div>
+
+      <div v-if="isModernUi" class="marketplace-browsebar">
         <div class="sidebar-tabs" role="group" :aria-label="t('pluginMarketplace.browsePlugins')">
           <button v-for="tab in (['discover', 'installed', 'updates'] as const)" :key="tab" type="button"
             :class="{ active: activeTab === tab }" :aria-pressed="activeTab === tab"
@@ -674,7 +1041,48 @@ onMounted(async () => {
             <span :class="{ 'has-updates': tab === 'updates' && updateEntries.length > 0 }">{{ countFor(tab) }}</span>
           </button>
         </div>
+        <div class="marketplace-filters" role="group" :aria-label="t('pluginMarketplace.filters.title')">
+          <button type="button" :class="{ active: officialOnly }" :aria-pressed="officialOnly"
+            @click="officialOnly = !officialOnly">{{ t('pluginMarketplace.filters.official') }}</button>
+          <button type="button" :class="{ active: compatibleOnly }" :aria-pressed="compatibleOnly"
+            @click="compatibleOnly = !compatibleOnly">{{ t('pluginMarketplace.filters.compatible') }}</button>
+        </div>
         <div class="list-caption">{{ t('pluginMarketplace.resultsCount', { count: visibleEntries.length }) }}</div>
+      </div>
+
+      <details v-if="catalogError || localCatalogError" class="catalog-notice">
+        <summary><InfoFilled aria-hidden="true" /><span>{{ t('pluginMarketplace.catalogUnavailable') }}</span><span class="notice-details">{{ t('pluginMarketplace.showDetails') }}</span></summary>
+        <p v-if="catalogError">{{ t('pluginMarketplace.messages.catalogFailed', { error: catalogError }) }}</p>
+        <p v-if="localCatalogError">{{ t('pluginMarketplace.messages.localCatalogFailed', { error: localCatalogError }) }}</p>
+      </details>
+
+      <div class="marketplace-layout">
+        <aside class="marketplace-sidebar" :aria-label="t('pluginMarketplace.title')">
+        <div v-if="!isModernUi" class="legacy-sidebar-search">
+          <el-input v-model="searchQuery" clearable :placeholder="t('pluginMarketplace.searchPlaceholder')"
+            :aria-label="t('pluginMarketplace.searchPlaceholder')" @keydown.esc="searchQuery = ''">
+            <template #prefix><Search class="search-icon" /></template>
+          </el-input>
+          <el-button :icon="Refresh" :loading="refreshing"
+            :title="t('pluginMarketplace.actions.refresh')" :aria-label="t('pluginMarketplace.actions.refresh')"
+            @click="refreshAll" />
+          <el-button :icon="FolderOpened" :disabled="loading"
+            :title="t('pluginMarketplace.actions.installFromFile')"
+            :aria-label="t('pluginMarketplace.actions.installFromFile')"
+            @click="installFromFile" />
+        </div>
+        <div v-if="!isModernUi" class="sidebar-tabs legacy-sidebar-tabs"
+          role="group" :aria-label="t('pluginMarketplace.browsePlugins')">
+          <button v-for="tab in (['discover', 'installed', 'updates'] as const)" :key="tab" type="button"
+            :class="{ active: activeTab === tab }" :aria-pressed="activeTab === tab"
+            @click="activeTab = tab">
+            {{ t('pluginMarketplace.tabs.' + tab) }}
+            <span :class="{ 'has-updates': tab === 'updates' && updateEntries.length > 0 }">{{ countFor(tab) }}</span>
+          </button>
+        </div>
+        <div v-if="!isModernUi" class="legacy-list-caption">
+          {{ t('pluginMarketplace.resultsCount', { count: visibleEntries.length }) }}
+        </div>
         <div class="marketplace-list" :aria-busy="refreshing">
           <button v-for="entry in visibleEntries" :key="entry.id" type="button" class="plugin-row"
             :class="{ selected: selectedId === entry.id }" :aria-pressed="selectedId === entry.id"
@@ -684,14 +1092,11 @@ onMounted(async () => {
               <span class="plugin-row-title">
                 <strong :title="entry.name">{{ entry.name }}</strong>
               </span>
-              <span class="plugin-row-description">{{ entry.description }}</span>
+              <span v-if="!isModernUi" class="plugin-row-description">{{ entry.description }}</span>
               <span class="plugin-row-footer">
                 <span class="source-badge" :class="'source-' + sourceKindFor(entry)">{{ t('pluginMarketplace.sourceBadges.' + sourceKindFor(entry)) }}</span>
                 <span class="plugin-row-version">v{{ entry.version }}</span>
-                <span v-if="rowLifecycleFor(entry)" class="row-state"
-                  :class="{ enabled: rowLifecycleFor(entry) === 'enabled', issue: ['broken', 'incompatible', 'external_dependency_missing'].includes(rowLifecycleFor(entry) ?? '') }">
-                  {{ t('pluginMarketplace.lifecycle.' + rowLifecycleFor(entry)) }}
-                </span>
+                <span class="row-state" :class="rowStateTone(entry)">{{ rowStateFor(entry) }}</span>
               </span>
             </span>
           </button>
@@ -700,12 +1105,15 @@ onMounted(async () => {
             <div v-for="row in 3" :key="row" class="loading-row" aria-hidden="true" />
           </div>
           <div v-else-if="visibleEntries.length === 0" class="empty-state" role="status">
-            <Search v-if="searchQuery.trim()" aria-hidden="true" /><Box v-else aria-hidden="true" />
-            <p>{{ searchQuery.trim() ? t('pluginMarketplace.emptySearch') : t('pluginMarketplace.empty.' + activeTab) }}</p>
-            <el-button v-if="searchQuery.trim()" size="small" @click="searchQuery = ''">{{ t('pluginMarketplace.actions.clearSearch') }}</el-button>
+            <Search v-if="listIsFiltered" aria-hidden="true" /><Box v-else aria-hidden="true" />
+            <p>{{ listIsFiltered ? t('pluginMarketplace.emptyFiltered') : t('pluginMarketplace.empty.' + activeTab) }}</p>
+            <el-button v-if="listIsFiltered" size="small"
+              @click="searchQuery = ''; officialOnly = false; compatibleOnly = false">
+              {{ t('pluginMarketplace.actions.clearFilters') }}
+            </el-button>
           </div>
         </div>
-      </aside>
+        </aside>
 
       <section v-if="selectedEntry" class="plugin-detail" :aria-label="selectedEntry.name">
         <header class="detail-top">
@@ -718,8 +1126,8 @@ onMounted(async () => {
               <span>v{{ selectedPlugin?.manifest.version ?? selectedEntry.version }}</span>
             </div>
           </div>
-          <span v-if="selectedPlugin" class="detail-state" :class="{ 'is-enabled': selectedPlugin.enabled }">
-            <span class="state-dot" aria-hidden="true" />{{ t('pluginMarketplace.status.' + (selectedPlugin.enabled ? 'enabled' : 'disabled')) }}
+          <span class="detail-state" :class="selectedStatusClass">
+            <span class="state-dot" aria-hidden="true" />{{ selectedStatusLabel }}
           </span>
         </header>
         <p class="detail-description">{{ selectedEntry.description }}</p>
@@ -740,8 +1148,11 @@ onMounted(async () => {
               {{ t('pluginMarketplace.actions.updateOfficial') }}
             </el-button>
             <el-button size="small" :type="selectedPlugin.enabled ? undefined : 'primary'"
-              :disabled="(!selectedGameName && !selectedPlugin.appScoped) || (!selectedPlugin.appScoped && installedGameName !== selectedGameName) || loading || (!selectedPlugin.enabled && selectedPlugin.lifecycleStatus === 'incompatible')" :loading="loading" @click="togglePlugin(selectedPlugin)">
-              {{ selectedPlugin.enabled ? t('pluginMarketplace.actions.disable') : t('pluginMarketplace.actions.enable') }}
+              :disabled="!selectedCanEnable" :title="selectedEnableBlockedReason || undefined"
+              :loading="loading" @click="togglePlugin(selectedPlugin)">
+              {{ selectedPlugin.enabled
+                ? t('pluginMarketplace.actions.disable')
+                : selectedCanEnable ? t('pluginMarketplace.actions.enable') : t('pluginMarketplace.actions.cannotEnable') }}
             </el-button>
             <el-button v-if="selectedSettings.some(Boolean)" size="small" :icon="Setting"
               @click="openPluginSettings">{{ t('pluginMarketplace.actions.openSettings') }}</el-button>
@@ -754,11 +1165,14 @@ onMounted(async () => {
               @click="uninstallPlugin">
               {{ t('pluginMarketplace.actions.uninstall') }}
             </el-button>
-            <span v-if="['broken', 'incompatible', 'external_dependency_missing', 'update_available'].includes(lifecycleFor(selectedEntry, selectedPlugin))" class="detail-issue">
-              {{ t('pluginMarketplace.lifecycle.' + lifecycleFor(selectedEntry, selectedPlugin)) }}
-            </span>
           </template>
         </div>
+
+        <PluginCompatibilityPanel v-if="isModernUi" :status="selectedCompatibilityStatus"
+          :title="t('pluginMarketplace.compatibility.title')"
+          :summary="selectedCompatibilitySummary" :items="selectedCompatibilityItems"
+          :checked-at="compatibilityCheckedAt"
+          :source-note="t('pluginMarketplace.compatibility.sourceNote')" />
 
         <div class="detail-tabs" role="group" :aria-label="t('pluginMarketplace.pluginContent')">
           <button type="button" :aria-pressed="detailTab === 'features'"
@@ -787,7 +1201,32 @@ onMounted(async () => {
               class="detail-section"
               :class="{ 'settings-attention': settingsAttention }"
             >
-              <template v-if="selectedSettings.includes('ssmt.dlss5.settings') && selectedPlugin">
+              <template v-if="selectedEntry.id === LIQUID_GRAVITY_PROBE_PLUGIN_ID">
+                <section class="liquid-market-disclaimer">
+                  <header class="liquid-market-disclaimer-header">
+                    <span class="liquid-market-disclaimer-icon" aria-hidden="true"><InfoFilled /></span>
+                    <div>
+                      <h3>使用风险与免责声明</h3>
+                      <p>启用前请确认以下风险。详细声明也会在首次启动插件时弹出并等待选择。</p>
+                    </div>
+                  </header>
+                  <ul>
+                    <li>插件会修改对应 Mod 的 INI、配置和运行时资源。使用前请自行备份原始 Mod；本插件不保留持久化备份。</li>
+                    <li>错误配置、游戏更新、第三方 Mod 冲突或性能不足可能导致效果异常、卡顿、闪退或配置损坏，请先在单人、离线环境测试。</li>
+                    <li>在线游戏、竞技环境和成人内容须自行遵守当地法律、游戏条款及平台规则；账号处罚、封禁和内容责任由使用者承担。</li>
+                    <li>本项目为随缘维护，不承诺固定更新频率、问题响应、兼容性修复或长期支持。</li>
+                  </ul>
+                  <details class="liquid-market-disclaimer-details">
+                    <summary>查看完整免责声明</summary>
+                    <div>
+                      <p>本插件是非官方社区工具，与游戏开发商、发行商、平台运营方及第三方 Mod 作者无隶属、授权或背书关系。</p>
+                      <p>插件不保证第三方模型、贴图、音频或成人内容的合法性、安全性、版权状态和兼容性。使用者应自行确认来源与授权范围。</p>
+                      <p>插件按“现状”提供，不作持续兼容、无错误或不中断运行的担保。在适用法律允许的范围内，作者与贡献者不对数据丢失、设备损坏、账号处罚、内容损失或间接损失承担责任。</p>
+                    </div>
+                  </details>
+                </section>
+              </template>
+              <template v-else-if="selectedSettings.includes('ssmt.dlss5.settings') && selectedPlugin">
                 <p class="section-hint">{{ t('pluginMarketplace.dlss5SettingsHint') }}</p>
                 <div v-if="!selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5SelectGame') }}</div>
                 <div v-else-if="graphicsConfigLoading || installedGameName !== selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5LoadingGame') }}</div>
@@ -877,11 +1316,12 @@ onMounted(async () => {
             <section v-else-if="detailTab === 'permissions'" class="detail-section">
               <h3>{{ t('pluginMarketplace.sections.permissions') }}</h3>
               <p class="section-hint">{{ t('pluginMarketplace.permissionHint') }}</p>
-              <div class="permission-list">
-                <span v-for="permission in selectedEntry.permissions" :key="permission" class="permission-row">
+              <PluginPermissionList v-if="isModernUi" :permissions="selectedPermissions" />
+              <div v-else class="permission-list">
+                <span v-for="permission in selectedPermissions" :key="permission" class="permission-row">
                   {{ permission }}
                 </span>
-                <span v-if="selectedEntry.permissions.length === 0" class="muted-copy">{{ t('pluginMarketplace.none') }}</span>
+                <span v-if="selectedPermissions.length === 0" class="muted-copy">{{ t('pluginMarketplace.none') }}</span>
               </div>
             </section>
             <section v-else class="detail-section detail-meta">
@@ -892,9 +1332,9 @@ onMounted(async () => {
                 <dt>{{ t('pluginMarketplace.author') }}</dt><dd>{{ selectedEntry.author }}</dd>
                 <dt>{{ t('pluginMarketplace.source') }}</dt><dd>{{ sourceLabelFor(selectedEntry) }}</dd>
                 <dt>{{ t('pluginMarketplace.currentGame') }}</dt><dd>{{ selectedPlugin?.appScoped ? t('pluginMarketplace.appScope') : (selectedGameName || '—') }}</dd>
-                <template v-if="selectedInjectedDlls.length">
-                  <dt>{{ t('pluginMarketplace.injectedDlls') }}</dt>
-                  <dd>{{ selectedInjectedDlls.map(item => item.path).join(' · ') }}</dd>
+                <template v-if="selectedInjectionComponents.length">
+                  <dt>{{ t('pluginMarketplace.injectionComponents') }}</dt>
+                  <dd>{{ selectedInjectionComponents.map(item => item.path).join(' · ') }}</dd>
                 </template>
                 <template v-if="selectedProjectUrl">
                   <dt>{{ t('pluginMarketplace.originalProject') }}</dt>
@@ -921,7 +1361,8 @@ onMounted(async () => {
       <section v-else class="plugin-detail detail-empty">
         <div><Box aria-hidden="true" /><h2>{{ t('pluginMarketplace.title') }}</h2><p>{{ t('pluginMarketplace.selectPlugin') }}</p></div>
       </section>
-    </div>
+      </div>
+    </section>
 
     <el-dialog v-model="riskDialogOpen" :title="t('pluginMarketplace.risk.title')"
       width="min(680px, calc(100vw - 36px))" :close-on-click-modal="false">
@@ -945,6 +1386,13 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
+    <LiquidGravityProbeDisclaimer
+      :open="liquidDisclaimerOpen"
+      :busy="liquidDisclaimerBusy"
+      @accept="acceptLiquidDisclaimer"
+      @decline="declineLiquidDisclaimer"
+    />
+
     <el-dialog v-model="logDialogOpen" :title="t('pluginMarketplace.logTitle', { name: logPlugin?.name ?? '' })"
       width="min(760px, calc(100vw - 36px))">
       <pre class="plugin-log-view">{{ pluginLog || t('pluginMarketplace.logEmpty') }}</pre>
@@ -958,7 +1406,11 @@ onMounted(async () => {
         <p><strong>{{ reviewInspection.manifest.name }}</strong> · {{ reviewInspection.manifest.author }} · v{{ reviewInspection.manifest.version }}</p>
         <p class="review-detail">{{ reviewInspection.manifest.id }} · {{ reviewInspection.fileCount }} files · SHA-256: {{ reviewInspection.sha256 }}</p>
         <p class="review-detail">{{ t('pluginMarketplace.review.source') }} {{ reviewArchive }}</p>
-        <p class="review-detail">{{ t('pluginMarketplace.review.permissions') }} {{ reviewInspection.manifest.permissions.join(', ') || t('pluginMarketplace.none') }}</p>
+        <p class="review-detail">{{ t('pluginMarketplace.review.permissions') }} {{
+          reviewInspection.manifest.permissions
+            .map(permission => t(permissionDefinitionFor(permission).labelKey))
+            .join(', ') || t('pluginMarketplace.none')
+        }}</p>
         <p class="review-disclaimer">{{ t('pluginMarketplace.review.disclaimer') }}</p>
         <el-checkbox v-model="reviewAccepted">{{ t('pluginMarketplace.review.accept') }}</el-checkbox>
       </template>
@@ -976,14 +1428,138 @@ onMounted(async () => {
 .plugin-marketplace {
   --market-line: rgba(var(--theme-surface-tint-rgb), .10);
   --market-muted: rgba(var(--theme-text-secondary-rgb), .82);
+  --market-accent: var(--ssmt-brand-accent);
+  --market-accent-rgb: var(--ssmt-brand-accent-rgb);
+  --market-accent-ink: var(--ssmt-brand-accent-ink);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  container: plugin-marketplace / inline-size;
   height: 100%;
   min-height: 0;
   overflow: hidden;
   box-sizing: border-box;
   padding: var(--t-page-padding);
+  color: var(--t-page-text);
+}
+.marketplace-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--theme-surface-tint-rgb), .10);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 88% 0%, rgba(var(--market-accent-rgb), .075), transparent 28%),
+    rgba(10, 11, 13, .965);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .22);
+}
+.marketplace-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex: none;
+  min-width: 0;
+  padding: 1px 2px 0;
+}
+.marketplace-heading-copy { min-width: 0; }
+.marketplace-heading h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -.35px;
+}
+.marketplace-brandline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--t-page-text-muted);
+  font-size: 9px;
+}
+.brandline-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--market-accent);
+  box-shadow: 0 0 0 3px rgba(var(--market-accent-rgb), .12);
+}
+.marketplace-platform {
+  flex: none;
+  padding: 6px 11px;
+  border: 1px solid var(--market-line);
+  border-radius: 999px;
+  background: rgba(var(--theme-surface-tint-rgb), .045);
+  color: var(--market-muted);
+  font-size: 9px;
+}
+.marketplace-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+.marketplace-search {
+  flex: 1;
+  min-width: 0;
+}
+.marketplace-search :deep(.el-input__wrapper) {
+  min-height: 38px;
+  border-radius: 10px;
+  background: rgba(var(--theme-surface-tint-rgb), .045);
+  box-shadow: 0 0 0 1px var(--market-line) inset;
+}
+.marketplace-search :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px rgba(var(--market-accent-rgb), .62) inset;
+}
+.toolbar-action,
+.install-action {
+  flex: none;
+  min-height: 38px;
+  margin: 0 !important;
+  border-color: var(--market-line) !important;
+  background: rgba(var(--theme-surface-tint-rgb), .045) !important;
+}
+.toolbar-action {
+  width: 38px;
+  padding: 0 !important;
+}
+.install-action { padding-inline: 13px !important; }
+.marketplace-browsebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: none;
+}
+.marketplace-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.marketplace-filters button {
+  padding: 4px 8px;
+  border: 1px solid var(--market-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--market-muted);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.marketplace-filters button:hover {
+  color: var(--t-page-text);
+  background: var(--t-surface-hover);
+}
+.marketplace-filters button.active {
+  border-color: rgba(var(--market-accent-rgb), .42);
+  background: rgba(var(--market-accent-rgb), .10);
   color: var(--t-page-text);
 }
 .detail-top, .detail-actions, .dependency-heading {
@@ -1021,20 +1597,89 @@ onMounted(async () => {
 .native-risk-dialog p { margin: 8px 0; }
 .native-risk-dialog ul { padding: 10px 12px 10px 30px; margin: 10px 0; border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); color: var(--t-warning-text); }
 .native-risk-dialog li + li { margin-top: 5px; }
+.liquid-market-disclaimer {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(var(--market-accent-rgb), .28);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(var(--market-accent-rgb), .075), transparent 48%),
+    rgba(8, 14, 17, .72);
+}
+.liquid-market-disclaimer-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+.liquid-market-disclaimer-icon {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(var(--market-accent-rgb), .36);
+  border-radius: 6px;
+  background: rgba(var(--market-accent-rgb), .1);
+  color: var(--market-accent);
+}
+.liquid-market-disclaimer-icon svg { width: 16px; height: 16px; }
+.liquid-market-disclaimer-header h3 {
+  margin: 0;
+  color: #eef4d7;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.liquid-market-disclaimer-header p {
+  margin: 4px 0 0;
+  color: rgba(var(--theme-text-secondary-rgb), .86);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.liquid-market-disclaimer > ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(var(--theme-text-secondary-rgb), .9);
+  font-size: 11px;
+  line-height: 1.65;
+}
+.liquid-market-disclaimer > ul li::marker { color: var(--market-accent); }
+.liquid-market-disclaimer-details {
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, .075);
+}
+.liquid-market-disclaimer-details summary {
+  width: max-content;
+  color: var(--market-accent);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.liquid-market-disclaimer-details > div {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  color: rgba(var(--theme-text-secondary-rgb), .84);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.liquid-market-disclaimer-details p { margin: 0; }
 .section-hint, .muted-copy {
   color: var(--market-muted);
   font-size: 12px;
   line-height: 1.7;
 }
-.marketplace-layout { display: grid; grid-template-columns: minmax(270px, 310px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; flex: 1; align-items: start; min-height: 0; }
+.marketplace-layout { display: grid; grid-template-columns: minmax(280px, 330px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; flex: 1; align-items: stretch; min-height: 0; }
 .marketplace-sidebar, .plugin-detail {
   /* 百分比高度包含边框和内边距，保持底边与所在网格对齐。 */
   box-sizing: border-box;
   min-width: 0;
   border: var(--t-page-panel-border);
-  border-radius: var(--t-page-panel-radius);
-  background: linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), .05), transparent), rgba(8, 12, 19, .94);
-  box-shadow: var(--t-page-panel-shadow);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), .035), transparent), rgba(13, 14, 17, .94);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .13);
 }
 /* 静态背景和未配置游戏时也会遇到合成闪烁；市场及其设置统一使用无背景模糊的材质。 */
 .plugin-marketplace,
@@ -1044,39 +1689,61 @@ onMounted(async () => {
 }
 /* 内容少时保持自然高度，超出本列可用高度后只收缩并滚动列表。 */
 .marketplace-sidebar { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
-.sidebar-search { display: flex; align-items: center; gap: 6px; padding: 14px 14px 10px; }
-.sidebar-search .el-input { flex: 1; min-width: 0; }
-.sidebar-search .search-action { flex: none; width: 32px; height: 32px; margin: 0; padding: 0; }
 .search-icon { width: 15px; height: 15px; }
-.sidebar-search, .sidebar-tabs, .list-caption { flex-shrink: 0; }
-.sidebar-tabs { display: flex; gap: 3px; padding: 4px; margin: 0 14px; border: 1px solid var(--market-line); border-radius: 8px; background: var(--t-surface-subtle); }
+.sidebar-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--market-line); border-radius: 9px; background: rgba(var(--theme-surface-tint-rgb), .035); }
 .sidebar-tabs button, .detail-tabs button {
   border: 0; background: transparent;
   color: var(--market-muted); font: inherit; font-size: 12px; cursor: pointer;
   transition: background .15s, color .15s;
 }
-.sidebar-tabs button { flex: 1; min-width: 0; padding: 7px 0; border-radius: 5px; white-space: nowrap; }
+.sidebar-tabs button { min-width: 82px; padding: 7px 12px; border-radius: 6px; white-space: nowrap; }
 .sidebar-tabs button span { margin-left: 4px; font-size: 10px; color: var(--t-page-text-muted); font-variant-numeric: tabular-nums; }
-.sidebar-tabs button.active { background: var(--t-surface-raised); color: var(--t-page-text); box-shadow: 0 1px 3px #0002; }
+.sidebar-tabs button.active { background: rgba(var(--theme-surface-tint-rgb), .10); color: var(--t-page-text); box-shadow: 0 1px 3px #0002; }
 .sidebar-tabs .has-updates { color: var(--t-warning-text); }
 .sidebar-tabs button:hover, .detail-tabs button:hover { color: var(--t-page-text); }
-.list-caption { padding: 14px 17px 6px; color: var(--t-page-text-muted); font-size: 11px; }
-.marketplace-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 7px 7px; }
-.plugin-row { display: flex; width: 100%; gap: 11px; padding: 13px 10px; margin: 3px 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background .15s, border-color .15s; }
+.list-caption { color: var(--t-page-text-muted); font-size: 10px; white-space: nowrap; }
+.marketplace-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 7px; }
+.plugin-row { display: flex; width: 100%; gap: 10px; padding: 10px; margin: 2px 0; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background .15s, border-color .15s; }
+.plugin-row { position: relative; }
 .plugin-row:hover { background: var(--t-surface-hover); }
-.plugin-row.selected { border-color: rgba(var(--theme-surface-tint-rgb), .22); background: var(--t-surface-raised); }
+.plugin-row.selected {
+  border-color: rgba(var(--market-accent-rgb), .18);
+  background: linear-gradient(90deg, rgba(var(--market-accent-rgb), .09), rgba(var(--theme-surface-tint-rgb), .055));
+}
+.plugin-row.selected::before {
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  left: -1px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--market-accent);
+  content: '';
+}
 .plugin-mark { display: grid; place-items: center; flex: 0 0 auto; width: 37px; height: 37px; border: 1px solid var(--market-line); border-radius: 10px; background: linear-gradient(135deg, rgba(var(--theme-surface-tint-rgb), .12), rgba(var(--theme-surface-tint-rgb), .03)); color: var(--t-page-text); font-weight: 650; font-size: 13px; letter-spacing: .5px; }
+.plugin-row.selected .plugin-mark {
+  border-color: rgba(var(--market-accent-rgb), .34);
+  background: var(--market-accent);
+  color: var(--market-accent-ink);
+}
 .plugin-mark.large { width: 56px; height: 56px; border-radius: 14px; font-size: 20px; }
+.plugin-detail .plugin-mark.large {
+  border-color: rgba(var(--market-accent-rgb), .34);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, .30), transparent 46%),
+    var(--market-accent);
+  color: var(--market-accent-ink);
+  box-shadow: 0 8px 24px rgba(var(--market-accent-rgb), .10);
+}
 .plugin-row-content { display: block; min-width: 0; flex: 1; }
 .plugin-row-title strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 1.5; }
-.plugin-row-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 5px; font-size: 11px; line-height: 1.7; color: var(--market-muted); }
-.plugin-row-footer { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 9px; font-size: 10px; }
+.plugin-row-footer { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 6px; font-size: 10px; }
 .plugin-row-version { color: var(--t-page-text-muted); font-variant-numeric: tabular-nums; }
 .source-badge { display: inline-flex; align-items: center; flex: none; padding: 1px 6px; border: 1px solid var(--market-line); border-radius: 4px; color: var(--market-muted); font-size: 10px; font-weight: 400; line-height: 1.7; }
 .row-state { margin-left: auto; font-size: 10px; color: var(--market-muted); }
 .row-state.enabled { color: var(--t-page-text); }
 .row-state.issue, .detail-issue { color: var(--t-warning-text); }
-.plugin-detail { padding: 24px; height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.plugin-detail { padding: 18px; height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .detail-top { gap: 14px; flex-wrap: wrap; }
 .detail-identity { min-width: 0; flex: 1 1 200px; }
 .detail-identity h2 { margin: 0 0 9px; font-size: 21px; line-height: 1.3; font-weight: 650; overflow-wrap: anywhere; letter-spacing: -.3px; }
@@ -1085,14 +1752,47 @@ onMounted(async () => {
 .detail-actions { gap: 8px; flex-wrap: wrap; min-height: 32px; margin-top: 12px; }
 .detail-actions :deep(.el-button) { min-height: 30px; padding: 7px 12px; }
 .detail-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.detail-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--market-muted); white-space: nowrap; }
+.plugin-marketplace :deep(.el-button--primary) {
+  --el-button-bg-color: var(--market-accent);
+  --el-button-border-color: var(--market-accent);
+  --el-button-text-color: var(--market-accent-ink);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--market-accent) 88%, white);
+  --el-button-hover-border-color: color-mix(in srgb, var(--market-accent) 88%, white);
+  --el-button-hover-text-color: var(--market-accent-ink);
+  --el-button-active-bg-color: color-mix(in srgb, var(--market-accent) 82%, white);
+  --el-button-active-border-color: color-mix(in srgb, var(--market-accent) 82%, white);
+  --el-button-active-text-color: var(--market-accent-ink);
+}
+.detail-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--market-line);
+  border-radius: 999px;
+  background: var(--t-surface-subtle);
+  color: var(--market-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
 .state-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--t-page-text-muted); }
 .is-enabled .state-dot { background: var(--theme-success); box-shadow: 0 0 0 3px var(--t-success-bg); }
+.detail-state.is-enabled {
+  border-color: var(--t-success-border);
+  background: var(--t-success-bg);
+  color: var(--t-success-text);
+}
+.detail-state.is-issue {
+  border-color: var(--t-warning-border);
+  background: var(--t-warning-bg);
+  color: var(--t-warning-text);
+}
+.detail-state.is-issue .state-dot { background: var(--theme-warning); }
 .detail-issue { font-size: 11px; }
-.detail-tabs { display: flex; gap: 22px; margin-top: 18px; border-bottom: 1px solid var(--market-line); }
+.detail-tabs { display: flex; gap: 22px; margin-top: 15px; border-bottom: 1px solid var(--market-line); }
 .detail-tabs button { border-bottom: 2px solid transparent; padding: 10px 0; white-space: nowrap; }
-.detail-tabs button.active { border-bottom-color: var(--t-page-accent); color: var(--t-page-text); }
-.detail-body { padding-top: 22px; }
+.detail-tabs button.active { border-bottom-color: var(--market-accent); color: var(--t-page-text); }
+.detail-body { padding-top: 17px; }
 .detail-main { min-width: 0; }
 .detail-section { min-width: 0; }
 .detail-section.settings-attention { animation: settings-attention 1.15s ease-out; }
@@ -1136,14 +1836,125 @@ onMounted(async () => {
 @keyframes market-loading { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
 .plugin-marketplace button:focus-visible, .catalog-notice summary:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
 .plugin-log-view { max-height: 58vh; overflow: auto; margin: 0; padding: 12px; background: var(--t-surface-soft); color: var(--t-page-text); font: 11px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 1080px) {
+
+/* Official v4.2.2 marketplace structure */
+.plugin-marketplace.is-classic-ui {
+  padding: var(--t-page-padding);
+}
+
+.is-classic-ui .marketplace-shell {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.is-classic-ui .marketplace-layout {
+  gap: 16px;
+}
+
+.is-classic-ui .marketplace-sidebar,
+.is-classic-ui .plugin-detail {
+  border-radius: var(--t-page-panel-radius);
+  background: linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), .05), transparent), rgba(8, 12, 19, .94);
+  box-shadow: var(--t-page-panel-shadow);
+}
+
+.legacy-sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 14px 14px 10px;
+}
+
+.legacy-sidebar-search .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.legacy-sidebar-search .el-button {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+}
+
+.legacy-sidebar-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+  margin: 0 14px;
+  padding: 4px;
+  border-radius: 8px;
+}
+
+.legacy-sidebar-tabs button {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  border-radius: 5px;
+}
+
+.legacy-list-caption {
+  flex: 0 0 auto;
+  padding: 14px 17px 6px;
+  color: var(--t-page-text-muted);
+  font-size: 11px;
+}
+
+.is-classic-ui .marketplace-list {
+  flex: 0 1 auto;
+  padding: 0 7px 7px;
+}
+
+.is-classic-ui .plugin-row {
+  gap: 11px;
+  margin: 3px 0;
+  padding: 13px 10px;
+  border-radius: 8px;
+}
+
+.plugin-row-description {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 5px;
+  color: var(--market-muted);
+  font-size: 11px;
+  line-height: 1.7;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@container plugin-marketplace (max-width: 1080px) {
   .marketplace-layout { grid-template-columns: minmax(250px, 280px) minmax(0, 1fr); }
-  .plugin-detail { padding: 20px; }
+  .plugin-detail { padding: 16px; }
   .detail-identity h2 { font-size: 19px; }
 }
-@media (max-width: 760px) {
+@container plugin-marketplace (max-width: 760px) {
+  .marketplace-shell { padding: 12px; }
+  .marketplace-toolbar { flex-wrap: wrap; }
+  .marketplace-search { flex-basis: calc(100% - 45px); }
+  .install-action { flex: 1; }
+  .marketplace-browsebar { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .marketplace-filters { margin-left: 0; }
+  .list-caption { margin-left: 0; }
   .marketplace-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: fit-content(35%) minmax(0, 1fr); }
   .detail-tabs { gap: 20px; }
+}
+@container plugin-marketplace (max-width: 520px) {
+  .marketplace-shell { padding: 9px; border-radius: 14px; }
+  .marketplace-platform { display: none; }
+  .marketplace-search { flex-basis: 100%; }
+  .toolbar-action { width: 100%; }
+  .install-action { width: 100%; }
+  .detail-top { gap: 10px; }
+  .plugin-mark.large { width: 48px; height: 48px; }
+  .detail-tabs { overflow-x: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .plugin-marketplace * { animation: none; transition: none; }

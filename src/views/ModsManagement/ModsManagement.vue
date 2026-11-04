@@ -1728,6 +1728,14 @@ const {
     suppressFsRefresh: (durationMs) => suppressFsRefresh(durationMs),
 });
 
+const handleImportCommand = (command: string) => {
+    if (command === 'archive') {
+        void pickInstallArchive();
+    } else if (command === 'folder') {
+        void pickInstallFolder();
+    }
+};
+
 // 主页(/)拖入后跳转到 /mods 的交接兜底:无论事件与路由谁先到达,
 // 待安装路径只在最终到达模组管理页时被消费一次。
 const drainPendingModInstallDrop = async () => {
@@ -2452,6 +2460,24 @@ const {
     suppressFsRefresh,
 });
 
+const tagsPanelCollapsed = ref(false);
+const tagsPanelManualOverride = ref(false);
+
+const toggleTagsPanel = () => {
+    tagsPanelManualOverride.value = true;
+    tagsPanelCollapsed.value = !tagsPanelCollapsed.value;
+};
+
+watch(selectedGame, () => {
+    tagsPanelManualOverride.value = false;
+    tagsPanelCollapsed.value = tagDefinitions.value.length === 0 && activeTagIds.value.length === 0;
+}, { immediate: true });
+
+watch([() => tagDefinitions.value.length, () => activeTagIds.value.length], () => {
+    if (tagsPanelManualOverride.value) return;
+    tagsPanelCollapsed.value = tagDefinitions.value.length === 0 && activeTagIds.value.length === 0;
+}, { immediate: true });
+
 const currentTagTargetIsGroup = ref(false);
 
 const openGroupTagDialogWrapped = (group: GroupInfo) => {
@@ -2809,16 +2835,27 @@ const handleGroupClick = async (data: GroupInfo, options?: { ensureExpanded?: bo
     const ensureExpanded = options?.ensureExpanded ?? true;
     const syncSidebar = options?.syncSidebar ?? true;
     const nextGroup = data.id === MODS_TREE_ROOT_ID ? 'Root' : data.id;
-    rememberGroupNavigation(selectedGroup.value, nextGroup);
-    selectedGroup.value = nextGroup;
-    if (syncSidebar) {
-        syncTreeCurrentSelection(selectedGroup.value);
+    if (nextGroup === selectedGroup.value && (!syncSidebar || sidebarSelectedGroup.value === nextGroup)) {
+        return;
     }
-    if (syncSidebar && ensureExpanded) {
-        await expandGroupPath(selectedGroup.value);
+    switchingGroup.value = true;
+    try {
+        rememberGroupNavigation(selectedGroup.value, nextGroup);
+        selectedGroup.value = nextGroup;
+        if (syncSidebar) {
+            syncTreeCurrentSelection(selectedGroup.value);
+        }
+        if (syncSidebar && ensureExpanded) {
+            await expandGroupPath(selectedGroup.value);
+        }
+        // Load mods for this group
+        await loadGroupMods(selectedGroup.value);
+    } catch (error) {
+        if (selectedGroup.value === nextGroup) {
+            switchingGroup.value = false;
+        }
+        throw error;
     }
-    // Load mods for this group
-    await loadGroupMods(selectedGroup.value);
 };
 
 const handleTreeNodeClick = async (data: GroupInfo, _node?: unknown, _tree?: unknown, event?: MouseEvent) => {
@@ -2845,11 +2882,12 @@ const navigateToParentGroup = async () => {
 
     const parent = getGroupParent(current);
     const targetGroup = parent === ROOT_PARENT_ID ? 'Root' : parent;
+    switchingGroup.value = true;
     rememberGroupNavigation(current, targetGroup);
     selectedGroup.value = targetGroup;
     syncTreeCurrentSelection(targetGroup);
     await expandGroupPath(targetGroup);
-    await loadGroupMods(targetGroup, { showProgress: false });
+    await loadGroupMods(targetGroup);
     return true;
 };
 
@@ -2860,13 +2898,14 @@ const navigateBackGroup = async () => {
     isApplyingGroupHistory.value = true;
     try {
         const currentGroup = selectedGroup.value;
+        switchingGroup.value = true;
         if (currentGroup && currentGroup !== targetGroup) {
             groupNavigationForwardHistory.value = [...groupNavigationForwardHistory.value.slice(-49), currentGroup];
         }
         selectedGroup.value = targetGroup;
         syncTreeCurrentSelection(targetGroup);
         await expandGroupPath(targetGroup);
-        await loadGroupMods(targetGroup, { showProgress: false });
+        await loadGroupMods(targetGroup);
     } finally {
         isApplyingGroupHistory.value = false;
     }
@@ -2879,13 +2918,14 @@ const navigateForwardGroup = async () => {
     isApplyingGroupHistory.value = true;
     try {
         const currentGroup = selectedGroup.value;
+        switchingGroup.value = true;
         if (currentGroup && currentGroup !== targetGroup) {
             groupNavigationHistory.value = [...groupNavigationHistory.value.slice(-49), currentGroup];
         }
         selectedGroup.value = targetGroup;
         syncTreeCurrentSelection(targetGroup);
         await expandGroupPath(targetGroup);
-        await loadGroupMods(targetGroup, { showProgress: false });
+        await loadGroupMods(targetGroup);
     } finally {
         isApplyingGroupHistory.value = false;
     }
@@ -2913,26 +2953,28 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
         isCancelled: () => token !== groupLoadToken || !!options?.signal?.isCancelled?.(),
     };
 
-    // Show cached data immediately for instant perceived response
-    if (!options?.refresh && !isAllGroup) {
-        const cached = ModManager.getCachedGroup(selectedGame.value, String(path));
-        if (cached) {
-            updateAvailableGroups(cached.groups);
-            reconcileCurrentSubGroups(cached.groups);
-            if (!isAllGroup) {
-                markGroupChildrenLoaded(groupId);
-                bumpGroupTree();
-            }
-            void preloadSubgroupPreviewImages(cached.groups);
-            await appendModsIncrementally(cached.mods, token);
-            if (token !== groupLoadToken) return;
-        }
-    }
-
     if (showProgress) {
         switchingGroup.value = true;
     }
+    let usedCache = false;
     try {
+        // Show cached data immediately for instant perceived response
+        if (!options?.refresh && !isAllGroup) {
+            const cached = ModManager.getCachedGroup(selectedGame.value, String(path));
+            if (cached) {
+                usedCache = true;
+                updateAvailableGroups(cached.groups);
+                reconcileCurrentSubGroups(cached.groups);
+                if (!isAllGroup) {
+                    markGroupChildrenLoaded(groupId);
+                    bumpGroupTree();
+                }
+                void preloadSubgroupPreviewImages(cached.groups);
+                await appendModsIncrementally(cached.mods, token);
+                if (token !== groupLoadToken) return;
+            }
+        }
+
         const { mods: newMods, groups: newGroups } = isAllGroup
             // "All" is a view change, not a request to probe the Mods folder
             // again.  The persistent index is rebuilt only at startup,
@@ -2956,7 +2998,13 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
     } catch (e) {
         if (token !== groupLoadToken) return;
         if (ModManager.isScanCancelled(e)) return;
-        // 暂时读取失败不代表当前分类已被清空，保留最后一次成功显示的内容。
+        // 分类切换没有目标缓存时，不能继续展示旧分类的子分组。
+        if (!usedCache && showProgress) {
+            currentSubGroups.value = [];
+            mods.value = [];
+            loadedModsCount.value = 0;
+            totalModsCount.value = 0;
+        }
         ElMessage.error(t('modsManagement.messages.loadModFailed', { error: String(e) }));
     } finally {
         if (showProgress && token === groupLoadToken) {
@@ -3306,10 +3354,6 @@ const visibleSubGroups = computed(() => {
     return sortGroupsByOrder(selectedGame.value, parentId, result);
 });
 
-const visibleModCount = computed(() => {
-    return filteredMods.value.length + visibleSubGroups.value.length;
-});
-
 watch(searchQuery, (rawQuery) => {
     const query = rawQuery.trim();
     const token = ++searchToken;
@@ -3562,7 +3606,7 @@ const {
     <div
         ref="workspaceRef"
         class="mod-manager-workspace"
-        :class="{ 'is-resizing-columns': activePanelResize }"
+        :class="{ 'is-resizing-columns': activePanelResize, 'is-tags-collapsed': tagsPanelCollapsed }"
         :style="workspaceColumnStyle"
         @click="closeContextMenu(); closeGroupContextMenu()"
         @contextmenu="closeContextMenu(); closeGroupContextMenu()"
@@ -3675,6 +3719,7 @@ const {
                         </svg>
                     </button>
                     <div class="tb-divider"></div>
+                    <span class="tb-control-label">{{ t('modsManagement.ui.blurNsfwPreviews') }}</span>
                     <el-radio-group v-model="appSettings.modsManagementBlurMode" class="tb-blur-mode" :aria-label="t('modsManagement.ui.blurNsfwPreviews')">
                         <el-radio-button value="all">{{ t('modsManagement.ui.blurAllImages') }}</el-radio-button>
                         <el-radio-button value="nsfw">{{ t('modsManagement.ui.blurNsfwImages') }}</el-radio-button>
@@ -3683,47 +3728,68 @@ const {
                     <div class="tb-divider"></div>
                     <button
                         type="button"
-                        class="tb-btn tb-btn--primary tb-btn--icon"
-                        @click="pickInstallArchive"
-                        :title="t('modsManagement.actions.importArchive')"
-                        :aria-label="t('modsManagement.actions.importArchive')"
+                        class="tb-btn tb-btn--tag-panel"
+                        :class="{ active: !tagsPanelCollapsed }"
+                        :aria-pressed="!tagsPanelCollapsed"
+                        :aria-label="t('modsManagement.ui.tags')"
+                        @click="toggleTagsPanel"
                     >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="12" y1="5" x2="12" y2="19"/>
-                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2a2 2 0 0 1-.6-1.4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 1.4.6l6.4 6.4a2 2 0 0 1 0 2.8z"/>
+                            <circle cx="7.5" cy="7.5" r="1.2"/>
                         </svg>
+                        <span>{{ t('modsManagement.ui.tags') }}</span>
                     </button>
-                    <button
-                        type="button"
-                        class="tb-btn tb-btn--icon"
-                        @click="pickInstallFolder"
-                        :title="t('modsManagement.actions.importFolder')"
-                        :aria-label="t('modsManagement.actions.importFolder')"
-                    >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                            <line x1="12" y1="11" x2="12" y2="17"/>
-                            <line x1="9" y1="14" x2="15" y2="14"/>
-                        </svg>
-                    </button>
+                    <div class="tb-import-actions">
+                        <button
+                            type="button"
+                            class="tb-btn tb-btn--primary tb-import-main"
+                            :aria-label="t('modsManagement.actions.importArchive')"
+                            @click="pickInstallArchive"
+                        >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="12" y1="5" x2="12" y2="19"/>
+                                <line x1="5" y1="12" x2="19" y2="12"/>
+                            </svg>
+                            <span>{{ t('modsManagement.actions.importArchive') }}</span>
+                        </button>
+                        <el-dropdown trigger="click" popper-class="gamebanana-select-popper" @command="handleImportCommand">
+                            <button
+                                type="button"
+                                class="tb-btn tb-btn--primary tb-import-more"
+                                :aria-label="`${t('modsManagement.actions.importArchive')} / ${t('modsManagement.actions.importFolder')}`"
+                                aria-haspopup="menu"
+                            >
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"/>
+                                </svg>
+                            </button>
+                            <template #dropdown>
+                                <el-dropdown-menu>
+                                    <el-dropdown-item command="archive">{{ t('modsManagement.actions.importArchive') }}</el-dropdown-item>
+                                    <el-dropdown-item command="folder">{{ t('modsManagement.actions.importFolder') }}</el-dropdown-item>
+                                </el-dropdown-menu>
+                            </template>
+                        </el-dropdown>
+                    </div>
                     <div class="tb-divider"></div>
                     <button
                         type="button"
-                        class="tb-btn tb-btn--icon"
+                        class="tb-btn tb-btn--labeled tb-file-action"
                         @click="openCurrentGroupFolder"
-                        :title="t('modsManagement.ui.openFolder')"
                         :aria-label="t('modsManagement.ui.openFolder')"
                     >
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                         </svg>
+                        <span>{{ t('modsManagement.ui.openFolder') }}</span>
                     </button>
                     <button
                         type="button"
-                        class="tb-btn tb-btn--icon"
+                        class="tb-btn tb-btn--labeled tb-file-action"
                         :disabled="loading"
                         @click="fetchMods"
-                        :title="t('modsManagement.ui.refreshMods')"
+                        :aria-label="t('modsManagement.ui.refreshMods')"
                     >
                         <svg
                             width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -3734,6 +3800,7 @@ const {
                             <polyline points="1 20 1 14 7 14"/>
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
                         </svg>
+                        <span>{{ t('modsManagement.ui.refreshMods') }}</span>
                     </button>
                 </div>
             </div>
@@ -3851,7 +3918,13 @@ const {
         <div class="mod-manager-panel-header">
             <div class="mod-manager-panel-title">
                 <span>{{ t('modsManagement.ui.mods') }}</span>
-                <span class="mod-manager-panel-count">{{ visibleModCount }}</span>
+                <span class="mod-manager-panel-count">{{ filteredMods.length }}</span>
+                <template v-if="visibleSubGroups.length > 0">
+                    <span class="mod-manager-panel-count-separator">·</span>
+                    <span class="mod-manager-panel-subcount">
+                        {{ t('modsManagement.ui.categories') }} {{ visibleSubGroups.length }}
+                    </span>
+                </template>
             </div>
             <div class="mod-manager-panel-actions">
                 <button
@@ -3887,11 +3960,24 @@ const {
             </div>
         </div>
         <div class="mod-grid-container glass-scrollbar">
-            <div v-if="switchingGroup || loading" class="group-loading-hint glass-panel" role="status">
-                {{ t('modsManagement.ui.loadingCurrentCategory') }}: {{ loadedModsCount }}/{{ totalModsCount || '?' }}
+            <div v-if="switchingGroup || loading" class="mod-switch-skeleton" role="status" aria-live="polite" aria-busy="true">
+                <div class="mod-switch-skeleton-status">
+                    <span>{{ t('modsManagement.ui.loadingCurrentCategory') }}: {{ groupBreadcrumbs[groupBreadcrumbs.length - 1]?.label }}</span>
+                    <span v-if="loading && !switchingGroup">{{ loadedModsCount }}/{{ totalModsCount || '?' }}</span>
+                </div>
+                <div class="mod-switch-skeleton-grid" :class="{ 'is-list': viewMode === 'list' }" aria-hidden="true">
+                    <div v-for="index in 6" :key="`switch-skeleton-${index}`" class="mod-switch-skeleton-card">
+                        <span class="mod-switch-skeleton-icon"></span>
+                        <span class="mod-switch-skeleton-copy">
+                            <i class="mod-switch-skeleton-line is-wide"></i>
+                            <i class="mod-switch-skeleton-line is-medium"></i>
+                        </span>
+                        <span class="mod-switch-skeleton-toggle"></span>
+                    </div>
+                </div>
             </div>
 
-            <div v-if="!loading && !switchingGroup && !isHydratingMods && filteredMods.length === 0 && visibleSubGroups.length === 0" class="empty-state">
+            <div v-else-if="!isHydratingMods && filteredMods.length === 0 && visibleSubGroups.length === 0" class="empty-state">
                 <el-empty :description="emptyModsDescription">
                     <div class="empty-state-actions">
                         <button type="button" class="tb-btn tb-btn--primary tb-btn--icon" @click="pickInstallArchive" :title="t('modsManagement.actions.importArchive')" :aria-label="t('modsManagement.actions.importArchive')">
@@ -3955,7 +4041,7 @@ const {
                         {{ group.name }}
                         <span v-if="isDisabledGroup(group)" class="disabled-badge">{{ t('modsManagement.ui.disabled') }}</span>
                     </div>
-                    <div class="subgroup-path">{{ group.id }}</div>
+                    <div v-if="group.id !== group.name" class="subgroup-path">{{ group.id }}</div>
                     <div class="subgroup-count">{{ t('modsManagement.ui.modCount') }}: {{ group.modCount ?? 0 }}</div>
                     <div v-if="getTagsForGroup(group).length > 0" class="subgroup-tags">
                         <span
@@ -4490,6 +4576,18 @@ const {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
+.mod-manager-workspace.is-tags-collapsed {
+    grid-template-areas:
+        "toolbar toolbar toolbar"
+        "groups groups-resizer mods";
+    grid-template-columns: var(--groups-panel-width, 250px) 10px minmax(0, 1fr);
+}
+
+.mod-manager-workspace.is-tags-collapsed .mod-manager-tags-panel,
+.mod-manager-workspace.is-tags-collapsed .mod-manager-tags-resizer {
+    display: none;
+}
+
 .mod-manager-fixed-panel {
     min-width: 0;
     min-height: 0;
@@ -4638,6 +4736,16 @@ const {
     background: rgba(255,255,255,0.08);
     color: rgba(255,255,255,0.72);
     font-size: 11px;
+}
+
+.mod-manager-panel-count-separator {
+    color: rgba(255, 255, 255, .28);
+}
+
+.mod-manager-panel-subcount {
+    color: rgba(255, 255, 255, .52);
+    font-size: 11px;
+    white-space: nowrap;
 }
 
 .mod-manager-panel-actions {
@@ -4798,6 +4906,12 @@ const {
     gap: 4px;
 }
 
+.tb-control-label {
+    color: rgba(255, 255, 255, .48);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
 /* ---- Search Box ---- */
 .tb-search {
     position: relative;
@@ -4912,6 +5026,43 @@ const {
     position: relative;
     overflow: hidden;
 }
+
+.tb-import-actions {
+    display: inline-flex;
+    align-items: stretch;
+}
+
+.tb-import-actions :deep(.el-dropdown) {
+    display: inline-flex;
+}
+
+.tb-import-main {
+    padding: 0 10px;
+    border-radius: 10px 0 0 10px;
+    border-right-color: transparent;
+}
+
+.tb-import-more {
+    width: 28px;
+    min-width: 28px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 0 10px 10px 0;
+}
+
+.tb-btn--labeled {
+    padding: 0 10px;
+}
+
+.tb-btn--tag-panel {
+    padding: 0 10px;
+}
+
+.tb-btn--tag-panel.active {
+    background: rgba(var(--theme-surface-tint-rgb), .14);
+    border-color: rgba(var(--theme-surface-tint-rgb), .32);
+    color: var(--theme-accent);
+}
 .tb-btn::before {
     content: ''; position: absolute;
     top: 0; left: 0; right: 0; height: 1px;
@@ -4988,6 +5139,14 @@ const {
     .mod-manager-column-resizer {
         display: none;
     }
+
+    .mod-manager-workspace.is-tags-collapsed {
+        grid-template-areas:
+            "toolbar toolbar"
+            "groups mods";
+        grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+        grid-template-rows: auto minmax(420px, 1fr);
+    }
 }
 
 @media (max-width: 680px) {
@@ -5014,6 +5173,37 @@ const {
 
     .tb-search {
         width: 100%;
+    }
+
+    .mod-manager-workspace.is-tags-collapsed {
+        grid-template-areas:
+            "toolbar"
+            "groups"
+            "mods";
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto 260px minmax(520px, auto);
+    }
+}
+
+@media (max-width: 1200px) {
+    .tb-inner {
+        flex-wrap: wrap;
+        gap: 10px 16px;
+    }
+
+    .tb-center {
+        order: 3;
+        flex: 1 0 100%;
+    }
+
+    .tb-right {
+        flex: 1 1 auto;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .tb-control-label {
+        display: none;
     }
 }
 
@@ -5326,6 +5516,119 @@ const {
     box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 0 0 1px rgba(255,255,255,0.04) inset;
 }
 
+.mod-switch-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-height: 100%;
+    padding: 4px 0;
+    box-sizing: border-box;
+}
+
+.mod-switch-skeleton-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 28px;
+    color: rgba(255, 255, 255, .74);
+    font-size: 12px;
+}
+
+.mod-switch-skeleton-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 240px));
+    gap: 16px;
+    justify-content: flex-start;
+    animation: modSwitchSkeletonPulse 1.2s ease-in-out infinite;
+}
+
+.mod-switch-skeleton-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 100%;
+    height: 156px;
+    padding: 16px;
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 255, 255, .13);
+    border-radius: 12px;
+    background:
+        linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), .09), rgba(var(--theme-surface-tint-rgb), .025)),
+        rgba(8, 10, 14, .48);
+}
+
+.mod-switch-skeleton-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .13);
+}
+
+.mod-switch-skeleton-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    width: 100%;
+}
+
+.mod-switch-skeleton-line {
+    display: block;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .13);
+}
+
+.mod-switch-skeleton-line.is-wide { width: 72%; }
+.mod-switch-skeleton-line.is-medium { width: 46%; }
+
+.mod-switch-skeleton-toggle {
+    align-self: flex-end;
+    width: 42px;
+    height: 22px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .12);
+}
+
+.mod-switch-skeleton-grid.is-list {
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.mod-switch-skeleton-grid.is-list .mod-switch-skeleton-card {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    width: 100%;
+    height: 56px;
+    padding: 9px 12px;
+}
+
+.mod-switch-skeleton-grid.is-list .mod-switch-skeleton-icon {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 auto;
+}
+
+.mod-switch-skeleton-grid.is-list .mod-switch-skeleton-copy {
+    flex: 1;
+}
+
+.mod-switch-skeleton-grid.is-list .mod-switch-skeleton-toggle {
+    align-self: center;
+    flex: 0 0 auto;
+}
+
+@keyframes modSwitchSkeletonPulse {
+    0%, 100% { opacity: .52; }
+    50% { opacity: .86; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .mod-switch-skeleton-grid { animation: none; }
+}
+
 /* active-filter-summary moved to TagManagement.vue */
 
 .subgroup-icon-row {
@@ -5337,9 +5640,13 @@ const {
 
 .mod-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, 240px);
-    gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 240px));
+    gap: 16px;
     justify-content: flex-start;
+}
+
+.mod-manager :deep(.mod-card) {
+    width: 100%;
 }
 
 .mod-content-sections {
@@ -6964,15 +7271,137 @@ const {
     flex: 1;
     min-width: 0;
 }
+
+/* ── Mods visual system ───────────────────────────────────────────
+   1. game art = atmosphere only
+   2. shell = stable low-saturation frosted surfaces
+   3. content panels = readable translucent planes
+   4. cards = local opaque surfaces; accent is reserved for state */
+.mod-manager {
+    --mods-brand-rgb: var(--ssmt-brand-accent-rgb);
+    --mods-shell-bg:
+        linear-gradient(180deg, rgba(9, 13, 18, .84), rgba(8, 12, 17, .74));
+    --mods-shell-border: rgba(255, 255, 255, .10);
+    --mods-shell-shadow: 0 10px 28px rgba(0, 0, 0, .22);
+    --mods-panel-bg:
+        linear-gradient(180deg, rgba(8, 12, 17, .68), rgba(7, 11, 16, .58));
+    --mods-card-bg:
+        linear-gradient(145deg, rgba(255, 255, 255, .065), rgba(255, 255, 255, .018)),
+        rgba(8, 12, 18, .82);
+    --mods-card-border: rgba(255, 255, 255, .12);
+    --mods-card-shadow: 0 8px 22px rgba(0, 0, 0, .20);
+}
+
+.mod-manager .mod-manager-workspace {
+    background:
+        linear-gradient(180deg, rgba(4, 7, 11, .10), rgba(4, 7, 11, .28)),
+        rgba(3, 6, 11, .18);
+}
+
+.mod-manager .tb-bar,
+.mod-manager .sidebar {
+    background: var(--mods-shell-bg);
+    border-color: var(--mods-shell-border);
+    box-shadow: var(--mods-shell-shadow);
+    backdrop-filter: blur(16px) saturate(.88);
+    -webkit-backdrop-filter: blur(16px) saturate(.88);
+}
+
+.mod-manager .tb-bar::after,
+.mod-manager .sidebar::after {
+    opacity: .28;
+}
+
+.mod-manager .tb-glow,
+.mod-manager .sd-glow {
+    opacity: .32;
+}
+
+.mod-manager .mod-manager-mods-content,
+.mod-manager .mod-manager-tags-layout-content {
+    background: var(--mods-panel-bg);
+    border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
+    backdrop-filter: blur(12px) saturate(.92);
+    -webkit-backdrop-filter: blur(12px) saturate(.92);
+}
+
+.mod-manager .mod-manager-panel-header {
+    background: rgba(7, 10, 15, .46);
+    border-bottom-color: rgba(255, 255, 255, .08);
+}
+
+.mod-manager .tb-search-input,
+.mod-manager .tb-btn,
+.mod-manager .sd-btn,
+.mod-manager .mod-manager-panel-icon-btn {
+    background: rgba(255, 255, 255, .045);
+    border-color: rgba(255, 255, 255, .11);
+    color: rgba(255, 255, 255, .72);
+}
+
+.mod-manager .tb-btn--primary,
+.mod-manager .tb-btn--tag-panel.active {
+    background: rgba(var(--mods-brand-rgb), .13);
+    border-color: rgba(var(--mods-brand-rgb), .34);
+    color: var(--ssmt-brand-accent-soft);
+}
+
+.mod-manager .subgroup-card,
+.mod-manager :deep(.mod-card) {
+    background: var(--mods-card-bg);
+    border-color: var(--mods-card-border);
+    box-shadow: var(--mods-card-shadow);
+}
+
+.mod-manager .subgroup-card::after,
+.mod-manager :deep(.mod-card:not(.is-disabled)::before) {
+    display: none;
+}
+
+.mod-manager .subgroup-card:hover,
+.mod-manager :deep(.mod-card:hover) {
+    border-color: rgba(var(--mods-brand-rgb), .36);
+    box-shadow:
+        var(--mods-card-shadow),
+        0 0 0 1px rgba(var(--mods-brand-rgb), .08);
+}
+
+.mod-manager .subgroup-card.is-disabled,
+.mod-manager :deep(.mod-card.is-disabled) {
+    background:
+        linear-gradient(145deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .012)),
+        rgba(8, 12, 18, .74);
+    border-color: rgba(255, 255, 255, .085);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .14);
+}
+
+.mod-manager :deep(.card-preview) {
+    background: rgba(6, 9, 14, .72);
+}
+
+.mod-manager :deep(.card-info) {
+    background: rgba(8, 12, 18, .88);
+    border-color: rgba(255, 255, 255, .09);
+}
+
+.mod-manager :deep(.mod-crystal-wrapper) {
+    background: rgba(8, 12, 18, .78);
+}
+
+.mod-manager :deep(.mod-crystal-wrapper::after) {
+    display: none;
+}
 </style>
 
 <style>
 .mod-3d-floating-overlay {
     position: fixed;
-    top: 32px;
+    top: var(--ssmt-content-overlay-top);
     right: 0;
     bottom: 0;
-    left: 0;
+    left: var(--ssmt-content-overlay-left);
     z-index: 2147482000;
     display: grid;
     place-items: center;
@@ -6984,8 +7413,8 @@ const {
 .mod-3d-floating-page {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
-    width: min(1380px, calc(100vw - 40px));
-    height: min(900px, calc(100vh - 72px));
+    width: min(1380px, calc(100% - 40px));
+    height: min(900px, calc(100% - 40px));
     min-height: 0;
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.14);

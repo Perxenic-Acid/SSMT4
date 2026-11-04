@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::collections::BTreeMap;
 
 use super::managed_reshade::MANAGED_ADDON_DIR;
 
@@ -62,7 +62,9 @@ fn hash_asset(path: &Path) -> Result<String, String> {
     let mut buffer = [0u8; 64 * 1024];
     loop {
         let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
-        if count == 0 { break; }
+        if count == 0 {
+            break;
+        }
         digest.update(&buffer[..count]);
     }
     Ok(format!("{:x}", digest.finalize()))
@@ -215,13 +217,17 @@ pub fn stage(
     }
     let addon_dir = root.join(MANAGED_ADDON_DIR);
     if fs::symlink_metadata(&addon_dir).is_ok() {
-        return Err(format!("managed add-on directory already exists: {}", addon_dir.display()));
+        return Err(format!(
+            "managed add-on directory already exists: {}",
+            addon_dir.display()
+        ));
     }
     let mut addons = BTreeMap::<String, (PathBuf, String)>::new();
     for source in addon_sources {
-        let name = source.file_name().and_then(|part| part.to_str()).ok_or_else(|| {
-            format!("invalid add-on source name: {}", source.display())
-        })?;
+        let name = source
+            .file_name()
+            .and_then(|part| part.to_str())
+            .ok_or_else(|| format!("invalid add-on source name: {}", source.display()))?;
         if !safe_file_name(name) || !regular_file_or_missing(source)? {
             return Err(format!("invalid add-on source: {}", source.display()));
         }
@@ -266,11 +272,14 @@ pub fn stage(
     let journal = Journal {
         version: 1,
         files: rows.into_iter().map(|(_, row, _)| row).collect(),
-        addon_files: addons.iter().map(|(name, (source, digest))| AddonRecord {
-            name: name.clone(),
-            applied_hash: digest.clone(),
-            source: Some(source.clone()),
-        }).collect(),
+        addon_files: addons
+            .iter()
+            .map(|(name, (source, digest))| AddonRecord {
+                name: name.clone(),
+                applied_hash: digest.clone(),
+                source: Some(source.clone()),
+            })
+            .collect(),
     };
     let journal_bytes = serde_json::to_vec_pretty(&journal).map_err(|error| error.to_string())?;
     write_atomic(&backup.join(JOURNAL), &journal_bytes)?;
@@ -280,30 +289,39 @@ pub fn stage(
             return Err(format!("{error}; recovery: {recovery:?}"));
         }
     }
-    if let Err(error) = fs::create_dir(&addon_dir).map_err(|error| error.to_string()).and_then(|_| {
-        for (name, (source, _)) in &addons {
-            let target = addon_dir.join(name);
-            #[cfg(windows)]
-            if std::os::windows::fs::symlink_file(source, &target).is_ok() {
-                continue;
+    if let Err(error) = fs::create_dir(&addon_dir)
+        .map_err(|error| error.to_string())
+        .and_then(|_| {
+            for (name, (source, _)) in &addons {
+                let target = addon_dir.join(name);
+                #[cfg(windows)]
+                if std::os::windows::fs::symlink_file(source, &target).is_ok() {
+                    continue;
+                }
+                #[cfg(unix)]
+                if std::os::unix::fs::symlink(source, &target).is_ok() {
+                    continue;
+                }
+                if fs::hard_link(source, &target).is_ok() {
+                    continue;
+                }
+                if fs::symlink_metadata(&target).is_ok() {
+                    return Err(format!(
+                        "failed to link add-on safely: {}",
+                        target.display()
+                    ));
+                }
+                fs::copy(source, &target).map_err(|error| error.to_string())?;
+                if hash_asset(&target)? != addons[name].1 {
+                    return Err(format!(
+                        "copied add-on checksum mismatch: {}",
+                        target.display()
+                    ));
+                }
             }
-            #[cfg(unix)]
-            if std::os::unix::fs::symlink(source, &target).is_ok() {
-                continue;
-            }
-            if fs::hard_link(source, &target).is_ok() {
-                continue;
-            }
-            if fs::symlink_metadata(&target).is_ok() {
-                return Err(format!("failed to link add-on safely: {}", target.display()));
-            }
-            fs::copy(source, &target).map_err(|error| error.to_string())?;
-            if hash_asset(&target)? != addons[name].1 {
-                return Err(format!("copied add-on checksum mismatch: {}", target.display()));
-            }
-        }
-        Ok(())
-    }) {
+            Ok(())
+        })
+    {
         let recovery = restore(game_executable);
         return Err(format!("{error}; recovery: {recovery:?}"));
     }
@@ -359,7 +377,10 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
         let current_hash = current.as_deref().map(hash);
         if current_hash.as_deref() != Some(&row.applied_hash) && current_hash != row.original_hash {
             let bytes = current.ok_or_else(|| {
-                format!("graphics config disappeared after SSMT staged it: {}", target.display())
+                format!(
+                    "graphics config disappeared after SSMT staged it: {}",
+                    target.display()
+                )
             })?;
             let digest = current_hash.expect("existing config has a hash");
             let path = root.join(format!("{}.ssmt-recovered-{}.bak", row.name, &digest[..16]));
@@ -377,7 +398,12 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
     if !journal.addon_files.is_empty() {
         match fs::symlink_metadata(&addon_dir) {
             Ok(meta) if meta.is_dir() && !is_reparse_point(&meta) => {}
-            Ok(_) => return Err(format!("unsafe managed add-on directory: {}", addon_dir.display())),
+            Ok(_) => {
+                return Err(format!(
+                    "unsafe managed add-on directory: {}",
+                    addon_dir.display()
+                ))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.to_string()),
         }
@@ -387,17 +413,27 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
         let temp = temporary_path(&target);
         if regular_file_or_missing(&temp)? {
             if hash(&read_limited(&temp)?) != row.applied_hash {
-                return Err(format!("unknown managed add-on temporary file: {}", temp.display()));
+                return Err(format!(
+                    "unknown managed add-on temporary file: {}",
+                    temp.display()
+                ));
             }
             temporary_files.push(temp);
         }
         match fs::symlink_metadata(&target) {
             Ok(meta) if meta.file_type().is_symlink() => {
-                let expected = row.source.as_ref().ok_or_else(|| {
-                    format!("unowned managed add-on link: {}", target.display())
-                })?;
-                if !link_target_matches(&fs::read_link(&target).map_err(|error| error.to_string())?, expected) {
-                    return Err(format!("managed add-on link target changed: {}", target.display()));
+                let expected = row
+                    .source
+                    .as_ref()
+                    .ok_or_else(|| format!("unowned managed add-on link: {}", target.display()))?;
+                if !link_target_matches(
+                    &fs::read_link(&target).map_err(|error| error.to_string())?,
+                    expected,
+                ) {
+                    return Err(format!(
+                        "managed add-on link target changed: {}",
+                        target.display()
+                    ));
                 }
                 owned_addons.push((target, None));
                 continue;
@@ -424,19 +460,32 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
         if !regular_file_or_missing(&path)? {
             write_atomic(&path, &bytes)?;
         }
-        eprintln!("[GraphicsStack] Preserved game-edited config at {}", path.display());
+        eprintln!(
+            "[GraphicsStack] Preserved game-edited config at {}",
+            path.display()
+        );
     }
     for (source, saved) in recovered_addons {
         if !regular_file_or_missing(&saved)? {
             let temp = temporary_path(&saved);
             if regular_file_or_missing(&temp)? {
-                return Err(format!("pending graphics asset recovery: {}", temp.display()));
+                return Err(format!(
+                    "pending graphics asset recovery: {}",
+                    temp.display()
+                ));
             }
             fs::copy(&source, &temp).map_err(|error| error.to_string())?;
-            OpenOptions::new().write(true).open(&temp).and_then(|file| file.sync_all()).map_err(|error| error.to_string())?;
+            OpenOptions::new()
+                .write(true)
+                .open(&temp)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| error.to_string())?;
             fs::rename(&temp, &saved).map_err(|error| error.to_string())?;
         }
-        eprintln!("[GraphicsStack] Preserved changed add-on at {}", saved.display());
+        eprintln!(
+            "[GraphicsStack] Preserved changed add-on at {}",
+            saved.display()
+        );
     }
     for temp in temporary_files {
         fs::remove_file(temp).map_err(|error| error.to_string())?;
@@ -456,12 +505,27 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
     for (target, observed) in owned_addons {
         if let Some(observed) = observed {
             if !regular_file_or_missing(&target)? || hash_asset(&target)? != observed {
-                return Err(format!("managed add-on changed during restore: {}", target.display()));
+                return Err(format!(
+                    "managed add-on changed during restore: {}",
+                    target.display()
+                ));
             }
         } else {
-            let row = journal.addon_files.iter().find(|row| target.file_name().and_then(|name| name.to_str()) == Some(row.name.as_str())).ok_or("missing managed add-on journal entry")?;
-            if !link_target_matches(&fs::read_link(&target).map_err(|error| error.to_string())?, row.source.as_ref().ok_or("missing managed add-on source")?) {
-                return Err(format!("managed add-on link target changed: {}", target.display()));
+            let row = journal
+                .addon_files
+                .iter()
+                .find(|row| {
+                    target.file_name().and_then(|name| name.to_str()) == Some(row.name.as_str())
+                })
+                .ok_or("missing managed add-on journal entry")?;
+            if !link_target_matches(
+                &fs::read_link(&target).map_err(|error| error.to_string())?,
+                row.source.as_ref().ok_or("missing managed add-on source")?,
+            ) {
+                return Err(format!(
+                    "managed add-on link target changed: {}",
+                    target.display()
+                ));
             }
         }
         fs::remove_file(&target).map_err(|error| error.to_string())?;
@@ -474,17 +538,26 @@ pub fn restore(game_executable: &Path) -> Result<bool, String> {
             }
             let bytes = read_limited(&path)?;
             let digest = hash(&bytes);
-            let name = path.file_name().and_then(|part| part.to_str()).ok_or("invalid generated add-on file")?;
+            let name = path
+                .file_name()
+                .and_then(|part| part.to_str())
+                .ok_or("invalid generated add-on file")?;
             let saved = root.join(format!("{name}.ssmt-recovered-{}.bak", &digest[..16]));
             if regular_file_or_missing(&saved)? {
                 if read_limited(&saved)? != bytes {
-                    return Err(format!("graphics recovery file already has different content: {}", saved.display()));
+                    return Err(format!(
+                        "graphics recovery file already has different content: {}",
+                        saved.display()
+                    ));
                 }
             } else {
                 write_atomic(&saved, &bytes)?;
             }
             fs::remove_file(&path).map_err(|error| error.to_string())?;
-            eprintln!("[GraphicsStack] Preserved add-on generated file at {}", saved.display());
+            eprintln!(
+                "[GraphicsStack] Preserved add-on generated file at {}",
+                saved.display()
+            );
         }
         fs::remove_dir(&addon_dir).map_err(|error| error.to_string())?;
     }
@@ -524,7 +597,13 @@ mod tests {
         let (root, exe) = fixture();
         let original = [0xff, 0xfe, 0x5b, 0x00, 0x47, 0x00];
         fs::write(root.join("ReShade.ini"), original).unwrap();
-        stage(&exe, "[GENERAL]\n", "Techniques=Feed\n", &[root.join("test.addon64")]).unwrap();
+        stage(
+            &exe,
+            "[GENERAL]\n",
+            "Techniques=Feed\n",
+            &[root.join("test.addon64")],
+        )
+        .unwrap();
         assert_eq!(fs::read(root.join("ReShade.ini")).unwrap(), b"[GENERAL]\n");
         assert!(restore(&exe).unwrap());
         assert_eq!(fs::read(root.join("ReShade.ini")).unwrap(), original);
@@ -575,7 +654,10 @@ mod tests {
         assert_eq!(fs::read(saved).unwrap(), b"changed addon");
         assert_eq!(fs::read(root.join("test.addon64")).unwrap(), b"addon");
         let log_digest = hash(b"log data");
-        let saved_log = root.join(format!("addon.log.ssmt-recovered-{}.bak", &log_digest[..16]));
+        let saved_log = root.join(format!(
+            "addon.log.ssmt-recovered-{}.bak",
+            &log_digest[..16]
+        ));
         assert_eq!(fs::read(saved_log).unwrap(), b"log data");
         fs::remove_dir_all(root).unwrap();
     }
@@ -584,9 +666,17 @@ mod tests {
     fn stages_runtime_larger_than_config_limit_without_buffering_it() {
         let (root, exe) = fixture();
         let runtime = root.join("nvngx_dlssnr.dll");
-        File::create(&runtime).unwrap().set_len(MAX_CONFIG_SIZE + 1).unwrap();
+        File::create(&runtime)
+            .unwrap()
+            .set_len(MAX_CONFIG_SIZE + 1)
+            .unwrap();
         stage(&exe, "managed", "preset", &[runtime.clone()]).unwrap();
-        assert_eq!(fs::metadata(root.join(MANAGED_ADDON_DIR).join("nvngx_dlssnr.dll")).unwrap().len(), MAX_CONFIG_SIZE + 1);
+        assert_eq!(
+            fs::metadata(root.join(MANAGED_ADDON_DIR).join("nvngx_dlssnr.dll"))
+                .unwrap()
+                .len(),
+            MAX_CONFIG_SIZE + 1
+        );
         assert!(restore(&exe).unwrap());
         assert_eq!(fs::metadata(runtime).unwrap().len(), MAX_CONFIG_SIZE + 1);
         fs::remove_dir_all(root).unwrap();

@@ -9,6 +9,7 @@ import GameSwitcherPin from './GameSwitcherPin.vue';
 
 const { t } = useI18n();
 const appSettings = AppStateManager.appSettings;
+const isModernUi = computed(() => appSettings.uiMode === 'modern');
 const groups = computed(() => [
     { label: t('titlebar.favoriteGames'), games: orderedFavoriteGames(AppStateManager.gamesList, appSettings.sidebarGameOrder) },
     { label: t('titlebar.otherGames'), games: AppStateManager.gamesList.filter(game => !game.showSidebar) },
@@ -30,7 +31,17 @@ const selectGame = async (game: GameInfo) => {
 <template>
     <aside class="home-game-sidebar" :aria-label="t('titlebar.selectGame')">
         <div class="home-game-sidebar-header">
-            <GameSwitcherPin pinned @click="unpin" />
+            <GameSwitcherPin v-if="!isModernUi" pinned @click="unpin" />
+            <button v-else type="button" class="home-game-sidebar-collapse"
+                :aria-label="t('titlebar.unpinGamesFromSidebar')"
+                :title="t('titlebar.unpinGamesFromSidebar')"
+                @click="unpin">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M16 9V4l1-1H7l1 1v5l-3 4v2h14v-2l-3-4ZM12 15v7" />
+                </svg>
+                <span>{{ t('titlebar.collapseGameBar') }}</span>
+            </button>
         </div>
         <div class="home-game-sidebar-list">
             <div v-for="group in groups" :key="group.label" class="home-game-sidebar-group" role="group" :aria-label="group.label">
@@ -64,8 +75,31 @@ const selectGame = async (game: GameInfo) => {
     box-sizing: border-box;
     color: var(--shell-caption-fg, #fff);
 }
-.home-game-sidebar-header { display: flex; justify-content: center; flex-shrink: 0; width: 44px; padding-bottom: 6px; color: var(--shell-text-secondary); }
+.home-game-sidebar-header { display: flex; justify-content: center; flex-shrink: 0; width: 60px; padding-bottom: 6px; color: var(--shell-text-secondary); }
 .home-game-sidebar-header:hover, .home-game-sidebar-header:focus-within { color: var(--shell-caption-fg); }
+.home-game-sidebar-collapse {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 58px;
+    height: 26px;
+    padding: 0 6px;
+    border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .045);
+    color: inherit;
+    font: inherit;
+    font-size: 9px;
+    cursor: pointer;
+}
+.home-game-sidebar-collapse:hover,
+.home-game-sidebar-collapse:focus-visible {
+    border-color: rgba(var(--ssmt-brand-accent-rgb), .32);
+    background: rgba(var(--ssmt-brand-accent-rgb), .08);
+    color: var(--ssmt-brand-accent-soft);
+}
+.home-game-sidebar-collapse svg { flex: none; transform: rotate(35deg); }
 .home-game-sidebar-list {
     flex: 0 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; width: 100%;
     scrollbar-width: thin; scrollbar-color: rgba(160,170,190,.25) transparent;

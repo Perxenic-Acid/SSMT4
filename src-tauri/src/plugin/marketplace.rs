@@ -245,10 +245,15 @@ mod tests {
         let mut value = entry();
         value.external_dependencies = serde_json::from_value(serde_json::json!([
             {"id":"tool","type":"directory","downloadUrl":"javascript:alert(1)"}
-        ])).unwrap();
-        let mut catalog = MarketplaceCatalog { schema_version: 1, entries: vec![value] };
+        ]))
+        .unwrap();
+        let mut catalog = MarketplaceCatalog {
+            schema_version: 1,
+            entries: vec![value],
+        };
         assert!(catalog.validate().is_err());
-        catalog.entries[0].external_dependencies[0].download_url = Some("https://example.com/tool/releases".into());
+        catalog.entries[0].external_dependencies[0].download_url =
+            Some("https://example.com/tool/releases".into());
         catalog.validate().unwrap();
     }
 
@@ -304,7 +309,12 @@ mod tests {
     fn allows_disclosed_third_party_payloads() {
         let mut value = entry();
         value.bundled_third_party_payloads = vec!["ReShade64.dll".to_string()];
-        assert!(MarketplaceCatalog { schema_version: 1, entries: vec![value] }.validate().is_ok());
+        assert!(MarketplaceCatalog {
+            schema_version: 1,
+            entries: vec![value]
+        }
+        .validate()
+        .is_ok());
     }
 
     #[test]

@@ -4435,10 +4435,10 @@ onActivated(async () => {
 
 .preview-zoom-overlay {
 	position: fixed;
-	top: 32px;
+	top: var(--ssmt-content-overlay-top);
 	right: 0;
 	bottom: 0;
-	left: 0;
+	left: var(--ssmt-content-overlay-left);
 	/* Above every page-level control and popper.  The title bar remains outside
 	 * this overlay so page switching/window controls stay deliberately usable. */
 	z-index: 2147483000;
