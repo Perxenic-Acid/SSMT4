@@ -38,7 +38,7 @@ async function resources(t, options = {}) {
   await fs.mkdir(dir);
   const config = { gamePreset: gameName, backgroundType: 'Video', ...options.config };
   const requests = [], signatures = [];
-  const manager = load('../../src/store/ResourceManager.ts', {
+  const resourceModule = load('../../src/store/ResourceManager.ts', {
     pinia,
     './GlobalConfig': { GlobalConfig: { GlobalGamesFolder: async () => root } },
     '../utils/SSMTFileUtils': { SSMTFileUtils: { JoinPath: async (...parts) => path.join(...parts) } },
@@ -91,14 +91,31 @@ async function resources(t, options = {}) {
     './GameConfig': { GameConfigManager: {
       loadGameConfig: async () => structuredClone(config),
       saveGameConfig: async (_name, updated) => Object.assign(config, structuredClone(updated)),
+      updateGameConfig: async (_name, updater) => {
+        const latest = structuredClone(config);
+        const updated = await updater(latest);
+        if (updated == null) return latest;
+        Object.assign(config, structuredClone(updated));
+        return structuredClone(updated);
+      },
     } },
     './GamePreset': {},
-  }).ResourceManager;
+  });
+  const manager = resourceModule.ResourceManager;
   const update = type => {
     if (type) config.backgroundType = type;
     return manager.updateGameBackground(gameName, gameName, type || 'Video', config.lastBackgroundUrl);
   };
-  return { config, requests, signatures, dir, gameName, update, manager };
+  return {
+    config,
+    requests,
+    signatures,
+    dir,
+    gameName,
+    update,
+    manager,
+    isAllowedBackgroundPath: resourceModule.isAllowedBackgroundPath,
+  };
 }
 
 test('鸣潮动态和静态各占一个列表项，共用海报且不保存临时签名', async t => {
@@ -183,6 +200,23 @@ test('调用方传入错误预设时仍使用目标游戏自己的配置', async
   assert.deepEqual(h.config.backgroundEntries.map(entry => entry.type), ['Image', 'Video']);
   assert.ok(h.requests.some(url => url === poster));
   assert.ok(h.requests.some(url => url.startsWith(video)));
+});
+
+test('背景路径允许外部共享目录但拒绝兄弟游戏目录和路径穿越', async t => {
+  const h = await resources(t);
+  const root = path.dirname(h.dir);
+  const current = h.dir;
+  const sibling = path.join(root, 'GIMI');
+  const external = path.join(path.dirname(root), 'SharedBackgrounds');
+  const directories = [current, sibling];
+
+  assert.equal(h.isAllowedBackgroundPath(path.join(current, 'Background.webp'), current, directories), true);
+  assert.equal(h.isAllowedBackgroundPath(path.join(external, 'Shared.webp'), current, directories), true);
+  assert.equal(h.isAllowedBackgroundPath(path.join(sibling, 'Background.webp'), current, directories), false);
+  assert.equal(
+    h.isAllowedBackgroundPath(path.join(current, '..', 'GIMI', 'Background.webp'), current, directories),
+    false,
+  );
 });
 
 test('官网返回多个游戏时只采用与目标 game_id 匹配的背景', async t => {

@@ -66,10 +66,24 @@ function localPathKey(path: string): string {
     return path.replace(/[\\/]+/g, '\\').replace(/\\+$/g, '').toLowerCase();
 }
 
+function hasParentTraversal(path: string): boolean {
+    return /(^|[\\/])\.\.([\\/]|$)/.test(path);
+}
+
 function isPathInsideDirectory(path: string, directory: string): boolean {
+    if (hasParentTraversal(path)) return false;
     const normalizedPath = localPathKey(path);
     const normalizedDirectory = localPathKey(directory);
     return normalizedPath.startsWith(`${normalizedDirectory}\\`);
+}
+
+export function isAllowedBackgroundPath(path: string, currentDirectory: string, gameDirectories: string[]): boolean {
+    if (hasParentTraversal(path)) return false;
+    if (isPathInsideDirectory(path, currentDirectory)) return true;
+    return !gameDirectories.some(directory =>
+        localPathKey(directory) !== localPathKey(currentDirectory)
+        && isPathInsideDirectory(path, directory)
+    );
 }
 
 type FixedBackgroundSource = {
@@ -557,7 +571,13 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
                 .map(localPathKey),
         );
         try {
-            await saveGameConfig(gameName, conf);
+            await updateGameConfig(gameName, latest => ({
+                ...latest,
+                backgroundEntries: entries,
+                selectedBackgroundId: selected.id,
+                backgroundType: selected.type,
+                lastBackgroundUrl: [info.imageUrl, info.videoUrl || ''].filter(Boolean).join('|'),
+            }));
         } catch (error) {
             for (const entry of entries) {
                 for (const path of [entry.imagePath, entry.videoPath]) {
@@ -597,29 +617,34 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         // 新文件独立命名，不能覆盖正在解码的文件，也不能先删除仍有效的旧背景。
         const targetName = `Background-Custom-${crypto.randomUUID()}.${ext}`;
         const targetPath = await SSMTFileUtils.JoinPath(dirPath, targetName);
-        const conf = await loadGameConfig(gameName);
-        const entries = conf.backgroundEntries || [];
         const id = `custom-${bgType.toLowerCase()}`;
-        const previous = entries.find(entry => entry.id === id);
-        const poster = entries.find(entry => entry.type === 'Image')?.imagePath
-            || await findExistingFileIgnoreCase(dirPath, BACKGROUND_IMAGE_CANDIDATES) || undefined;
         await copyFile(sourcePath, targetPath);
-        conf.backgroundType = bgType;
-        conf.backgroundUpdateMode = 'manual';
-        conf.backgroundEntries = [
-            ...entries.filter(entry => entry.id !== id),
-            { id, type: bgType, imagePath: bgType === 'Image' ? targetPath : poster,
-                videoPath: bgType === 'Video' ? targetPath : undefined },
-        ];
-        conf.selectedBackgroundId = id;
+        let previousPath: string | undefined;
+        let savedConfig: GameConfig;
         try {
-            await saveGameConfig(gameName, conf);
+            savedConfig = await updateGameConfig(gameName, async latest => {
+                const entries = latest.backgroundEntries || [];
+                const previous = entries.find(entry => entry.id === id);
+                const poster = entries.find(entry => entry.type === 'Image')?.imagePath
+                    || await findExistingFileIgnoreCase(dirPath, BACKGROUND_IMAGE_CANDIDATES) || undefined;
+                previousPath = bgType === 'Video' ? previous?.videoPath : previous?.imagePath;
+                return {
+                    ...latest,
+                    backgroundType: bgType,
+                    backgroundUpdateMode: 'manual',
+                    backgroundEntries: [
+                        ...entries.filter(entry => entry.id !== id),
+                        { id, type: bgType, imagePath: bgType === 'Image' ? targetPath : poster,
+                            videoPath: bgType === 'Video' ? targetPath : undefined },
+                    ],
+                    selectedBackgroundId: id,
+                };
+            });
         } catch (error) {
             await remove(targetPath).catch(() => {});
             throw error;
         }
-        const previousPath = bgType === 'Video' ? previous?.videoPath : previous?.imagePath;
-        if (previousPath && previousPath !== sourcePath && !conf.backgroundEntries.some(entry =>
+        if (previousPath && previousPath !== sourcePath && !savedConfig.backgroundEntries?.some(entry =>
             entry.imagePath === previousPath || entry.videoPath === previousPath || entry.themePath === previousPath)) {
             const ownedPrefix = await SSMTFileUtils.JoinPath(dirPath, 'Background-Custom-');
             if (previousPath.startsWith(ownedPrefix)) await remove(previousPath).catch(() => {});
@@ -743,6 +768,19 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             throw new Error(t('resourceManager.messages.backgroundsMissingFromServer'));
         }
 
+        let selected: BackgroundEntry | undefined;
+        await updateGameConfig(gameName, latest => {
+            selected = entries.find(entry => entry.id === latest.selectedBackgroundId && entry.type === effectiveBgType)
+                || entries.find(entry => entry.type === effectiveBgType) || entries[0];
+            return {
+                ...latest,
+                backgroundType: effectiveBgType,
+                backgroundEntries: entries,
+                lastBackgroundUrl: entries.map(entry => entry.videoUrl || entry.imageUrl || '').filter(Boolean).join('|'),
+                selectedBackgroundId: selected.id,
+            };
+        });
+
         try {
             const children = await readDir(dirPath);
             for (const child of children) {
@@ -757,13 +795,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             console.warn('Failed to clean stale managed background files', err);
         }
 
-        conf.backgroundType = effectiveBgType;
-        conf.backgroundEntries = entries;
-        conf.lastBackgroundUrl = entries.map(entry => entry.videoUrl || entry.imageUrl || '').filter(Boolean).join('|');
-        const selected = entries.find(entry => entry.id === conf.selectedBackgroundId && entry.type === effectiveBgType)
-            || entries.find(entry => entry.type === effectiveBgType) || entries[0];
-        conf.selectedBackgroundId = selected.id;
-        await saveGameConfig(gameName, conf);
+        if (!selected) throw new Error(t('resourceManager.messages.backgroundsMissingFromServer'));
         const path = effectiveBgType === 'Video' ? selected.videoPath || selected.imagePath : selected.imagePath || selected.videoPath;
         const url = effectiveBgType === 'Video' ? selected.videoUrl || selected.imageUrl || '' : selected.imageUrl || selected.videoUrl || '';
         if (!lastUrl && !changed) changed = true;
@@ -772,6 +804,13 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
 
     async function loadGameConfig(gameName: string): Promise<GameConfig> {
         return GameConfigManager.loadGameConfig(gameName);
+    }
+
+    async function updateGameConfig(
+        gameName: string,
+        updater: (config: GameConfig) => GameConfig | null | undefined | Promise<GameConfig | null | undefined>,
+    ): Promise<GameConfig> {
+        return GameConfigManager.updateGameConfig(gameName, updater);
     }
 
     async function saveGameConfig(gameName: string, config: GameConfig): Promise<void> {
@@ -1026,6 +1065,10 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             return results;
         }
 
+        const gameDirectories = entries
+            .filter(entry => entry?.isDirectory && entry.name)
+            .map(entry => `${normalizedRoot}/${entry.name}`);
+
         for (const entry of entries) {
             if (!entry?.isDirectory) continue;
             const name = entry.name || '';
@@ -1078,11 +1121,14 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
                     if (!raw || typeof raw !== 'object') continue;
                     const candidate = raw as BackgroundEntry;
                     const imagePath = typeof candidate.imagePath === 'string' && candidate.imagePath
-                        && isPathInsideDirectory(candidate.imagePath, basePath) ? candidate.imagePath : undefined;
+                        && isAllowedBackgroundPath(candidate.imagePath, basePath, gameDirectories)
+                        ? candidate.imagePath : undefined;
                     const videoPath = typeof candidate.videoPath === 'string' && candidate.videoPath
-                        && isPathInsideDirectory(candidate.videoPath, basePath) ? candidate.videoPath : undefined;
+                        && isAllowedBackgroundPath(candidate.videoPath, basePath, gameDirectories)
+                        ? candidate.videoPath : undefined;
                     const themePath = typeof candidate.themePath === 'string' && candidate.themePath
-                        && isPathInsideDirectory(candidate.themePath, basePath) ? candidate.themePath : undefined;
+                        && isAllowedBackgroundPath(candidate.themePath, basePath, gameDirectories)
+                        ? candidate.themePath : undefined;
                     const hasImage = !!imagePath && await exists(imagePath);
                     const hasVideo = !!videoPath && await exists(videoPath);
                     if (!hasImage && !hasVideo) continue;
@@ -1217,6 +1263,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         createNewConfig,
         deleteGameConfigFolder,
         loadGameConfig,
+        updateGameConfig,
         saveGameConfig,
         // Game icon / background
         setGameIcon,
@@ -1265,6 +1312,7 @@ export const ResourceManager = new Proxy({} as Record<string, unknown>, {
     createNewConfig: (gameName: string, config?: GameConfig) => Promise<void>;
     deleteGameConfigFolder: (gameName: string) => Promise<void>;
     loadGameConfig: (gameName: string) => Promise<GameConfig>;
+    updateGameConfig: (gameName: string, updater: (config: GameConfig) => GameConfig | null | undefined | Promise<GameConfig | null | undefined>) => Promise<GameConfig>;
     saveGameConfig: (gameName: string, config: GameConfig) => Promise<void>;
     setGameIcon: (gameName: string, sourcePath: string) => Promise<void>;
     setGameBackground: (gameName: string, sourcePath: string, bgType: 'Image' | 'Video') => Promise<void>;

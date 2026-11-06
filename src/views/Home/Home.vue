@@ -207,12 +207,13 @@ const applyBackgroundAt = async (index: number) => {
   if (!selectedEntry) return
   AppStateManager.applyBackgroundEntry(game, normalized)
   try {
-    const config = await ResourceManager.loadGameConfig(game.name)
-    // The current game may change while the config is loading. Persist the
-    // entry captured from the original game instead of rereading reactive state.
-    config.backgroundType = selectedEntry.type
-    config.selectedBackgroundId = selectedEntry.id
-    await ResourceManager.saveGameConfig(game.name, config)
+    // Persist the entry captured from the original game through a per-game
+    // transaction so another config writer cannot be overwritten.
+    await ResourceManager.updateGameConfig(game.name, latest => ({
+      ...latest,
+      backgroundType: selectedEntry.type,
+      selectedBackgroundId: selectedEntry.id,
+    }))
   } catch (error) {
     console.warn('Failed to persist selected background', error)
   }

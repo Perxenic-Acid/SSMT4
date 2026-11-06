@@ -220,32 +220,30 @@ const saveConfig = (): Promise<void> => {
     try {
       const baseline = loadedConfigSnapshot.value;
       const currentAtStart = cloneConfigValue(config);
-      const latest = await ResourceManager.loadGameConfig(gameName);
+      let changed = false;
+      const savedConfig = await ResourceManager.updateGameConfig(gameName, latest => {
+        const result = mergeChangedConfig(baseline, currentAtStart, latest);
+        changed = result.changed;
+        return changed ? result.config : null;
+      });
       if (gameName !== props.gameName?.trim() || !isConfigReady.value) return;
-
-      const { config: configToSave, changed } = mergeChangedConfig(
-        baseline,
-        currentAtStart,
-        latest,
-      );
 
       if (!changed) {
         if (configValuesEqual(currentAtStart, config)) {
-          applyLoadedConfig(latest, gameName);
+          applyLoadedConfig(savedConfig, gameName);
         } else {
-          loadedConfigSnapshot.value = cloneConfigValue(latest);
+          loadedConfigSnapshot.value = cloneConfigValue(savedConfig);
         }
         return;
       }
 
-      await ResourceManager.saveGameConfig(gameName, configToSave);
       if (gameName !== props.gameName?.trim()) return;
       if (configValuesEqual(currentAtStart, config)) {
-        applyLoadedConfig(configToSave, gameName);
+        applyLoadedConfig(savedConfig, gameName);
       } else {
         // Keep edits made while the save was in flight; the next queued save
         // will merge them against the newly written baseline.
-        loadedConfigSnapshot.value = cloneConfigValue(configToSave);
+        loadedConfigSnapshot.value = cloneConfigValue(savedConfig);
       }
       debugLog('GameSettingsModal', 'Current config saved.');
     } catch (e) {
