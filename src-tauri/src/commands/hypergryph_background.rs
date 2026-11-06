@@ -452,6 +452,15 @@ fn discover_endfield_background(
                     .unwrap_or(SystemTime::UNIX_EPOCH),
             )
         });
+        let newest_table_modified = files
+            .iter()
+            .filter(|path| leveldb_source_kind(path) == 1)
+            .filter_map(|path| {
+                path.metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+            })
+            .max();
         for path in files {
             let Ok(bytes) = fs::read(&path) else {
                 continue;
@@ -474,7 +483,11 @@ fn discover_endfield_background(
                     source_leveldb: path.clone(),
                     modified,
                     score,
-                    source_priority: leveldb_source_priority(&path),
+                    source_priority: leveldb_source_priority(
+                        &path,
+                        modified,
+                        newest_table_modified,
+                    ),
                 });
                 break;
             }
@@ -493,17 +506,29 @@ fn discover_endfield_background(
     })
 }
 
-fn leveldb_source_priority(path: &Path) -> u8 {
+fn leveldb_source_kind(path: &Path) -> u8 {
     match path
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        // The active WAL contains writes newer than compacted table files.
         Some("log") => 0,
         Some("ldb") => 1,
         _ => 2,
+    }
+}
+
+fn leveldb_source_priority(
+    path: &Path,
+    modified: SystemTime,
+    newest_table_modified: Option<SystemTime>,
+) -> u8 {
+    match leveldb_source_kind(path) {
+        // Prefer the active WAL only when it is not older than compacted tables.
+        0 if newest_table_modified.map_or(true, |table| modified >= table) => 0,
+        0 => 1,
+        kind => kind,
     }
 }
 
@@ -796,13 +821,25 @@ mod tests {
 
     #[test]
     fn prefers_active_log_over_compacted_tables() {
-        assert!(
-            leveldb_source_priority(Path::new("000491.log"))
-                < leveldb_source_priority(Path::new("000492.ldb"))
+        let table = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20);
+        let older_log = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10);
+        let newer_log = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(30);
+        assert_eq!(
+            leveldb_source_priority(Path::new("000491.log"), newer_log, Some(table)),
+            0
         );
-        assert!(
-            leveldb_source_priority(Path::new("CURRENT"))
-                > leveldb_source_priority(Path::new("000492.ldb"))
+        assert_eq!(
+            leveldb_source_priority(Path::new("000491.log"), older_log, Some(table)),
+            1,
+            "stale WAL must not outrank a newer compacted table"
+        );
+        assert_eq!(
+            leveldb_source_priority(Path::new("000492.ldb"), table, Some(table)),
+            1
+        );
+        assert_eq!(
+            leveldb_source_priority(Path::new("CURRENT"), table, Some(table)),
+            2
         );
     }
 

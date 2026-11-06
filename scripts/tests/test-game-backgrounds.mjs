@@ -267,6 +267,18 @@ test('设置弹窗没有改动时不会覆盖磁盘新配置', () => {
   assert.equal(JSON.stringify(result.config), JSON.stringify(latest));
 });
 
+test('设置弹窗合并嵌套配置时不会覆盖其他子字段', () => {
+  const { mergeChangedConfig } = load('../../src/store/GameConfigMerge.ts', {});
+  const baseline = { playerTweaks: { camera: 'old', gameplay: 'keep' } };
+  const current = { playerTweaks: { camera: 'new', gameplay: 'keep' } };
+  const latest = { playerTweaks: { camera: 'old', gameplay: 'external' } };
+  const result = mergeChangedConfig(baseline, current, latest);
+
+  assert.equal(result.changed, true);
+  assert.equal(result.config.playerTweaks.camera, 'new');
+  assert.equal(result.config.playerTweaks.gameplay, 'external');
+});
+
 function appStateModule(t) {
   const scope = vue.effectScope();
   t.after(() => scope.stop());

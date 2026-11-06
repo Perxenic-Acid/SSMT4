@@ -318,9 +318,8 @@ export const useAppStateStore = defineStore('appState', () => {
         } as GameInfo
       })
 
-      appSettings.sidebarGameOrder = reconcileSidebarGameOrder(processed)
-
       if (requestId !== loadGamesRequestId) return
+      appSettings.sidebarGameOrder = reconcileSidebarGameOrder(processed)
       gamesList.splice(0, gamesList.length, ...processed)
 
       if (appSettings.CurrentGameName) {

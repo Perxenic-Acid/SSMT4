@@ -6,7 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { join } from '@tauri-apps/api/path';
 import { AppStateManager } from '../store/AppStateManager';
 import { ResourceManager, type UpdateInfo } from '../store/ResourceManager';
-import { cloneConfigValue, mergeChangedConfig } from '../store/GameConfigMerge';
+import { cloneConfigValue, configValuesEqual, mergeChangedConfig } from '../store/GameConfigMerge';
 import { PathHelper } from '../helper/PathHelper';
 import { GlobalConfig } from '../store/GlobalConfig';
 import { AUTO_UPDATE_SUPPORTED_PRESET_SET, getGamePresetDisplayName, getGamePresetOptions, getGithubRepoByGamePreset } from '../store/GamePreset';
@@ -38,6 +38,7 @@ const config = reactive<GameConfig>(GameConfigManager.defaultGameConfig());
 const configGameName = ref('');
 const loadedConfigSnapshot = ref<GameConfig | null>(null);
 let loadConfigRequestId = 0;
+let saveConfigQueue: Promise<void> = Promise.resolve();
 
 const Dlss5GraphicsSettings = defineAsyncComponent(
   () => import('../plugin/components/Dlss5GraphicsSettings.vue'),
@@ -204,35 +205,57 @@ const loadConfig = async () => {
   }
 };
 
-const saveConfig = async () => {
-  const gameName = props.gameName?.trim();
-  // A reactive config snapshot is only valid for the game it was loaded from.
-  if (!gameName || !isConfigReady.value || !loadedConfigSnapshot.value) return;
-  debugLog('GameSettingsModal', `Starting saveConfig for: ${gameName}`);
-  debugLog('GameSettingsModal', 'Current config state:', JSON.parse(JSON.stringify(config)));
-
-  try {
-    const baseline = loadedConfigSnapshot.value;
-    const latest = await ResourceManager.loadGameConfig(gameName);
-    if (gameName !== props.gameName?.trim() || !isConfigReady.value) return;
-
-    const { config: configToSave, changed } = mergeChangedConfig(
-      baseline,
-      cloneConfigValue(config),
-      latest,
-    );
-
-    if (!changed) {
-      applyLoadedConfig(latest, gameName);
-      return;
-    }
-
-    await ResourceManager.saveGameConfig(gameName, configToSave);
-    applyLoadedConfig(configToSave, gameName);
-    debugLog('GameSettingsModal', 'Current config saved.');
-  } catch (e) {
-    console.error('Failed to save current config:', e);
+const saveConfig = (): Promise<void> => {
+  if (!props.gameName?.trim() || !isConfigReady.value || !loadedConfigSnapshot.value) {
+    return Promise.resolve();
   }
+
+  const run = async () => {
+    const gameName = props.gameName?.trim();
+    if (!gameName || !isConfigReady.value || !loadedConfigSnapshot.value) return;
+
+    debugLog('GameSettingsModal', `Starting saveConfig for: ${gameName}`);
+    debugLog('GameSettingsModal', 'Current config state:', JSON.parse(JSON.stringify(config)));
+
+    try {
+      const baseline = loadedConfigSnapshot.value;
+      const currentAtStart = cloneConfigValue(config);
+      const latest = await ResourceManager.loadGameConfig(gameName);
+      if (gameName !== props.gameName?.trim() || !isConfigReady.value) return;
+
+      const { config: configToSave, changed } = mergeChangedConfig(
+        baseline,
+        currentAtStart,
+        latest,
+      );
+
+      if (!changed) {
+        if (configValuesEqual(currentAtStart, config)) {
+          applyLoadedConfig(latest, gameName);
+        } else {
+          loadedConfigSnapshot.value = cloneConfigValue(latest);
+        }
+        return;
+      }
+
+      await ResourceManager.saveGameConfig(gameName, configToSave);
+      if (gameName !== props.gameName?.trim()) return;
+      if (configValuesEqual(currentAtStart, config)) {
+        applyLoadedConfig(configToSave, gameName);
+      } else {
+        // Keep edits made while the save was in flight; the next queued save
+        // will merge them against the newly written baseline.
+        loadedConfigSnapshot.value = cloneConfigValue(configToSave);
+      }
+      debugLog('GameSettingsModal', 'Current config saved.');
+    } catch (e) {
+      console.error('Failed to save current config:', e);
+    }
+  };
+
+  const pending = saveConfigQueue.catch(() => {}).then(run);
+  saveConfigQueue = pending;
+  return pending;
 };
 
 const handleDllPackingChange = async () => {
