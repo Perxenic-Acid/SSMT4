@@ -34,6 +34,7 @@ const emit = defineEmits<{
 
 // Config State
 const config = reactive<GameConfig>(GameConfigManager.defaultGameConfig());
+const configGameName = ref('');
 let loadConfigRequestId = 0;
 
 const Dlss5GraphicsSettings = defineAsyncComponent(
@@ -62,6 +63,10 @@ const refreshOptionalPluginSections = async () => {
 
 
 const isLoading = ref(false);
+const isConfigReady = computed(() => {
+  const gameName = props.gameName?.trim();
+  return !!gameName && !isLoading.value && configGameName.value === gameName;
+});
 const isDllReleaseLoading = ref(false);
 const dllReleaseList = ref<UpdateInfo[]>([]);
 const dllReleaseListError = ref('');
@@ -165,6 +170,7 @@ const huntingModeOptions = computed(() => [
 const loadConfig = async () => {
   const gameName = props.gameName?.trim();
   const requestId = ++loadConfigRequestId;
+  configGameName.value = '';
 
   if (!gameName) {
     Object.assign(config, GameConfigManager.defaultGameConfig());
@@ -179,6 +185,7 @@ const loadConfig = async () => {
     }
 
     Object.assign(config, data);
+    configGameName.value = gameName;
   } catch (e) {
     console.error('Failed to load game config:', e);
   } finally {
@@ -189,13 +196,15 @@ const loadConfig = async () => {
 };
 
 const saveConfig = async () => {
-  if (!props.gameName || isLoading.value) return; // Prevent saving if loading isn't complete
-  debugLog('GameSettingsModal', `Starting saveConfig for: ${props.gameName}`);
+  const gameName = props.gameName?.trim();
+  // A reactive config snapshot is only valid for the game it was loaded from.
+  if (!gameName || !isConfigReady.value) return;
+  debugLog('GameSettingsModal', `Starting saveConfig for: ${gameName}`);
   debugLog('GameSettingsModal', 'Current config state:', JSON.parse(JSON.stringify(config)));
 
   try {
     const configToSave: GameConfig = JSON.parse(JSON.stringify(config));
-    await ResourceManager.saveGameConfig(props.gameName, configToSave);
+    await ResourceManager.saveGameConfig(gameName, configToSave);
     debugLog('GameSettingsModal', 'Current config saved.');
   } catch (e) {
     console.error('Failed to save current config:', e);
@@ -237,6 +246,7 @@ const syncShowTopLeftWarningsToIni = async (): Promise<void> => {
 };
 
 const handleBgTypeChange = async () => {
+  if (!isConfigReady.value) return;
   await saveConfig();
   // Refresh global state if this is the active game
   if (appSettings.CurrentGameName === props.gameName) {
@@ -262,7 +272,7 @@ const selectIcon = async () => {
 
 const importingBackground = ref(false);
 const selectBackground = async () => {
-  if (importingBackground.value) return;
+  if (importingBackground.value || !isConfigReady.value) return;
   importingBackground.value = true;
   try {
     const isVideo = config.backgroundType === 'Video';
@@ -278,6 +288,7 @@ const selectBackground = async () => {
     if (file) {
       await ResourceManager.setGameBackground(props.gameName, file, (config.backgroundType as "Image" | "Video") || 'Image');
       Object.assign(config, await ResourceManager.loadGameConfig(props.gameName));
+      configGameName.value = props.gameName?.trim() || '';
       await loadGames(); // Refresh
     }
   } catch (e) {
@@ -310,6 +321,7 @@ const revealBackgroundFile = async () => {
 const canAutoUpdate = computed(() => AUTO_UPDATE_SUPPORTED_PRESET_SET.has(config.gamePreset || ''));
 
 const handleUpdateModeChange = async (mode: string) => {
+  if (!isConfigReady.value) return;
   await saveConfig();
   // Trigger immediate background update when switching to Auto
   if (mode === 'auto' && canAutoUpdate.value) {
@@ -318,15 +330,34 @@ const handleUpdateModeChange = async (mode: string) => {
 };
 
 const autoUpdateBackground = async () => {
+  const targetGameName = props.gameName?.trim();
+  if (!targetGameName || !isConfigReady.value) return;
+
   try {
+    await saveConfig();
+    if (targetGameName !== props.gameName?.trim()) return;
+
     isLoading.value = true;
-    await ResourceManager.updateGameBackground(props.gameName, config.gamePreset || '', (config.backgroundType as "Image" | "Video") || 'Image');
+    // The modal snapshot may be stale right after a game switch. Always use the
+    // target game's persisted preset and background type.
+    const latest = await ResourceManager.loadGameConfig(targetGameName);
+    await ResourceManager.updateGameBackground(
+      targetGameName,
+      latest.gamePreset || '',
+      (latest.backgroundType as "Image" | "Video") || 'Image',
+    );
+
+    const refreshed = await ResourceManager.loadGameConfig(targetGameName);
+    if (targetGameName !== props.gameName?.trim()) return;
+    Object.assign(config, refreshed);
+    configGameName.value = targetGameName;
+
     await loadGames();
     ElMessage.success(t('gameSettingsModal.messages.backgroundUpdated'));
 
-    if (appSettings.CurrentGameName === props.gameName) {
+    if (appSettings.CurrentGameName === targetGameName) {
       // Force refresh UI if active
-      const current = gamesList.find(g => g.name === props.gameName);
+      const current = gamesList.find(g => g.name === targetGameName);
       if (current) await AppStateManager.selectGame(current);
     }
 
@@ -1039,13 +1070,13 @@ defineExpose({
 
                 <!-- Actions -->
                 <div class="settings-bg-actions">
-                  <button class="settings-action-btn" :disabled="importingBackground" :aria-busy="importingBackground" @click="selectBackground">
+                  <button class="settings-action-btn" :disabled="importingBackground || !isConfigReady" :aria-busy="importingBackground" @click="selectBackground">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                     </svg>
                     {{ config.backgroundType === 'Video' ? t('gameSettingsModal.actions.selectBackgroundVideo') : t('gameSettingsModal.actions.selectBackgroundImage') }}
                   </button>
-                  <button v-if="canAutoUpdate" class="settings-action-btn highlight" @click="autoUpdateBackground">
+                  <button v-if="canAutoUpdate" class="settings-action-btn highlight" :disabled="!isConfigReady" @click="autoUpdateBackground">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
                     </svg>

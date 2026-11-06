@@ -3,7 +3,7 @@ import { GlobalConfig } from "./GlobalConfig";
 import { SSMTFileUtils } from "../utils/SSMTFileUtils";
 import { exists, mkdir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { moveDirectoryToRecycleBin } from "../utils/RecycleBin";
-import { isValidGamePreset, resolveGamePresetByGameName } from "./GamePreset";
+import { resolveGamePresetByGameName } from "./GamePreset";
 import type { PlayerTweaksCameraConfig } from '../plugin/playerTweaksCamera';
 import type { PlayerTweaksGameplayConfig } from '../plugin/playerTweaksGameplay';
 
@@ -212,7 +212,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             return config;
         }
 
-        if (isValidGamePreset(config.gamePreset)) {
+        if (config.gamePreset === matchedPreset) {
             return config;
         }
 

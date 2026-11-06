@@ -66,6 +66,12 @@ function localPathKey(path: string): string {
     return path.replace(/[\\/]+/g, '\\').replace(/\\+$/g, '').toLowerCase();
 }
 
+function isPathInsideDirectory(path: string, directory: string): boolean {
+    const normalizedPath = localPathKey(path);
+    const normalizedDirectory = localPathKey(directory);
+    return normalizedPath.startsWith(`${normalizedDirectory}\\`);
+}
+
 type FixedBackgroundSource = {
     imageUrl?: string;
     videoUrl?: string;
@@ -198,7 +204,11 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         }
 
         const json = await resp.json();
-        const backgrounds = json?.data?.game_info_list?.[0]?.backgrounds;
+        const gameInfoList = json?.data?.game_info_list;
+        const gameInfo = Array.isArray(gameInfoList)
+            ? gameInfoList.find((item: any) => item?.game?.id === gameId)
+            : null;
+        const backgrounds = gameInfo?.backgrounds;
         if (!Array.isArray(backgrounds) || backgrounds.length === 0) {
             throw new Error(t('resourceManager.messages.backgroundsMissingFromServer'));
         }
@@ -614,10 +624,14 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
     }
 
     async function updateGameBackground(gameName: string, gamePreset: string, bgType: 'Image' | 'Video', lastUrl?: string): Promise<{ path: string; url: string; changed: boolean }> {
-        if (gamePreset.trim().toUpperCase() === 'EFMI') {
-            return updateEndfieldBackground(gameName, bgType);
+        const conf = await loadGameConfig(gameName);
+        const effectivePreset = (conf.gamePreset || gamePreset).trim();
+        const effectiveBgType = (conf.backgroundType || bgType) as 'Image' | 'Video';
+
+        if (effectivePreset.toUpperCase() === 'EFMI') {
+            return updateEndfieldBackground(gameName, effectiveBgType);
         }
-        if (!supportsAutoUpdateBackground(gamePreset)) {
+        if (!supportsAutoUpdateBackground(effectivePreset)) {
             throw new Error(t('resourceManager.messages.unsupportedPresetForAutoUpdate'));
         }
 
@@ -627,12 +641,11 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             await mkdir(dirPath, { recursive: true });
         }
 
-        const conf = await loadGameConfig(gameName);
         const previousEntries = Array.isArray(conf.backgroundEntries) ? conf.backgroundEntries : [];
-        const available = await getAvailableBackgrounds(gamePreset);
+        const available = await getAvailableBackgrounds(effectivePreset);
         if (available.length === 0) {
             throw new Error(
-                bgType === 'Video'
+                effectiveBgType === 'Video'
                     ? t('resourceManager.messages.noVideoBackgroundAvailable')
                     : t('resourceManager.messages.noImageBackgroundAvailable')
             );
@@ -697,7 +710,7 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
                         changed = true;
                     }
                 } catch (error) {
-                    if (gamePreset !== 'WWMI') throw error;
+                    if (effectivePreset !== 'WWMI') throw error;
                     console.warn('鸣潮背景资源获取失败，保留本地背景', kind, error);
                     savedPath = previousPath && await exists(previousPath) ? previousPath : undefined;
                     if (!savedPath && kind === 'image') {
@@ -718,12 +731,12 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             entry.videoPath = await saveResource(remote.videoUrl, 'video', 'mp4');
             entry.themePath = await saveResource(remote.themeUrl, 'theme', 'webp');
             // 下载失败的视频不能伪装成第二张静态图加入列表。
-            if (gamePreset === 'WWMI' && remote.type === 'Video' && !entry.videoPath) continue;
+            if (effectivePreset === 'WWMI' && remote.type === 'Video' && !entry.videoPath) continue;
             if (entry.imagePath || entry.videoPath || entry.themePath) entries.push(entry);
         }
 
         if (entries.length === 0) {
-            if (gamePreset === 'WWMI') return { path: '', url: '', changed: false };
+            if (effectivePreset === 'WWMI') return { path: '', url: '', changed: false };
             throw new Error(t('resourceManager.messages.backgroundsMissingFromServer'));
         }
 
@@ -741,15 +754,15 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
             console.warn('Failed to clean stale managed background files', err);
         }
 
-        conf.backgroundType = bgType;
+        conf.backgroundType = effectiveBgType;
         conf.backgroundEntries = entries;
         conf.lastBackgroundUrl = entries.map(entry => entry.videoUrl || entry.imageUrl || '').filter(Boolean).join('|');
-        const selected = entries.find(entry => entry.id === conf.selectedBackgroundId && entry.type === bgType)
-            || entries.find(entry => entry.type === bgType) || entries[0];
+        const selected = entries.find(entry => entry.id === conf.selectedBackgroundId && entry.type === effectiveBgType)
+            || entries.find(entry => entry.type === effectiveBgType) || entries[0];
         conf.selectedBackgroundId = selected.id;
         await saveGameConfig(gameName, conf);
-        const path = bgType === 'Video' ? selected.videoPath || selected.imagePath : selected.imagePath || selected.videoPath;
-        const url = bgType === 'Video' ? selected.videoUrl || selected.imageUrl || '' : selected.imageUrl || selected.videoUrl || '';
+        const path = effectiveBgType === 'Video' ? selected.videoPath || selected.imagePath : selected.imagePath || selected.videoPath;
+        const url = effectiveBgType === 'Video' ? selected.videoUrl || selected.imageUrl || '' : selected.imageUrl || selected.videoUrl || '';
         if (!lastUrl && !changed) changed = true;
         return { path: path || '', url, changed };
     }
@@ -1061,9 +1074,12 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
                 for (const raw of cfg.backgroundEntries) {
                     if (!raw || typeof raw !== 'object') continue;
                     const candidate = raw as BackgroundEntry;
-                    const imagePath = typeof candidate.imagePath === 'string' && candidate.imagePath ? candidate.imagePath : undefined;
-                    const videoPath = typeof candidate.videoPath === 'string' && candidate.videoPath ? candidate.videoPath : undefined;
-                    const themePath = typeof candidate.themePath === 'string' && candidate.themePath ? candidate.themePath : undefined;
+                    const imagePath = typeof candidate.imagePath === 'string' && candidate.imagePath
+                        && isPathInsideDirectory(candidate.imagePath, basePath) ? candidate.imagePath : undefined;
+                    const videoPath = typeof candidate.videoPath === 'string' && candidate.videoPath
+                        && isPathInsideDirectory(candidate.videoPath, basePath) ? candidate.videoPath : undefined;
+                    const themePath = typeof candidate.themePath === 'string' && candidate.themePath
+                        && isPathInsideDirectory(candidate.themePath, basePath) ? candidate.themePath : undefined;
                     const hasImage = !!imagePath && await exists(imagePath);
                     const hasVideo = !!videoPath && await exists(videoPath);
                     if (!hasImage && !hasVideo) continue;

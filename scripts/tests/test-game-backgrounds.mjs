@@ -33,9 +33,10 @@ const video = 'https://mc.kurogames.com/website-preface/video/bg/bg-video.mp4';
 async function resources(t, options = {}) {
   const root = await fs.mkdtemp(path.join(tmpdir(), 'ssmt-background-test-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const dir = path.join(root, 'WWMI');
+  const gameName = options.gameName || 'WWMI';
+  const dir = path.join(root, gameName);
   await fs.mkdir(dir);
-  const config = { backgroundType: 'Video', ...options.config };
+  const config = { gamePreset: gameName, backgroundType: 'Video', ...options.config };
   const requests = [], signatures = [];
   const manager = load('../../src/store/ResourceManager.ts', {
     pinia,
@@ -62,6 +63,13 @@ async function resources(t, options = {}) {
     } },
     '@tauri-apps/plugin-http': { fetch: async url => {
       requests.push(url);
+      if (url.includes('getAllGameBasicInfo')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => structuredClone(options.hypResponse),
+        };
+      }
       if (options.posterFail && url === poster) throw new Error('海报下载失败');
       const isVideo = url.startsWith(video);
       if (isVideo) {
@@ -78,15 +86,18 @@ async function resources(t, options = {}) {
       };
     } },
     '../utils/SSMTJsonUtils': {}, '../helper/PathHelper': {},
-    '../i18n': { i18n: { global: { t: key => key } } }, '../utils/debugLog': {},
+    '../i18n': { i18n: { global: { locale: { value: 'zhs' }, t: key => key } } }, '../utils/debugLog': {},
     './GameConfig': { GameConfigManager: {
       loadGameConfig: async () => structuredClone(config),
       saveGameConfig: async (_name, updated) => Object.assign(config, structuredClone(updated)),
     } },
     './GamePreset': {},
   }).ResourceManager;
-  const update = type => manager.updateGameBackground('WWMI', 'WWMI', type || 'Video', config.lastBackgroundUrl);
-  return { config, requests, signatures, dir, update, manager };
+  const update = type => {
+    if (type) config.backgroundType = type;
+    return manager.updateGameBackground(gameName, gameName, type || 'Video', config.lastBackgroundUrl);
+  };
+  return { config, requests, signatures, dir, gameName, update, manager };
 }
 
 test('鸣潮动态和静态各占一个列表项，共用海报且不保存临时签名', async t => {
@@ -162,6 +173,58 @@ test('替换视频失败时保留原缓存并允许下次重试', async t => {
   await h.update();
   assert.equal(h.config.backgroundEntries[1].videoUrl, video);
   assert.equal((await fs.readFile(cached)).subarray(4, 8).toString(), 'ftyp');
+});
+
+test('调用方传入错误预设时仍使用目标游戏自己的配置', async t => {
+  const h = await resources(t);
+  await h.manager.updateGameBackground('WWMI', 'NTEMI', 'Image');
+  assert.equal(h.config.gamePreset, 'WWMI');
+  assert.deepEqual(h.config.backgroundEntries.map(entry => entry.type), ['Image', 'Video']);
+  assert.ok(h.requests.some(url => url === poster));
+  assert.ok(h.requests.some(url => url.startsWith(video)));
+});
+
+test('官网返回多个游戏时只采用与目标 game_id 匹配的背景', async t => {
+  const wrongImage = 'https://launcher-webstatic.mihoyo.com/genshin.webp';
+  const wrongVideo = 'https://launcher-webstatic.mihoyo.com/genshin.webm';
+  const rightImage = 'https://launcher-webstatic.mihoyo.com/zenless.webp';
+  const rightVideo = 'https://launcher-webstatic.mihoyo.com/zenless.webm';
+  const h = await resources(t, {
+    gameName: 'ZZMI',
+    config: { gamePreset: 'ZZMI', backgroundType: 'Video' },
+    hypResponse: {
+      data: {
+        game_info_list: [
+          {
+            game: { id: '1Z8W5NHUQb' },
+            backgrounds: [{
+              id: 'genshin-entry',
+              background: { url: wrongImage },
+              video: { url: wrongVideo },
+            }],
+          },
+          {
+            game: { id: 'x6znKlJ0xK' },
+            backgrounds: [{
+              id: 'zenless-entry',
+              background: { url: rightImage },
+              video: { url: rightVideo },
+            }],
+          },
+        ],
+      },
+    },
+  });
+
+  await h.manager.updateGameBackground('ZZMI', 'GIMI', 'Video');
+
+  assert.equal(h.config.backgroundEntries.length, 1);
+  assert.equal(h.config.backgroundEntries[0].id, 'zenless-entry');
+  assert.equal(h.config.backgroundEntries[0].imageUrl, rightImage);
+  assert.equal(h.config.backgroundEntries[0].videoUrl, rightVideo);
+  assert.ok(h.config.backgroundEntries[0].videoPath.startsWith(h.dir));
+  assert.ok(!h.requests.includes(wrongImage));
+  assert.ok(!h.requests.includes(wrongVideo));
 });
 
 function state(t) {
