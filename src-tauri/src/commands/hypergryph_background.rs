@@ -47,6 +47,7 @@ struct Candidate {
     source_leveldb: PathBuf,
     modified: SystemTime,
     score: usize,
+    source_priority: u8,
 }
 
 struct StagedAsset {
@@ -473,6 +474,7 @@ fn discover_endfield_background(
                     source_leveldb: path.clone(),
                     modified,
                     score,
+                    source_priority: leveldb_source_priority(&path),
                 });
                 break;
             }
@@ -481,6 +483,7 @@ fn discover_endfield_background(
 
     candidates.sort_by_key(|candidate| {
         (
+            candidate.source_priority,
             std::cmp::Reverse(candidate.modified),
             std::cmp::Reverse(candidate.score),
         )
@@ -488,6 +491,20 @@ fn discover_endfield_background(
     candidates.into_iter().next().ok_or_else(|| {
         "没有找到终末地当前背景。请先打开一次海猫启动器并进入终末地，再让页面完全加载".into()
     })
+}
+
+fn leveldb_source_priority(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        // The active WAL contains writes newer than compacted table files.
+        Some("log") => 0,
+        Some("ldb") => 1,
+        _ => 2,
+    }
 }
 
 fn read_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -775,6 +792,18 @@ mod tests {
         assert!(validate_image_url("http://hg-utils-public.hycdn.cn/a.webp").is_err());
         assert!(validate_video_url("https://hg-utils-public.hycdn.cn/a.webm").is_err());
         assert!(validate_image_url("https://hg-utils-public.hycdn.cn/a.webp").is_ok());
+    }
+
+    #[test]
+    fn prefers_active_log_over_compacted_tables() {
+        assert!(
+            leveldb_source_priority(Path::new("000491.log"))
+                < leveldb_source_priority(Path::new("000492.ldb"))
+        );
+        assert!(
+            leveldb_source_priority(Path::new("CURRENT"))
+                > leveldb_source_priority(Path::new("000492.ldb"))
+        );
     }
 
     #[test]

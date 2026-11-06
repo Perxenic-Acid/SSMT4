@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { join } from '@tauri-apps/api/path';
 import { AppStateManager } from '../store/AppStateManager';
 import { ResourceManager, type UpdateInfo } from '../store/ResourceManager';
+import { cloneConfigValue, mergeChangedConfig } from '../store/GameConfigMerge';
 import { PathHelper } from '../helper/PathHelper';
 import { GlobalConfig } from '../store/GlobalConfig';
 import { AUTO_UPDATE_SUPPORTED_PRESET_SET, getGamePresetDisplayName, getGamePresetOptions, getGithubRepoByGamePreset } from '../store/GamePreset';
@@ -35,6 +36,7 @@ const emit = defineEmits<{
 // Config State
 const config = reactive<GameConfig>(GameConfigManager.defaultGameConfig());
 const configGameName = ref('');
+const loadedConfigSnapshot = ref<GameConfig | null>(null);
 let loadConfigRequestId = 0;
 
 const Dlss5GraphicsSettings = defineAsyncComponent(
@@ -167,10 +169,18 @@ const huntingModeOptions = computed(() => [
 ]);
 
 // Load/Save Logic
+const applyLoadedConfig = (data: GameConfig, gameName: string) => {
+  const snapshot = cloneConfigValue(data);
+  Object.assign(config, snapshot);
+  loadedConfigSnapshot.value = cloneConfigValue(snapshot);
+  configGameName.value = gameName;
+};
+
 const loadConfig = async () => {
   const gameName = props.gameName?.trim();
   const requestId = ++loadConfigRequestId;
   configGameName.value = '';
+  loadedConfigSnapshot.value = null;
 
   if (!gameName) {
     Object.assign(config, GameConfigManager.defaultGameConfig());
@@ -184,8 +194,7 @@ const loadConfig = async () => {
       return;
     }
 
-    Object.assign(config, data);
-    configGameName.value = gameName;
+    applyLoadedConfig(data, gameName);
   } catch (e) {
     console.error('Failed to load game config:', e);
   } finally {
@@ -198,13 +207,28 @@ const loadConfig = async () => {
 const saveConfig = async () => {
   const gameName = props.gameName?.trim();
   // A reactive config snapshot is only valid for the game it was loaded from.
-  if (!gameName || !isConfigReady.value) return;
+  if (!gameName || !isConfigReady.value || !loadedConfigSnapshot.value) return;
   debugLog('GameSettingsModal', `Starting saveConfig for: ${gameName}`);
   debugLog('GameSettingsModal', 'Current config state:', JSON.parse(JSON.stringify(config)));
 
   try {
-    const configToSave: GameConfig = JSON.parse(JSON.stringify(config));
+    const baseline = loadedConfigSnapshot.value;
+    const latest = await ResourceManager.loadGameConfig(gameName);
+    if (gameName !== props.gameName?.trim() || !isConfigReady.value) return;
+
+    const { config: configToSave, changed } = mergeChangedConfig(
+      baseline,
+      cloneConfigValue(config),
+      latest,
+    );
+
+    if (!changed) {
+      applyLoadedConfig(latest, gameName);
+      return;
+    }
+
     await ResourceManager.saveGameConfig(gameName, configToSave);
+    applyLoadedConfig(configToSave, gameName);
     debugLog('GameSettingsModal', 'Current config saved.');
   } catch (e) {
     console.error('Failed to save current config:', e);
@@ -287,8 +311,10 @@ const selectBackground = async () => {
 
     if (file) {
       await ResourceManager.setGameBackground(props.gameName, file, (config.backgroundType as "Image" | "Video") || 'Image');
-      Object.assign(config, await ResourceManager.loadGameConfig(props.gameName));
-      configGameName.value = props.gameName?.trim() || '';
+      applyLoadedConfig(
+        await ResourceManager.loadGameConfig(props.gameName),
+        props.gameName?.trim() || '',
+      );
       await loadGames(); // Refresh
     }
   } catch (e) {
@@ -349,16 +375,17 @@ const autoUpdateBackground = async () => {
 
     const refreshed = await ResourceManager.loadGameConfig(targetGameName);
     if (targetGameName !== props.gameName?.trim()) return;
-    Object.assign(config, refreshed);
-    configGameName.value = targetGameName;
+    applyLoadedConfig(refreshed, targetGameName);
 
-    await loadGames();
+    await loadGames({ autoUpdateBackground: false });
     ElMessage.success(t('gameSettingsModal.messages.backgroundUpdated'));
 
     if (appSettings.CurrentGameName === targetGameName) {
       // Force refresh UI if active
       const current = gamesList.find(g => g.name === targetGameName);
-      if (current) await AppStateManager.selectGame(current);
+      if (current) {
+        await AppStateManager.selectGame(current, { autoUpdateBackground: false });
+      }
     }
 
   } catch (e) {

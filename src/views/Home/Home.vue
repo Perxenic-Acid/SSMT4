@@ -200,13 +200,18 @@ const toggleBackgroundVideo = async () => {
 }
 const applyBackgroundAt = async (index: number) => {
   const game = currentGame.value
-  if (!game || !backgroundEntries.value.length) return
-  const normalized = (index + backgroundEntries.value.length) % backgroundEntries.value.length
+  const entries = backgroundEntries.value
+  if (!game || !entries.length) return
+  const normalized = (index + entries.length) % entries.length
+  const selectedEntry = entries[normalized]
+  if (!selectedEntry) return
   AppStateManager.applyBackgroundEntry(game, normalized)
   try {
     const config = await ResourceManager.loadGameConfig(game.name)
-    config.backgroundType = backgroundEntries.value[normalized].type
-    config.selectedBackgroundId = backgroundEntries.value[normalized].id
+    // The current game may change while the config is loading. Persist the
+    // entry captured from the original game instead of rereading reactive state.
+    config.backgroundType = selectedEntry.type
+    config.selectedBackgroundId = selectedEntry.id
     await ResourceManager.saveGameConfig(game.name, config)
   } catch (error) {
     console.warn('Failed to persist selected background', error)

@@ -198,7 +198,10 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         }
 
         const apiUrl = `https://hyp-api.mihoyo.com/hyp/hyp-connect/api/getAllGameBasicInfo?launcher_id=jGHBHlcOq1&language=${getBackgroundApiLanguage()}&game_id=${gameId}`;
-        const resp = await fetch(apiUrl, { method: 'GET' });
+        const resp = await fetch(apiUrl, {
+            method: 'GET',
+            signal: AbortSignal.timeout(20_000),
+        });
         if (!resp.ok) {
             throw new Error(t('resourceManager.messages.requestFailed', { status: resp.status }));
         }

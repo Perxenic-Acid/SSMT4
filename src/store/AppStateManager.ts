@@ -44,6 +44,26 @@ export interface GameInfo {
   showSidebar: boolean
 }
 
+type GameSelectionOptions = {
+  persist?: boolean
+  autoUpdateBackground?: boolean
+  loadRequestId?: number
+}
+
+export function resolveBackgroundIndex(
+  entries: Array<{ id: string; type: string }>,
+  selectedBackgroundId: string | undefined,
+  bgType: string,
+): number {
+  if (entries.length === 0) return 0
+  if (selectedBackgroundId) {
+    const selectedIndex = entries.findIndex(entry => entry.id === selectedBackgroundId)
+    if (selectedIndex >= 0) return selectedIndex
+  }
+  const typeIndex = entries.findIndex(entry => entry.type === bgType)
+  return typeIndex >= 0 ? typeIndex : 0
+}
+
 // Reactive state at module level — NOT returned from store to avoid Pinia ref-unwrapping.
 // External code accesses these directly via AppStateManager.isDrawerOpen / .value etc.
 const isDrawerOpen = ref(false)
@@ -56,6 +76,7 @@ const launchConsoleShortcutError = ref('')
 
 export const useAppStateStore = defineStore('appState', () => {
   const autoUpdateInFlight = new Set<string>()
+  let loadGamesRequestId = 0
   let backgroundFocusRefreshRegistered = false
   let lastBackgroundFocusRefresh = Date.now()
 
@@ -253,9 +274,11 @@ export const useAppStateStore = defineStore('appState', () => {
     }
   }
 
-  async function loadGames() {
+  async function loadGames(options: { autoUpdateBackground?: boolean } = {}) {
+    const requestId = ++loadGamesRequestId
     try {
       const games = await ResourceManager.scanGames()
+      if (requestId !== loadGamesRequestId) return
 
       // 只保留当前支持的游戏:其余游戏的入口从程序中断开,
       // 但底层配置与逻辑仍保留在磁盘/代码中,便于以后恢复。
@@ -285,8 +308,11 @@ export const useAppStateStore = defineStore('appState', () => {
             themePath: entry.themePath ? convertFileSrc(entry.themePath) + `?t=${timestamp}` : undefined,
           })),
           selectedBackgroundId: g.selected_background_id,
-          bgIndex: Math.max(0, (g.background_entries || []).findIndex(entry => g.selected_background_id
-            ? entry.id === g.selected_background_id : entry.type === g.bg_type)),
+          bgIndex: resolveBackgroundIndex(
+            g.background_entries || [],
+            g.selected_background_id,
+            g.bg_type || BGType.Image,
+          ),
           bgType: g.bg_type || BGType.Image,
           showSidebar: g.show_sidebar,
         } as GameInfo
@@ -294,12 +320,18 @@ export const useAppStateStore = defineStore('appState', () => {
 
       appSettings.sidebarGameOrder = reconcileSidebarGameOrder(processed)
 
+      if (requestId !== loadGamesRequestId) return
       gamesList.splice(0, gamesList.length, ...processed)
 
       if (appSettings.CurrentGameName) {
         const current = gamesList.find(g => g.name === appSettings.CurrentGameName)
         if (current) {
-          await selectGame(current, { persist: false })
+          if (requestId !== loadGamesRequestId) return
+          await selectGame(current, {
+            persist: false,
+            autoUpdateBackground: options.autoUpdateBackground,
+            loadRequestId: requestId,
+          })
         } else {
           appSettings.CurrentGameName = 'Default'
           appSettings.bgType = BGType.Image
@@ -318,9 +350,12 @@ export const useAppStateStore = defineStore('appState', () => {
     }
   }
 
-  async function selectGame(game: GameInfo, options: { persist?: boolean } = {}) {
+  async function selectGame(game: GameInfo, options: GameSelectionOptions = {}) {
     await ResourceManager.ensureGameConfigExists(game.name)
-    switchToGame(game)
+    if (options.loadRequestId !== undefined && options.loadRequestId !== loadGamesRequestId) {
+      return
+    }
+    switchToGame(game, options)
 
     // A game determines all subsequent per-game paths. Persist the switch
     // synchronously so closing the app cannot restore the previous game.
@@ -329,7 +364,7 @@ export const useAppStateStore = defineStore('appState', () => {
     }
   }
 
-  function switchToGame(game: GameInfo) {
+  function switchToGame(game: GameInfo, options: GameSelectionOptions = {}) {
     appSettings.CurrentGameName = game.name
     // Keep the legacy/global mirror aligned with the selected game. Consumers
     // that still read CurrentWorkSpace must never observe the previous game's
@@ -348,7 +383,9 @@ export const useAppStateStore = defineStore('appState', () => {
     const selectedEntry = game.backgroundEntries?.[game.bgIndex || 0]
     if (selectedEntry) {
       applyBackgroundEntry(game, game.bgIndex || 0)
-      void autoUpdateBackgroundIfNeeded(game)
+      if (options.autoUpdateBackground !== false) {
+        void autoUpdateBackgroundIfNeeded(game)
+      }
       return
     }
 
@@ -375,7 +412,9 @@ export const useAppStateStore = defineStore('appState', () => {
       }
     }
 
-    void autoUpdateBackgroundIfNeeded(game)
+    if (options.autoUpdateBackground !== false) {
+      void autoUpdateBackgroundIfNeeded(game)
+    }
   }
 
   function applyBackgroundEntry(game: GameInfo, index: number): void {
@@ -458,7 +497,7 @@ export const useAppStateStore = defineStore('appState', () => {
           game.name, preset, (config.backgroundType as BGType) || BGType.Image,
           config.lastBackgroundUrl,
         )
-        await loadGames()
+        await loadGames({ autoUpdateBackground: false })
 
         if (result.changed) {
           ElMessage({

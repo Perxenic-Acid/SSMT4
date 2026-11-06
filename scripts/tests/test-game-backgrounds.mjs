@@ -61,9 +61,10 @@ async function resources(t, options = {}) {
       if (options.fail === 'signing') throw new Error('签名不可用');
       return `${args.url}?auth_key=fresh-signature`;
     } },
-    '@tauri-apps/plugin-http': { fetch: async url => {
+    '@tauri-apps/plugin-http': { fetch: async (url, init = {}) => {
       requests.push(url);
       if (url.includes('getAllGameBasicInfo')) {
+        assert.ok(init.signal, '官网背景列表请求必须带超时信号');
         return {
           ok: true,
           status: 200,
@@ -227,7 +228,46 @@ test('官网返回多个游戏时只采用与目标 game_id 匹配的背景', as
   assert.ok(!h.requests.includes(wrongVideo));
 });
 
-function state(t) {
+test('设置弹窗保存只合并用户实际修改的字段', () => {
+  const { mergeChangedConfig } = load('../../src/store/GameConfigMerge.ts', {});
+  const baseline = {
+    installDir: 'old-dir',
+    launchArgs: 'old-args',
+    backgroundEntries: [{ id: 'old-background' }],
+  };
+  const current = {
+    installDir: 'new-dir',
+    launchArgs: 'old-args',
+    backgroundEntries: [{ id: 'old-background' }],
+  };
+  const latest = {
+    installDir: 'old-dir',
+    launchArgs: 'externally-updated',
+    backgroundEntries: [{ id: 'new-background' }],
+  };
+
+  const result = mergeChangedConfig(baseline, current, latest);
+
+  assert.equal(result.changed, true);
+  assert.equal(result.config.installDir, 'new-dir');
+  assert.equal(result.config.launchArgs, 'externally-updated');
+  assert.equal(
+    JSON.stringify(result.config.backgroundEntries),
+    JSON.stringify([{ id: 'new-background' }]),
+  );
+});
+
+test('设置弹窗没有改动时不会覆盖磁盘新配置', () => {
+  const { mergeChangedConfig } = load('../../src/store/GameConfigMerge.ts', {});
+  const baseline = { installDir: 'old-dir', backgroundEntries: [{ id: 'old' }] };
+  const latest = { installDir: 'new-dir', backgroundEntries: [{ id: 'new' }] };
+  const result = mergeChangedConfig(baseline, baseline, latest);
+
+  assert.equal(result.changed, false);
+  assert.equal(JSON.stringify(result.config), JSON.stringify(latest));
+});
+
+function appStateModule(t) {
   const scope = vue.effectScope();
   t.after(() => scope.stop());
   return scope.run(() => load('../../src/store/AppStateManager.ts', {
@@ -239,7 +279,11 @@ function state(t) {
       AppSettings: class { bgType = 'Image'; bgImage = ''; bgVideo = ''; CurrentGameName = ''; },
     },
     '../i18n': { i18n: { global: { t: key => key } } },
-  }).AppStateManager);
+  }));
+}
+
+function state(t) {
+  return appStateModule(t).AppStateManager;
 }
 
 function game(name = 'WWMI') {
@@ -251,6 +295,17 @@ function game(name = 'WWMI') {
     ],
   };
 }
+
+test('无效选择 ID 时按背景类型回退，而不是固定选择第一项', t => {
+  const h = appStateModule(t);
+  const entries = [
+    { id: 'video', type: 'Video', videoPath: 'asset://video.webm' },
+    { id: 'image', type: 'Image', imagePath: 'asset://image.webp' },
+  ];
+  assert.equal(h.resolveBackgroundIndex(entries, 'missing', 'Image'), 1);
+  assert.equal(h.resolveBackgroundIndex(entries, 'video', 'Image'), 0);
+  assert.equal(h.resolveBackgroundIndex(entries, undefined, 'Video'), 0);
+});
 
 test('解码或播放错误回退海报，保持所选背景以便下次重试', t => {
   const h = state(t), current = game();
