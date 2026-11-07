@@ -85,3 +85,5 @@ BlenderPlugin/
 /scripts/diagnostics/SSMT-AppCrash-*
 # docs/graphics-stack-rhi-integration.md
 docs/SSMT4-鸣潮修复-20261002.zip
+
+components.d.ts
