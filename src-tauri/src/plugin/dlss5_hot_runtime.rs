@@ -6,6 +6,7 @@ use super::{
     gimi_hot_runtime::{
         self, canonical_path, checked_path, ensure_stopped, verify, HotRuntimePlan,
     },
+    graphics_tasks::GraphicsProgress,
     managed_reshade,
     managed_stack::Dlss5RouteScan,
     registry::{game_scope_preset, PluginRegistry},
@@ -67,7 +68,7 @@ struct AssetFile {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadProgress {
-    phase: &'static str,
+    phase: String,
     file: String,
     downloaded_bytes: u64,
     total_bytes: u64,
@@ -468,6 +469,30 @@ pub async fn download_dlss5_hot_runtime(
     route: Option<String>,
     on_progress: Channel<DownloadProgress>,
 ) -> Result<Installation, String> {
+    download_dlss5_hot_runtime_with_progress(
+        game_name,
+        game_executable,
+        profile,
+        route,
+        move |progress| {
+            let _ = on_progress.send(DownloadProgress {
+                phase: progress.phase,
+                file: progress.file,
+                downloaded_bytes: progress.downloaded_bytes,
+                total_bytes: progress.total_bytes,
+            });
+        },
+    )
+    .await
+}
+
+pub(crate) async fn download_dlss5_hot_runtime_with_progress(
+    game_name: String,
+    game_executable: String,
+    profile: String,
+    route: Option<String>,
+    mut on_progress: impl FnMut(GraphicsProgress) + Send,
+) -> Result<Installation, String> {
     let _lock = INSTALL_LOCK
         .try_lock()
         .map_err(|_| "DLSS5 组件正在配置，请稍候")?;
@@ -520,8 +545,8 @@ pub async fn download_dlss5_hot_runtime(
             &cache,
             |bytes| {
                 if bytes == asset.size || last_update.elapsed().as_millis() >= 150 {
-                    let _ = on_progress.send(DownloadProgress {
-                        phase: "downloading",
+                    on_progress(GraphicsProgress {
+                        phase: "downloading".into(),
                         file: asset.url.clone(),
                         downloaded_bytes: completed + bytes,
                         total_bytes,
@@ -531,8 +556,8 @@ pub async fn download_dlss5_hot_runtime(
             },
         )
         .await?;
-        let _ = on_progress.send(DownloadProgress {
-            phase: "extracting",
+        on_progress(GraphicsProgress {
+            phase: "extracting".into(),
             file: asset.url.clone(),
             downloaded_bytes: completed + asset.size,
             total_bytes,

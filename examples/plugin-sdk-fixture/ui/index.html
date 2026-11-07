@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Example Plugin SDK</title>
+    <style>
+      :root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #081015; color: #e9f5f2; }
+      main { width: min(620px, calc(100vw - 48px)); padding: 34px; border: 1px solid #29413c; border-radius: 12px; background: #0d1b1a; }
+      p { color: #99b3ad; line-height: 1.7; }
+      code { color: #7de8c1; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Example Plugin SDK</h1>
+      <p>这个页面由陌生插件包自行提供，不依赖 SSMT 源码中的专用 Vue 组件。</p>
+      <p>服务参数、端口和令牌由通用 ServiceLease 与 ServiceInstance 管理。</p>
+      <p>数据目录：<code id="data">正在读取</code></p>
+      <p>能力桥：<code id="bridge">正在验证</code></p>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.hash.slice(1))
+      const token = params.get('token') || ''
+      const fragment = params.get('serviceKey') || ''
+      let bridgeSequence = 0
+
+      function requestCapability(capability, payload) {
+        const requestId = `sdk-ui-${Date.now()}-${++bridgeSequence}`
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            window.removeEventListener('message', receive)
+            reject(new Error('capability bridge timed out'))
+          }, 5000)
+          function receive(event) {
+            if (event.source !== window.parent
+              || event.data?.type !== 'ssmt:capability-response'
+              || event.data?.protocolVersion !== 1
+              || event.data?.requestId !== requestId) return
+            clearTimeout(timer)
+            window.removeEventListener('message', receive)
+            resolve(event.data)
+          }
+          window.addEventListener('message', receive)
+          window.parent.postMessage({
+            type: 'ssmt:capability-request',
+            protocolVersion: 1,
+            requestId,
+            capability,
+            payload,
+          }, '*')
+        })
+      }
+
+      fetch('/api/context', { headers: { 'X-Editor-Token': token } })
+        .then(response => response.json())
+        .then(data => { document.querySelector('#data').textContent = data.dataRoot || fragment })
+        .catch(() => { document.querySelector('#data').textContent = '服务未连接' })
+
+      const bridgeKey = `sdk-ui-bridge:${Date.now()}`
+      const nonce = `${Date.now()}-${Math.random()}`
+      ;(async () => {
+        try {
+          const setResponse = await requestCapability('plugin.settings.set', { key: bridgeKey, value: { nonce } })
+          if (!setResponse.ok) throw new Error(setResponse.errorCode || 'settings.set failed')
+          const getResponse = await requestCapability('plugin.settings.get', { key: bridgeKey })
+          const roundTrip = getResponse.ok && getResponse.value?.value?.nonce === nonce
+          document.querySelector('#bridge').textContent = roundTrip ? '已验证' : '校验失败'
+          await fetch('/api/bridge-result', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Editor-Token': token,
+            },
+            body: JSON.stringify({
+              ok: roundTrip,
+              key: bridgeKey,
+              value: getResponse.value?.value || null,
+              error: roundTrip ? null : getResponse.errorCode || 'round trip mismatch',
+            }),
+          })
+          await requestCapability('plugin.settings.remove', { key: bridgeKey })
+        } catch (error) {
+          document.querySelector('#bridge').textContent = '失败'
+          await fetch('/api/bridge-result', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Editor-Token': token,
+            },
+            body: JSON.stringify({ ok: false, error: String(error) }),
+          })
+        }
+      })()
+    </script>
+  </body>
+</html>

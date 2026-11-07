@@ -548,6 +548,7 @@ try {
     await setMode(initialMode)
     await setScale(initialScale)
     await clearViewport()
+    await evaluate(`window.__TAURI_INTERNALS__?.invoke('stop_all_plugin_page_services')`)
   } catch (error) {
     recordFailure(`Failed to restore initial UI state: ${error instanceof Error ? error.message : String(error)}`)
   }

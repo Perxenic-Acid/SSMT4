@@ -436,9 +436,11 @@ mod tests {
                 name: "Test Forwarder".to_string(),
                 version: "1.0.0".to_string(),
                 author: "SSMT".to_string(),
+                plugin_api_version: 1,
                 compatibility: PluginCompatibility {
                     ssmt: ">=4.0.0".to_string(),
                     platforms: vec!["windows-x64".to_string()],
+                    plugin_api: None,
                     games: Vec::new(),
                 },
                 contributions: PluginContributions::default(),

@@ -74,6 +74,20 @@ impl PluginSettingsStore {
         Ok(())
     }
 
+    pub fn remove(&mut self, plugin_id: &str, key: &str) -> Result<bool, PluginSettingsError> {
+        validate_key(key)?;
+        let removed = self
+            .state
+            .namespaces
+            .get_mut(plugin_id)
+            .and_then(|namespace| namespace.remove(key))
+            .is_some();
+        if removed {
+            write_state(&self.path, &self.state)?;
+        }
+        Ok(removed)
+    }
+
     pub fn set(
         &mut self,
         plugin_id: &str,
