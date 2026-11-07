@@ -22,6 +22,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use sysinfo::{ProcessRefreshKind, System};
+use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -631,7 +632,6 @@ pub struct InstalledPluginSnapshot {
     pub features: Vec<String>,
 }
 
-const PLAYER_TWEAKS_ID: &str = "ssmt.player-tweaks";
 pub(crate) const NATIVE_INJECTION_RISK_ACK_KEY: &str = "native_injection_risk_ack_v1";
 
 pub(crate) fn has_native_injection_risk_ack(plugin: &super::registry::InstalledPlugin) -> bool {
@@ -655,17 +655,10 @@ fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<Installe
     let preset = game_scope_preset(game_name);
     let scoped = registry.for_game_preset(game_name, &preset);
     let mut plugins = snapshot(&scoped);
-    for (plugin, installed) in plugins.iter_mut().zip(scoped.installed()) {
-        if plugin.manifest.id == PLAYER_TWEAKS_ID {
-            match super::player_tweaks::features(installed, &preset) {
-                Ok(features) => plugin.features = features,
-                Err(_) => {
-                    plugin.enabled = false;
-                    plugin.lifecycle_status = PluginLifecycleStatus::Broken;
-                }
-            }
-        }
-        if !plugin.app_scoped && !plugin.manifest.compatibility.supports_game(&preset) {
+    for plugin in &mut plugins {
+        if !plugin.manifest.supports_current_plugin_api()
+            || (!plugin.app_scoped && !plugin.manifest.compatibility.supports_game(&preset))
+        {
             plugin.enabled = false;
             plugin.lifecycle_status = PluginLifecycleStatus::Incompatible;
         }
@@ -720,6 +713,9 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
 }
 
 fn lifecycle_status(plugin: &super::registry::InstalledPlugin) -> PluginLifecycleStatus {
+    if !plugin.manifest.supports_current_plugin_api() {
+        return PluginLifecycleStatus::Incompatible;
+    }
     let injected = &plugin.manifest.contributions.injected_dlls;
     if !injected.is_empty()
         && (!plugin
@@ -846,15 +842,23 @@ pub fn plugin_capabilities(
 
 #[tauri::command]
 pub fn set_plugin_enabled_for_game(
+    app: tauri::AppHandle,
     game_name: String,
     id: String,
     enabled: bool,
     game_executable: Option<String>,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    if !enabled {
+        app.state::<super::page_runtime::PluginPageRuntime>()
+            .stop_plugin(&id)?;
+    }
     let mut registry =
         PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
     if enabled {
         if let Some(plugin) = registry.find(&id) {
+            if !plugin.manifest.supports_current_plugin_api() {
+                return Err(format!("plugin {id} requires an incompatible Plugin API"));
+            }
             if !plugin.manifest.contributions.injected_dlls.is_empty()
                 && !has_native_injection_risk_ack(plugin)
             {
@@ -899,7 +903,7 @@ pub fn set_plugin_enabled_for_game(
             Dlss5State::Managed(_) | Dlss5State::NotManaged => {}
         }
     }
-    if id == PLAYER_TWEAKS_ID
+    if id == super::star_rail_tweaks::PLUGIN_ID
         && !enabled
         && registry.find(&id).is_some()
         && game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI")
@@ -1109,6 +1113,8 @@ pub fn install_plugin_package(
     if inspection.sha256 != reviewed_sha256.to_ascii_lowercase() {
         return Err("package changed since safety review".into());
     }
+    app.state::<super::page_runtime::PluginPageRuntime>()
+        .stop_plugin(&inspection.manifest.id)?;
     if !inspection.manifest.compatibility.supports(
         &app.package_info().version.to_string(),
         super::SUPPORTED_PLATFORM,
@@ -1160,6 +1166,8 @@ pub fn install_local_plugin(
     if !disclaimer_accepted {
         return Err("local plugin disclaimer must be accepted".into());
     }
+    app.state::<super::page_runtime::PluginPageRuntime>()
+        .stop_plugin(&id)?;
     let directory = super::local_packages::development_directory(cfg!(debug_assertions))
         .ok_or("本地构建包仅限开发模式；请从官方目录或第三方包入口安装插件")?;
     // 本地构建保留 ID 以复用已有贡献，但安装来源仍未验证；不能借此安装任意路径的 ssmt.* 包。
@@ -1189,6 +1197,8 @@ pub async fn install_official_plugin(
     id: String,
     version: String,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
+    app.state::<super::page_runtime::PluginPageRuntime>()
+        .stop_plugin(&id)?;
     let mut registry =
         PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
     official_release::install_official(
@@ -1203,12 +1213,15 @@ pub async fn install_official_plugin(
 
 #[tauri::command]
 pub fn uninstall_plugin(
+    app: tauri::AppHandle,
     plugin_id: String,
     game_name: Option<String>,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
     if any_configured_game_process_running() {
         return Err("请先退出所有游戏，再卸载插件，避免残留已加载的运行时".into());
     }
+    app.state::<super::page_runtime::PluginPageRuntime>()
+        .stop_plugin(&plugin_id)?;
     let plugins_root = crate::config::path_manager::PathManager::ssmt_plugins_folder();
     let global_root = crate::config::path_manager::PathManager::ssmt_global_config_folder();
     uninstall_plugin_from_roots(
@@ -1831,9 +1844,11 @@ mod tests {
             name: "Fixture".to_string(),
             version: "1.0.0".to_string(),
             author: "SSMT".to_string(),
+            plugin_api_version: 1,
             compatibility: PluginCompatibility {
                 ssmt: ">=4.0.0".to_string(),
                 platforms: vec!["windows-x64".to_string()],
+                plugin_api: None,
                 games: Vec::new(),
             },
             contributions: PluginContributions::default(),
@@ -1868,6 +1883,13 @@ mod tests {
             lifecycle_status(&plugin),
             PluginLifecycleStatus::ExternalDependencyMissing
         ));
+        plugin.external_dependencies.clear();
+        plugin.manifest.schema_version = 2;
+        plugin.manifest.compatibility.plugin_api = Some(">=2.0.0 <3.0.0".into());
+        assert!(matches!(
+            lifecycle_status(&plugin),
+            PluginLifecycleStatus::Incompatible
+        ));
     }
 
     #[test]
@@ -1887,9 +1909,11 @@ mod tests {
             name: "Secondary Motion".to_string(),
             version: "3.2.0".to_string(),
             author: "SSMT".to_string(),
+            plugin_api_version: 1,
             compatibility: PluginCompatibility {
                 ssmt: ">=4.2.0".to_string(),
                 platforms: vec!["windows-x64".to_string()],
+                plugin_api: None,
                 games: vec!["EFMI".to_string()],
             },
             contributions: PluginContributions {
@@ -1935,9 +1959,11 @@ mod tests {
                 name: "DLSS5 Integration".to_string(),
                 version: "0.2.1".to_string(),
                 author: "SSMT".to_string(),
+                plugin_api_version: 1,
                 compatibility: PluginCompatibility {
                     ssmt: ">=4.0.0".to_string(),
                     platforms: vec!["windows-x64".to_string()],
+                    plugin_api: None,
                     games: Vec::new(),
                 },
                 contributions: PluginContributions::default(),

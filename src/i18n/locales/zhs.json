@@ -407,6 +407,14 @@
     "localBuild": "本地构建",
     "gameCompatibilityUnspecified": "插件包未列出游戏；以实际兼容性为准。",
     "noFeatures": "该插件没有可配置的功能选项。",
+    "launchPlan": {
+      "checking": "正在检查启动资源冲突…",
+      "title": "启动资源冲突",
+      "summary": "多个已启用插件以相同优先级占用同一游戏资源。宿主不会按加载顺序随机选择，请禁用其中一个插件或调整插件声明的优先级。",
+      "resource": "资源：{resource}",
+      "candidate": "{plugin} · 优先级 {priority}",
+      "error": "无法预览启动计划：{error}"
+    },
     "dlss5SettingsHint": "按当前游戏配置 DLSS5 组件，切换游戏后将显示对应设置。",
     "dlss5SelectGame": "请先在上方选择游戏。",
     "dlss5EnableFirst": "请先为当前游戏启用 DLSS5 插件，再配置组件。",

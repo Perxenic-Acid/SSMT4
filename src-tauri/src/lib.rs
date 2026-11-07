@@ -123,7 +123,8 @@ pub fn run() {
             app.manage(commands::mod_manager::ModWatcher(Mutex::new(None)));
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
             app.manage(commands::launch_shortcut::LaunchConsoleShortcut::default());
-            app.manage(commands::liquid_gravity_probe::LiquidGravityProbeProcess::default());
+            app.manage(plugin::page_runtime::PluginPageRuntime::default());
+            app.manage(plugin::graphics_tasks::GraphicsTaskBroker::default());
 
             if show_window_shortcut_enabled_on_launch(app) {
                 if let Err(error) = register_show_window_shortcut(app.handle()) {
@@ -146,13 +147,25 @@ pub fn run() {
             hoyoplay::hoyoplay_check_launch,
             set_show_window_shortcut_enabled,
             commands::launch_shortcut::set_launch_console_shortcut,
-            commands::liquid_gravity_probe::liquid_gravity_probe_detect,
-            commands::liquid_gravity_probe::start_liquid_gravity_probe_editor,
-            commands::liquid_gravity_probe::stop_liquid_gravity_probe_editor,
             plugin::commands::plugin_registry_snapshot,
             plugin::commands::plugin_registry_snapshot_for_game,
             plugin::commands::plugin_ui_routes,
             plugin::commands::plugin_capabilities,
+            plugin::page_runtime::plugin_page_catalog,
+            plugin::page_runtime::acquire_static_plugin_page_lease,
+            plugin::page_runtime::release_static_plugin_page_lease,
+            plugin::page_runtime::start_plugin_page_service,
+            plugin::page_runtime::acquire_plugin_page_lease,
+            plugin::page_runtime::release_plugin_page_lease,
+            plugin::page_runtime::stop_plugin_page_service,
+            plugin::page_runtime::stop_plugin_page_services_for_plugin,
+            plugin::page_runtime::stop_all_plugin_page_services,
+            plugin::page_runtime::plugin_page_session_status,
+            plugin::page_runtime::plugin_page_service_status,
+            plugin::capability_broker::plugin_capability_catalog,
+            plugin::capability_broker::plugin_capability_request,
+            plugin::capability_broker::plugin_capability_request_for_lease,
+            plugin::launch_plan::plugin_launch_plan_preview,
             plugin::commands::set_plugin_enabled_for_game,
             plugin::player_tweaks::prepare_player_tweaks_launch,
             plugin::star_rail_tweaks::prepare_star_rail_player_tweaks,
@@ -173,10 +186,7 @@ pub fn run() {
             plugin::dlss5_hot_runtime::catalog::select_dlss5_hot_runtime,
             plugin::dlss5_hot_runtime::catalog::remove_dlss5_hot_runtime,
             plugin::commands::prepare_plugin_host_config,
-            plugin::secondary_motion::secondary_motion_snapshot,
-            plugin::secondary_motion::update_secondary_motion_settings,
-            plugin::secondary_motion::update_secondary_motion_character,
-            plugin::secondary_motion::plugin_launch_injected_dlls,
+            plugin::injected_dlls::plugin_launch_injected_dlls,
             plugin::commands::inspect_graphics_launch,
             plugin::commands::inspect_dlss5_game_state,
             plugin::commands::inspect_dlss5_last_run,

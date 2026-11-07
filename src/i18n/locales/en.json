@@ -408,6 +408,14 @@
     "localBuild": "Local build",
     "gameCompatibilityUnspecified": "No games listed by the package; check actual compatibility.",
     "noFeatures": "This plugin has no configurable options here.",
+    "launchPlan": {
+      "checking": "Checking launch resource conflicts…",
+      "title": "Launch resource conflict",
+      "summary": "Multiple enabled plugins claim the same game resource at equal priority. The host will not choose based on load order; disable one plugin or change its declared priority.",
+      "resource": "Resource: {resource}",
+      "candidate": "{plugin} · priority {priority}",
+      "error": "Could not preview the launch plan: {error}"
+    },
     "dlss5SettingsHint": "Configure DLSS5 components for the selected game. Switching games shows the corresponding settings.",
     "dlss5SelectGame": "Select a game above first.",
     "dlss5EnableFirst": "Enable DLSS5 for this game before configuring its components.",

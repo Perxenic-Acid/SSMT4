@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { exists, mkdir, copyFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
+import { exists, mkdir, copyFile, remove } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ResourceManager } from "../store/ResourceManager";
@@ -10,8 +10,6 @@ import { i18n } from "../i18n";
 import { getEffectiveUseUpx, type GameConfig, type LaunchProgramConfig } from "../store/GameConfig";
 import type { AppSettings } from "../store/AppSettings";
 import { debugLog, debugWarn } from "../utils/debugLog";
-import { serializePlayerTweaksCamera } from '../plugin/playerTweaksCamera';
-import { serializePlayerTweaksGameplay } from '../plugin/playerTweaksGameplay';
 import { isExistingLaunchFile } from './LaunchPath';
 import { withTimeout } from './UpdateCheckUtils';
 
@@ -975,39 +973,17 @@ export class LaunchGame {
     ): Promise<void> {
         const dllTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.dll");
         const configTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.ini");
-        const removeStaleDll = async () => {
-            if (await exists(dllTargetPath)) await remove(dllTargetPath);
-        };
-        let assets: { dll: string } | null = null;
+        // Legacy versions copied the package DLL and generated INI into the
+        // 3Dmigoto root. New package versions are injected directly and keep
+        // their generated config beside the package DLL.
+        if (await exists(dllTargetPath)) await remove(dllTargetPath);
+        if (await exists(configTargetPath)) await remove(configTargetPath);
         try {
-            assets = await invoke<{ dll: string } | null>("prepare_player_tweaks_launch", {
+            await invoke<unknown>("prepare_player_tweaks_launch", {
                 gameName, gamePreset: gamePreset || "",
             });
         } catch (error) {
             ElMessage.warning({ message: `Player Tweaks 准备失败，本次继续普通启动：${String(error)}`, showClose: true, duration: 12000 });
-        }
-        if (!assets) {
-            await removeStaleDll();
-            return;
-        }
-        const dllSourcePath = assets.dll;
-        try {
-            const gameConfig = await ResourceManager.loadGameConfig(gameName);
-            await writeTextFile(configTargetPath,
-                serializePlayerTweaksCamera(gameConfig?.playerTweaksCamera) +
-                serializePlayerTweaksGameplay(gameConfig?.playerTweaksGameplay));
-        } catch (error) {
-            await removeStaleDll();
-            console.warn('Failed to prepare Player Tweaks config:', error);
-            ElMessage.warning(`Player Tweaks 配置写入失败，已跳过本次注入：${String(error)}`);
-            return;
-        }
-        try {
-            await copyFile(dllSourcePath, dllTargetPath);
-        } catch (error) {
-            await removeStaleDll();
-            console.warn('Failed to deploy Player Tweaks:', error);
-            ElMessage.warning(`Player Tweaks 部署失败，已跳过本次注入：${String(error)}`);
         }
     }
 

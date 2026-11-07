@@ -301,13 +301,13 @@ pub fn prepare_star_rail_player_tweaks(game_name: String) -> Result<bool, String
     if !registry.game_enabled(&game_name, PLUGIN_ID) {
         return Ok(false);
     }
-    let plugin = registry.find(PLUGIN_ID).ok_or("Player Tweaks 未安装")?;
-    if !super::player_tweaks::features(plugin, "SRMI")?
-        .iter()
-        .any(|feature| feature == "fps-120")
-    {
-        return Ok(false);
-    }
+    registry.find(PLUGIN_ID).ok_or("Player Tweaks 未安装")?;
+    let settings =
+        super::data_store::ScopedDataStore::for_plugin(PLUGIN_ID, &game_name, "PlayerTweaks")?
+            .read("star-rail.json")
+            .map_err(|error| format!("读取崩铁 Player Tweaks 设置失败：{error}"))?;
+    let settings: Value = serde_json::from_str(&settings)
+        .map_err(|error| format!("崩铁 Player Tweaks 设置无效：{error}"))?;
     let _lock = STATE_LOCK.lock().map_err(|_| "崩铁 FPS 设置锁不可用")?;
     if game_name.contains(['\\', '/', ':'])
         || Path::new(&game_name).components().count() != 1
@@ -332,8 +332,8 @@ pub fn prepare_star_rail_player_tweaks(game_name: String) -> Result<bool, String
     {
         return Ok(false);
     }
-    if config
-        .pointer("/playerTweaksGameplay/fpsUnlock")
+    if settings
+        .pointer("/gameplay/fpsUnlock")
         .and_then(Value::as_bool)
         == Some(false)
     {

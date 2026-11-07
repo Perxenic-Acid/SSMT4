@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "id": "example.codex.launch-alpha",
+  "name": "Launch Plan Alpha",
+  "version": "1.0.0",
+  "author": "Example",
+  "compatibility": {
+    "ssmt": ">=4.2.2",
+    "pluginApi": ">=1.0.0 <2.0.0",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "EFMI"
+    ]
+  },
+  "contributions": {
+    "launchHooks": [
+      {
+        "id": "install-proxy",
+        "priority": 100,
+        "actions": [
+          {
+            "type": "file-copy",
+            "source": "payload/proxy.dll",
+            "target": "ssmt-fixture-proxy.dll",
+            "sha256": "16ea89164b967937b6004f61253e8de2515425b3ab51189c7dacec77ecfe2b2c",
+            "resource": "proxy:fixture"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write"
+  ]
+}

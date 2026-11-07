@@ -6,7 +6,6 @@ import Home from '../views/Home/Home.vue'
 import PageLoading from '../components/PageLoading.vue'
 import { PathHelper } from '../helper/PathHelper'
 import { i18n } from '../i18n'
-import { LIQUID_GRAVITY_PROBE_ROUTE } from '../plugin/liquidGravityProbe'
 
 const t = i18n.global.t
 
@@ -34,7 +33,6 @@ const loadXianZun = () => import('../views/XianZun/XianZun.vue')
 const loadUIBuilder = () => import('../views/UIBuilder/UIBuilder.vue')
 const loadTextureModMaker = () => import('../views/TextureModMaker/TextureModMaker.vue')
 const loadPluginMarketplace = () => import('../views/PluginMarketplace/PluginMarketplace.vue')
-const loadLiquidGravityProbeHost = () => import('../views/LiquidGravityProbe/LiquidGravityProbeHost.vue')
 
 const WorkPage = asyncPage(loadWorkPage)
 const ModsManagement = asyncPage(loadModsManagement)
@@ -47,7 +45,6 @@ const XianZun = asyncPage(loadXianZun)
 const UIBuilder = asyncPage(loadUIBuilder)
 const TextureModMaker = asyncPage(loadTextureModMaker)
 const PluginMarketplace = asyncPage(loadPluginMarketplace)
-const LiquidGravityProbe = asyncPage(loadLiquidGravityProbeHost)
 
 /**
  * Warm the route chunks in the background once the app has started, so the
@@ -89,7 +86,10 @@ const routes = [
   { path: '/ui-builder', name: 'UIBuilder', component: UIBuilder, meta: { title: 'UI Builder', requiresGame: false } },
   { path: '/texture-mod-maker', name: 'TextureModMaker', component: TextureModMaker, meta: { title: 'Texture Mod Maker', requiresGame: true } },
   { path: '/plugins', name: 'PluginMarketplace', component: PluginMarketplace, meta: { title: 'Plugin Marketplace', requiresGame: false } },
-  { path: LIQUID_GRAVITY_PROBE_ROUTE, name: 'LiquidGravityProbe', component: LiquidGravityProbe, meta: { title: 'Liquid Gravity Probe', requiresGame: true } },
+  {
+    path: '/plugins/liquid-gravity-probe',
+    redirect: { name: 'PluginMarketplace', query: { plugin: 'ssmt.liquid-gravity-probe' } },
+  },
   {
     path: '/plugins/hoyoshade',
     name: 'HoYoShadeSettings',
@@ -104,7 +104,7 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
-  const needMigotoPath = new Set(['WorkPage', 'MarkTextureFull', 'TextureModMaker', 'LiquidGravityProbe'])
+  const needMigotoPath = new Set(['WorkPage', 'MarkTextureFull', 'TextureModMaker'])
   if (!needMigotoPath.has(String(to.name ?? ''))) {
     return true
   }

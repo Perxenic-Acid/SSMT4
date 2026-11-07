@@ -143,6 +143,16 @@ pub fn inspect_ssmtpkg(archive_path: &Path) -> Result<PackageInspection, Package
             require_package_file(temporary.path(), config)?;
         }
     }
+    for page in &manifest.contributions.pages {
+        if let Some(path) = page.path() {
+            require_package_file(temporary.path(), path)?;
+        }
+        if let super::PluginPageContribution::LocalService { service, .. } = page {
+            if !service.executable.contains("${") {
+                require_package_file(temporary.path(), &service.executable)?;
+            }
+        }
+    }
     // UI page paths are metadata keys resolved by the trusted first-party UI registry.
     for adapter in &manifest.contributions.launcher_adapters {
         if !adapter.executable.contains("${") {
@@ -152,6 +162,27 @@ pub fn inspect_ssmtpkg(archive_path: &Path) -> Result<PackageInspection, Package
     for manager in &manifest.contributions.external_managers {
         if !manager.executable.contains("${") {
             require_package_file(temporary.path(), &manager.executable)?;
+        }
+    }
+    for hook in &manifest.contributions.launch_hooks {
+        for action in &hook.actions {
+            if let super::LaunchHookAction::FileCopy { source, sha256, .. } = action {
+                require_package_file(temporary.path(), source)?;
+                verify_package_file_sha256(temporary.path(), source, sha256)?;
+            }
+        }
+    }
+    for data in &manifest.contributions.data_directories {
+        if data.seed_from_package && !temporary.path().join(&data.package_path).is_dir() {
+            return Err(PackageInstallError::InvalidArchive(format!(
+                "declared data directory is missing: {}",
+                data.package_path
+            )));
+        }
+    }
+    for profile in &manifest.contributions.graphics_profiles {
+        if let Some(config) = &profile.config {
+            require_package_file(temporary.path(), config)?;
         }
     }
     let mut file_count = 0usize;
@@ -182,6 +213,31 @@ fn require_package_file(root: &Path, relative: &str) -> Result<(), PackageInstal
     if !root.join(relative).is_file() {
         return Err(PackageInstallError::InvalidArchive(format!(
             "declared contribution is missing: {relative}"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_package_file_sha256(
+    root: &Path,
+    relative: &str,
+    expected: &str,
+) -> Result<(), PackageInstallError> {
+    let path = root.join(relative);
+    let mut file = File::open(&path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let actual = format!("{:x}", digest.finalize());
+    if actual != expected.to_ascii_lowercase() {
+        return Err(PackageInstallError::HashMismatch(format!(
+            "launch source {relative} is {actual}, expected {expected}"
         )));
     }
     Ok(())
@@ -557,6 +613,62 @@ mod tests {
         assert!(matches!(
             inspect_ssmtpkg(&archive),
             Err(PackageInstallError::InvalidArchive(_))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspection_verifies_launch_hook_source_hash() {
+        let root = root("launch-hook");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("plugin.ssmtpkg");
+        let expected = format!("{:x}", Sha256::digest(b"payload"));
+        let manifest = format!(
+            r#"{{
+              "schemaVersion":2,
+              "id":"thirdparty.launch",
+              "name":"Launch",
+              "version":"1.0.0",
+              "author":"Other",
+              "compatibility":{{
+                "ssmt":">=4.2.2",
+                "pluginApi":">=1.0.0 <2.0.0",
+                "platforms":["windows-x64"],
+                "games":["EFMI"]
+              }},
+              "contributions":{{
+                "launchHooks":[{{
+                  "id":"proxy",
+                  "actions":[{{
+                    "type":"file-copy",
+                    "source":"payload/proxy.dll",
+                    "target":"dxgi.dll",
+                    "sha256":"{expected}"
+                  }}]
+                }}]
+              }},
+              "permissions":["filesystem.read","filesystem.write"]
+            }}"#
+        );
+        zip_fixture(
+            &archive,
+            &[
+                ("ssmt-plugin.json", manifest.as_bytes()),
+                ("payload/proxy.dll", b"payload"),
+            ],
+        );
+        assert!(inspect_ssmtpkg(&archive).is_ok());
+        let wrong = manifest.replace(&expected, &"0".repeat(64));
+        zip_fixture(
+            &archive,
+            &[
+                ("ssmt-plugin.json", wrong.as_bytes()),
+                ("payload/proxy.dll", b"payload"),
+            ],
+        );
+        assert!(matches!(
+            inspect_ssmtpkg(&archive),
+            Err(PackageInstallError::HashMismatch(_))
         ));
         fs::remove_dir_all(root).unwrap();
     }

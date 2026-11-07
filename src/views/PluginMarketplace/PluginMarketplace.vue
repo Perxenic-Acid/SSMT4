@@ -26,19 +26,11 @@ import {
 import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 import { notifyPluginRegistryChanged } from '../../plugin/pluginRegistryEvents'
-import { LIQUID_GRAVITY_PROBE_PLUGIN_ID } from '../../plugin/liquidGravityProbe'
-import {
-  acceptLiquidGravityProbeConsent,
-  declineLiquidGravityProbeConsent,
-  hasLiquidGravityProbeConsent,
-  setLiquidGravityProbeEnabled,
-} from '../../plugin/liquidGravityProbeConsent'
 import { AppStateManager } from '../../store/AppStateManager'
 import { getGamePresetDisplayName } from '../../store/GamePreset'
 import { ResourceManager } from '../../store/ResourceManager'
 import PluginCompatibilityPanel from './PluginCompatibilityPanel.vue'
 import PluginPermissionList from './PluginPermissionList.vue'
-import LiquidGravityProbeDisclaimer from '../../components/LiquidGravityProbeDisclaimer.vue'
 import {
   orderedPermissions,
   permissionDefinitionFor,
@@ -46,17 +38,11 @@ import {
   versionRequirementState,
 } from './pluginMarketplaceModel'
 
-const PlayerTweaksCameraSettings = defineAsyncComponent(
-  () => import('../../plugin/components/PlayerTweaksCameraSettings.vue'),
-)
-const PlayerTweaksGameplaySettings = defineAsyncComponent(
-  () => import('../../plugin/components/PlayerTweaksGameplaySettings.vue'),
-)
 const Dlss5GraphicsSettings = defineAsyncComponent(
   () => import('../../plugin/components/Dlss5GraphicsSettings.vue'),
 )
-const SecondaryMotionSettings = defineAsyncComponent(
-  () => import('../../plugin/components/SecondaryMotionSettings.vue'),
+const PluginPageHost = defineAsyncComponent(
+  () => import('../../plugin/components/PluginPageHost.vue'),
 )
 
 type DependencyStatus = 'missing' | 'invalid' | 'ready'
@@ -81,14 +67,36 @@ interface PluginManifest {
   version: string
   author: string
   description?: string
-  compatibility?: { ssmt?: string; platforms?: string[]; games?: string[] }
+  schemaVersion?: number
+  pluginApiVersion?: number
+  compatibility?: { ssmt?: string; pluginApi?: string; platforms?: string[]; games?: string[] }
   permissions: string[]
   externalDependencies: ExternalDependency[]
   contributions?: {
     hostExtensions?: Array<{ id: string; settingsComponent?: string | null }>
     runtimePlugins?: Array<{ path: string }>
     injectedDlls?: Array<{ path: string }>
+    pages?: Array<{ id: string; title: string; kind: string }>
+    launchHooks?: Array<{ id: string; priority: number; actions: Array<{ type: string; target?: string }> }>
   }
+}
+
+interface LaunchPlanCandidate {
+  pluginId: string
+  pluginVersion: string
+  hookId: string
+  priority: number
+  target?: string | null
+}
+
+interface LaunchResourceConflict {
+  resourceKey: string
+  reason: string
+  candidates: LaunchPlanCandidate[]
+}
+
+interface LaunchPlanPreview {
+  conflicts: LaunchResourceConflict[]
 }
 
 interface InstalledPlugin {
@@ -170,6 +178,9 @@ const searchQuery = ref('')
 const officialOnly = ref(false)
 const compatibleOnly = ref(false)
 const selectedId = ref(typeof route.query.plugin === 'string' ? route.query.plugin : '')
+watch(() => route.query.plugin, plugin => {
+  if (typeof plugin === 'string' && plugin) selectedId.value = plugin
+})
 const installed = ref<InstalledPlugin[]>([])
 const installedGameName = ref('')
 const loading = ref(false)
@@ -184,9 +195,6 @@ const logLoading = ref(false)
 const riskDialogOpen = ref(false)
 const riskAccepted = ref(false)
 const riskPlugin = ref<InstalledPlugin | null>(null)
-const liquidDisclaimerOpen = ref(false)
-const liquidDisclaimerBusy = ref(false)
-const liquidDisclaimerPlugin = ref<InstalledPlugin | null>(null)
 const NATIVE_INJECTION_RISK_ACK_KEY = 'native_injection_risk_ack_v1'
 const settingsSectionRef = ref<HTMLElement | null>(null)
 const settingsAttention = ref(false)
@@ -204,19 +212,25 @@ const installedById = computed(() => {
 })
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
 const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
+const selectedPages = computed(() => selectedPlugin.value?.manifest.contributions?.pages ?? [])
+const selectedLaunchHooks = computed(() => selectedPlugin.value?.manifest.contributions?.launchHooks ?? [])
 const selectedInjectedDlls = computed(() => selectedPlugin.value?.manifest.contributions?.injectedDlls ?? [])
 const selectedRuntimePlugins = computed(() => selectedPlugin.value?.manifest.contributions?.runtimePlugins ?? [])
 const selectedInjectionComponents = computed(() => [...selectedRuntimePlugins.value, ...selectedInjectedDlls.value])
+const launchPlanPreview = ref<LaunchPlanPreview | null>(null)
+const launchPlanLoading = ref(false)
+const launchPlanError = ref('')
+const launchPlanConflicts = computed(() => {
+  const pluginId = selectedPlugin.value?.manifest.id
+  if (!pluginId || !selectedLaunchHooks.value.length) return []
+  return (launchPlanPreview.value?.conflicts ?? []).filter(conflict =>
+    conflict.candidates.some(candidate => candidate.pluginId === pluginId))
+})
+let launchPlanRequestId = 0
 const selectedPermissions = computed(() => orderedPermissions([
   ...(selectedPlugin.value?.manifest.permissions ?? []),
   ...(selectedEntry.value?.permissions ?? []),
 ]))
-const originalProjectUrls: Record<string, string> = {
-  'ssmt.secondary-motion': 'https://github.com/Sp1cHless/Arknights-Endfield-Plugin-Secondary-bodyphysics',
-}
-const selectedProjectUrl = computed(() => selectedEntry.value
-  ? originalProjectUrls[selectedEntry.value.id] ?? ''
-  : '')
 // 已安装版本可能与目录中的待更新版本不同，操作必须使用实际安装的依赖声明。
 const selectedDependencies = computed(() => selectedPlugin.value?.manifest.externalDependencies ?? selectedEntry.value?.externalDependencies ?? [])
 const dependencyActionsEnabled = computed(() => !!selectedPlugin.value?.enabled && !loading.value
@@ -509,7 +523,7 @@ const selectedCompatibilityItems = computed<PluginCompatibilityItem[]>(() => {
     {
       id: 'settings',
       label: t('pluginMarketplace.compatibility.rows.settings'),
-      value: selectedSettings.value.some(Boolean)
+      value: selectedSettings.value.some(Boolean) || selectedPages.value.length > 0
         ? t('pluginMarketplace.compatibility.values.settingsAvailable')
         : t('pluginMarketplace.compatibility.values.settingsUnavailable'),
       state: 'supported',
@@ -582,6 +596,32 @@ const refreshInstalled = async (): Promise<boolean> => {
     if (requestId === refreshRequestId) loading.value = false
   }
   return succeeded
+}
+
+const refreshLaunchPlanPreview = async () => {
+  const requestId = ++launchPlanRequestId
+  const plugin = selectedPlugin.value
+  if (!plugin || !selectedGameName.value || !plugin.enabled || !selectedLaunchHooks.value.length) {
+    launchPlanPreview.value = null
+    launchPlanError.value = ''
+    launchPlanLoading.value = false
+    return
+  }
+  launchPlanLoading.value = true
+  launchPlanError.value = ''
+  try {
+    const preview = await invoke<LaunchPlanPreview>('plugin_launch_plan_preview', {
+      gameName: selectedGameName.value,
+    })
+    if (requestId === launchPlanRequestId) launchPlanPreview.value = preview
+  } catch (error) {
+    if (requestId === launchPlanRequestId) {
+      launchPlanPreview.value = null
+      launchPlanError.value = String(error)
+    }
+  } finally {
+    if (requestId === launchPlanRequestId) launchPlanLoading.value = false
+  }
 }
 
 const refreshCatalog = async (): Promise<boolean> => {
@@ -774,15 +814,6 @@ const applyPluginToggle = async (plugin: InstalledPlugin) => {
 }
 
 const togglePlugin = async (plugin: InstalledPlugin) => {
-  if (
-    !plugin.enabled
-    && plugin.manifest.id === LIQUID_GRAVITY_PROBE_PLUGIN_ID
-    && !await hasLiquidGravityProbeConsent()
-  ) {
-    liquidDisclaimerPlugin.value = plugin
-    liquidDisclaimerOpen.value = true
-    return
-  }
   if (!plugin.enabled && plugin.manifest.permissions.includes('native.inject')) {
     riskPlugin.value = plugin
     riskAccepted.value = false
@@ -790,41 +821,6 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
     return
   }
   await applyPluginToggle(plugin)
-}
-
-const acceptLiquidDisclaimer = async () => {
-  const plugin = liquidDisclaimerPlugin.value
-  if (!plugin || liquidDisclaimerBusy.value) return
-  liquidDisclaimerBusy.value = true
-  try {
-    await acceptLiquidGravityProbeConsent()
-    liquidDisclaimerOpen.value = false
-    await applyPluginToggle(plugin)
-  } catch (error) {
-    ElMessage.error(String(error))
-  } finally {
-    liquidDisclaimerBusy.value = false
-    liquidDisclaimerPlugin.value = null
-  }
-}
-
-const declineLiquidDisclaimer = async () => {
-  if (liquidDisclaimerBusy.value) return
-  liquidDisclaimerBusy.value = true
-  try {
-    await declineLiquidGravityProbeConsent()
-    if (selectedGameName.value) {
-      await setLiquidGravityProbeEnabled(selectedGameName.value, false)
-      await refreshInstalled()
-    }
-    liquidDisclaimerOpen.value = false
-    ElMessage.info('已停用 Liquid Gravity Probe')
-  } catch (error) {
-    ElMessage.error(String(error))
-  } finally {
-    liquidDisclaimerBusy.value = false
-    liquidDisclaimerPlugin.value = null
-  }
 }
 
 const uninstallPlugin = async () => {
@@ -928,8 +924,7 @@ const clearSelectedPluginLog = async () => {
 
 const openPluginSettings = async () => {
   if (selectedSettings.value.includes('ssmt.dlss5.settings')
-    || selectedSettings.value.includes('ssmt.player-tweaks.settings')
-    || selectedSettings.value.includes('ssmt.secondary-motion.settings')) {
+    || selectedPages.value.length > 0) {
     detailTab.value = 'features'
     settingsAttention.value = false
     await nextTick()
@@ -942,15 +937,6 @@ const openPluginSettings = async () => {
   }
   if (selectedSettings.value.includes('ssmt.reshade.settings')) {
     detailTab.value = 'dependencies'
-  }
-}
-
-const openOriginalProject = async () => {
-  if (!selectedProjectUrl.value) return
-  try {
-    await openUrl(selectedProjectUrl.value)
-  } catch (error) {
-    ElMessage.error(t('pluginMarketplace.messages.projectLinkFailed', { error: String(error) }))
   }
 }
 
@@ -990,6 +976,13 @@ watch(visibleEntries, (entries) => {
   if (!entries.some(entry => entry.id === selectedId.value)) selectedId.value = entries[0]?.id ?? ''
 })
 watch(selectedId, () => { detailTab.value = 'features' })
+watch([
+  () => selectedPlugin.value?.manifest.id,
+  () => selectedPlugin.value?.manifest.version,
+  () => selectedPlugin.value?.enabled,
+  () => selectedGameName.value,
+  () => installed.value,
+], () => void refreshLaunchPlanPreview())
 
 onMounted(async () => {
   initialized = true
@@ -999,6 +992,7 @@ onMounted(async () => {
     console.warn('Failed to read app version for plugin marketplace', error)
   }
   await refreshAll()
+  void refreshLaunchPlanPreview()
 })
 </script>
 
@@ -1201,31 +1195,39 @@ onMounted(async () => {
               class="detail-section"
               :class="{ 'settings-attention': settingsAttention }"
             >
-              <template v-if="selectedEntry.id === LIQUID_GRAVITY_PROBE_PLUGIN_ID">
-                <section class="liquid-market-disclaimer">
-                  <header class="liquid-market-disclaimer-header">
-                    <span class="liquid-market-disclaimer-icon" aria-hidden="true"><InfoFilled /></span>
-                    <div>
-                      <h3>使用风险与免责声明</h3>
-                      <p>启用前请确认以下风险。详细声明也会在首次启动插件时弹出并等待选择。</p>
-                    </div>
-                  </header>
+              <section v-if="launchPlanLoading" class="launch-plan-status">
+                {{ t('pluginMarketplace.launchPlan.checking') }}
+              </section>
+              <section v-else-if="launchPlanConflicts.length" class="launch-plan-conflict" role="alert">
+                <header>
+                  <WarningFilled aria-hidden="true" />
+                  <strong>{{ t('pluginMarketplace.launchPlan.title') }}</strong>
+                </header>
+                <p>{{ t('pluginMarketplace.launchPlan.summary') }}</p>
+                <article v-for="conflict in launchPlanConflicts" :key="conflict.resourceKey">
+                  <code>{{ t('pluginMarketplace.launchPlan.resource', { resource: conflict.resourceKey }) }}</code>
+                  <span>{{ conflict.reason }}</span>
                   <ul>
-                    <li>插件会修改对应 Mod 的 INI、配置和运行时资源。使用前请自行备份原始 Mod；本插件不保留持久化备份。</li>
-                    <li>错误配置、游戏更新、第三方 Mod 冲突或性能不足可能导致效果异常、卡顿、闪退或配置损坏，请先在单人、离线环境测试。</li>
-                    <li>在线游戏、竞技环境和成人内容须自行遵守当地法律、游戏条款及平台规则；账号处罚、封禁和内容责任由使用者承担。</li>
-                    <li>本项目为随缘维护，不承诺固定更新频率、问题响应、兼容性修复或长期支持。</li>
+                    <li v-for="candidate in conflict.candidates"
+                      :key="`${candidate.pluginId}:${candidate.hookId}`">
+                      {{ t('pluginMarketplace.launchPlan.candidate', {
+                        plugin: `${candidate.pluginId}@${candidate.pluginVersion}`,
+                        priority: candidate.priority,
+                      }) }}
+                    </li>
                   </ul>
-                  <details class="liquid-market-disclaimer-details">
-                    <summary>查看完整免责声明</summary>
-                    <div>
-                      <p>本插件是非官方社区工具，与游戏开发商、发行商、平台运营方及第三方 Mod 作者无隶属、授权或背书关系。</p>
-                      <p>插件不保证第三方模型、贴图、音频或成人内容的合法性、安全性、版权状态和兼容性。使用者应自行确认来源与授权范围。</p>
-                      <p>插件按“现状”提供，不作持续兼容、无错误或不中断运行的担保。在适用法律允许的范围内，作者与贡献者不对数据丢失、设备损坏、账号处罚、内容损失或间接损失承担责任。</p>
-                    </div>
-                  </details>
-                </section>
-              </template>
+                </article>
+              </section>
+              <section v-else-if="launchPlanError" class="launch-plan-status is-error">
+                {{ t('pluginMarketplace.launchPlan.error', { error: launchPlanError }) }}
+              </section>
+              <PluginPageHost
+                v-if="selectedPlugin && selectedPages.length"
+                :key="`${selectedPlugin.manifest.id}:${selectedPlugin.manifest.version}:${selectedGameName}`"
+                :plugin-id="selectedPlugin.manifest.id"
+                :game-name="selectedGameName"
+                :enabled="selectedPlugin.enabled && selectedPlugin.lifecycleStatus !== 'incompatible'"
+              />
               <template v-else-if="selectedSettings.includes('ssmt.dlss5.settings') && selectedPlugin">
                 <p class="section-hint">{{ t('pluginMarketplace.dlss5SettingsHint') }}</p>
                 <div v-if="!selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5SelectGame') }}</div>
@@ -1235,24 +1237,6 @@ onMounted(async () => {
                 <Dlss5GraphicsSettings v-else-if="graphicsTargetExe"
                   :game-name="selectedGameName" :target-exe-path="graphicsTargetExe" />
                 <div v-else class="muted-copy">{{ t('pluginMarketplace.dlss5ConfigureTarget') }}</div>
-              </template>
-              <template v-else-if="selectedSettings.includes('ssmt.player-tweaks.settings') && selectedPlugin && installedGameName === selectedGameName && selectedPlugin.lifecycleStatus !== 'incompatible'">
-                <PlayerTweaksCameraSettings
-                  v-if="selectedPlugin.features?.includes('camera')"
-                  :game-name="selectedGameName"
-                  :enabled="selectedPlugin.enabled"
-                />
-                <PlayerTweaksGameplaySettings
-                  :game-name="selectedGameName"
-                  :enabled="selectedPlugin.enabled"
-                  :registry-fps="selectedPlugin.features?.includes('fps-120') || false"
-                />
-              </template>
-              <template v-else-if="selectedSettings.includes('ssmt.secondary-motion.settings') && selectedPlugin && installedGameName === selectedGameName && selectedPlugin.lifecycleStatus !== 'incompatible'">
-                <SecondaryMotionSettings
-                  :plugin-id="selectedPlugin.manifest.id"
-                  :game-name="selectedGameName"
-                />
               </template>
               <template v-else>
                 <div class="muted-copy">{{ t('pluginMarketplace.noFeatures') }}</div>
@@ -1336,16 +1320,6 @@ onMounted(async () => {
                   <dt>{{ t('pluginMarketplace.injectionComponents') }}</dt>
                   <dd>{{ selectedInjectionComponents.map(item => item.path).join(' · ') }}</dd>
                 </template>
-                <template v-if="selectedProjectUrl">
-                  <dt>{{ t('pluginMarketplace.originalProject') }}</dt>
-                  <dd>
-                    <el-button link type="primary" @click="openOriginalProject">
-                      Sp1cHless / Arknights-Endfield-Plugin-Secondary-bodyphysics ↗
-                    </el-button>
-                  </dd>
-                  <dt>{{ t('pluginMarketplace.maintenance') }}</dt>
-                  <dd>{{ t('pluginMarketplace.maintenanceNote') }}</dd>
-                </template>
               </dl>
               <h3>{{ t('pluginMarketplace.sections.supportedGames') }}</h3>
               <div class="tag-list">
@@ -1385,13 +1359,6 @@ onMounted(async () => {
         </el-button>
       </template>
     </el-dialog>
-
-    <LiquidGravityProbeDisclaimer
-      :open="liquidDisclaimerOpen"
-      :busy="liquidDisclaimerBusy"
-      @accept="acceptLiquidDisclaimer"
-      @decline="declineLiquidDisclaimer"
-    />
 
     <el-dialog v-model="logDialogOpen" :title="t('pluginMarketplace.logTitle', { name: logPlugin?.name ?? '' })"
       width="min(760px, calc(100vw - 36px))">
@@ -1597,75 +1564,6 @@ onMounted(async () => {
 .native-risk-dialog p { margin: 8px 0; }
 .native-risk-dialog ul { padding: 10px 12px 10px 30px; margin: 10px 0; border: 1px solid var(--t-warning-border); border-radius: 8px; background: var(--t-warning-bg); color: var(--t-warning-text); }
 .native-risk-dialog li + li { margin-top: 5px; }
-.liquid-market-disclaimer {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid rgba(var(--market-accent-rgb), .28);
-  border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(var(--market-accent-rgb), .075), transparent 48%),
-    rgba(8, 14, 17, .72);
-}
-.liquid-market-disclaimer-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-}
-.liquid-market-disclaimer-icon {
-  display: grid;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid rgba(var(--market-accent-rgb), .36);
-  border-radius: 6px;
-  background: rgba(var(--market-accent-rgb), .1);
-  color: var(--market-accent);
-}
-.liquid-market-disclaimer-icon svg { width: 16px; height: 16px; }
-.liquid-market-disclaimer-header h3 {
-  margin: 0;
-  color: #eef4d7;
-  font-size: 13px;
-  letter-spacing: 0;
-}
-.liquid-market-disclaimer-header p {
-  margin: 4px 0 0;
-  color: rgba(var(--theme-text-secondary-rgb), .86);
-  font-size: 11px;
-  line-height: 1.6;
-}
-.liquid-market-disclaimer > ul {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 18px;
-  color: rgba(var(--theme-text-secondary-rgb), .9);
-  font-size: 11px;
-  line-height: 1.65;
-}
-.liquid-market-disclaimer > ul li::marker { color: var(--market-accent); }
-.liquid-market-disclaimer-details {
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, .075);
-}
-.liquid-market-disclaimer-details summary {
-  width: max-content;
-  color: var(--market-accent);
-  font-size: 11px;
-  font-weight: 650;
-  cursor: pointer;
-}
-.liquid-market-disclaimer-details > div {
-  display: grid;
-  gap: 7px;
-  margin-top: 9px;
-  color: rgba(var(--theme-text-secondary-rgb), .84);
-  font-size: 11px;
-  line-height: 1.7;
-}
-.liquid-market-disclaimer-details p { margin: 0; }
 .section-hint, .muted-copy {
   color: var(--market-muted);
   font-size: 12px;
@@ -1796,6 +1694,16 @@ onMounted(async () => {
 .detail-main { min-width: 0; }
 .detail-section { min-width: 0; }
 .detail-section.settings-attention { animation: settings-attention 1.15s ease-out; }
+.launch-plan-status { margin-bottom:12px; padding:10px 12px; border:1px solid #34464d; border-radius:6px; background:#10191e; color:#9fb0b5; font-size:11px; line-height:1.55; }
+.launch-plan-status.is-error { border-color:#704346; background:#241517; color:#efb6b2; }
+.launch-plan-conflict { display:flex; flex-direction:column; gap:9px; margin-bottom:12px; padding:12px 14px; border:1px solid #7a5b2e; border-radius:7px; background:#211b10; color:#e9d3a9; }
+.launch-plan-conflict header { display:flex; align-items:center; gap:7px; }
+.launch-plan-conflict header svg { width:16px; height:16px; }
+.launch-plan-conflict p { margin:0; color:#c9b78f; font-size:11px; line-height:1.6; }
+.launch-plan-conflict article { display:flex; flex-direction:column; gap:4px; padding-top:8px; border-top:1px solid #4a3c24; }
+.launch-plan-conflict code { color:#ffd38b; font-size:10px; }
+.launch-plan-conflict span { color:#a9946e; font-size:10px; }
+.launch-plan-conflict ul { margin:0; padding-left:18px; color:#d8c49a; font-size:10px; line-height:1.6; }
 @keyframes settings-attention {
   0% { filter: brightness(1.35); box-shadow: 0 0 0 2px var(--theme-accent); }
   100% { filter: brightness(1); box-shadow: 0 0 0 2px transparent; }

@@ -559,7 +559,9 @@ pub fn launch(app: AppHandle, request: ConsoleRequest, elevated: bool) -> Result
         request.args.contains("--machine-readable") && program.eq_ignore_ascii_case("Run.exe");
     let runtime_deployments = if machine_events {
         super::runtime_deployment::claim(Path::new(&request.work_dir))
-    } else { Vec::new() };
+    } else {
+        Vec::new()
+    };
     let publish = move |kind: &str, text: String, pid: Option<u32>, code: Option<i32>| {
         let _ = app.emit(
             "launch-console-event",

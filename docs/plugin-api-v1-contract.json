@@ -1,0 +1,250 @@
+{
+  "contractVersion": "1.0.0",
+  "pluginApiVersion": "1.0.0",
+  "capabilityApiVersion": 1,
+  "manifestSchemaVersion": 2,
+  "minimumManifestSchemaVersion": 1,
+  "pageBridgeProtocolVersion": 1,
+  "pageKinds": [
+    "declarative",
+    "static",
+    "local-service"
+  ],
+  "bridgeMessageTypes": {
+    "request": "ssmt:capability-request",
+    "response": "ssmt:capability-response"
+  },
+  "capabilities": [
+    {
+      "id": "game.context.read",
+      "permissions": []
+    },
+    {
+      "id": "game.process.read",
+      "permissions": [
+        "process.observe"
+      ]
+    },
+    {
+      "id": "graphics.directory.select",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "graphics.external.open",
+      "permissions": [
+        "process.spawn"
+      ]
+    },
+    {
+      "id": "graphics.route.install",
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "native.inject",
+        "process.spawn"
+      ]
+    },
+    {
+      "id": "graphics.route.restore",
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write",
+        "native.inject",
+        "process.spawn"
+      ]
+    },
+    {
+      "id": "graphics.routes.read",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "graphics.runtime.download",
+      "permissions": [
+        "network",
+        "filesystem.read",
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "graphics.runtime.history",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "graphics.runtime.import",
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "graphics.runtime.remove",
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "graphics.runtime.select",
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "graphics.runtime.status",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "graphics.status.read",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "graphics.task.cancel",
+      "permissions": []
+    },
+    {
+      "id": "graphics.task.start",
+      "permissions": [
+        "filesystem.read",
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "graphics.task.status",
+      "permissions": []
+    },
+    {
+      "id": "plugin.data.list",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "plugin.data.publish",
+      "permissions": [
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "plugin.data.read",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "plugin.data.remove",
+      "permissions": [
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "plugin.data.runtime.read",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "plugin.data.write",
+      "permissions": [
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "plugin.migration.read",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "plugin.settings.get",
+      "permissions": []
+    },
+    {
+      "id": "plugin.settings.remove",
+      "permissions": []
+    },
+    {
+      "id": "plugin.settings.set",
+      "permissions": []
+    },
+    {
+      "id": "plugin.storage.get",
+      "permissions": [
+        "filesystem.read"
+      ]
+    },
+    {
+      "id": "plugin.storage.remove",
+      "permissions": [
+        "filesystem.write"
+      ]
+    },
+    {
+      "id": "plugin.storage.set",
+      "permissions": [
+        "filesystem.write"
+      ]
+    }
+  ],
+  "errorCodes": [
+    "bridge_error",
+    "capability_denied",
+    "capability_not_supported",
+    "directory_picker_failed",
+    "external_manager_failed",
+    "external_manager_invalid",
+    "external_manager_missing",
+    "external_manager_not_declared",
+    "game_context_invalid",
+    "game_context_unavailable",
+    "graphics_history_error",
+    "graphics_operation_failed",
+    "graphics_profile_not_declared",
+    "graphics_routes_error",
+    "graphics_runtime_error",
+    "graphics_status_error",
+    "graphics_task_conflict",
+    "graphics_task_error",
+    "graphics_task_failed",
+    "graphics_task_limit",
+    "invalid_payload",
+    "lease_invalid",
+    "lease_lookup_failed",
+    "lease_required",
+    "migration_not_declared",
+    "plugin_api_incompatible",
+    "plugin_data_error",
+    "plugin_disabled",
+    "plugin_not_installed",
+    "plugin_registry_unavailable",
+    "storage_error",
+    "storage_unavailable",
+    "task_cancelled",
+    "task_not_cancellable",
+    "task_not_found",
+    "task_not_running",
+    "task_store_unavailable"
+  ],
+  "compatibilityRules": {
+    "unknownManifestFields": "reject",
+    "capabilityRemovalWithinMajor": "forbidden",
+    "capabilityRenameWithinMajor": "forbidden",
+    "capabilityMeaningChangeWithinMajor": "forbidden",
+    "additiveCapabilitiesAllowed": true,
+    "bridgeBreakingChangeRequiresProtocolBump": true,
+    "pageRemovalRequiresMajor": true,
+    "pluginUpdatesMayChangeBundledUi": true,
+    "hostUpdatesMustNotRequirePluginRebuild": true,
+    "futurePluginApi": "install-visible-incompatible"
+  }
+}

@@ -35,14 +35,23 @@ impl Policy {
         let Some(plugin) = registry.find(super::dlss5::DLSS5_PLUGIN_ID) else {
             return Ok(None);
         };
-        let Some(config) = plugin
+        let config = plugin
             .manifest
             .contributions
-            .host_extensions
+            .graphics_profiles
             .iter()
-            .find(|item| item.provider == "ssmt.graphics.dlss5")
+            .find(|item| item.strategy == super::GraphicsProfileStrategy::Dlss5Hot)
             .and_then(|item| item.config.as_deref())
-        else {
+            .or_else(|| {
+                plugin
+                    .manifest
+                    .contributions
+                    .host_extensions
+                    .iter()
+                    .find(|item| item.provider == "ssmt.graphics.dlss5")
+                    .and_then(|item| item.config.as_deref())
+            });
+        let Some(config) = config else {
             return Ok(None);
         };
         let root = super::gimi_hot_runtime::canonical_path(&plugin.package_root)
