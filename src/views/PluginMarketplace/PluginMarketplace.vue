@@ -102,6 +102,7 @@ interface LaunchPlanPreview {
 interface InstalledPlugin {
   manifest: PluginManifest
   enabled: boolean
+  enabledGames: string[]
   lifecycleStatus: 'installed' | 'enabled' | 'disabled' | 'update_available' | 'broken' | 'incompatible' | 'external_dependency_missing'
   externalDependencies: Record<string, DependencyState>
   official: boolean
@@ -826,13 +827,18 @@ const togglePlugin = async (plugin: InstalledPlugin) => {
 const uninstallPlugin = async () => {
   const plugin = selectedPlugin.value
   if (!plugin || loading.value) return
-  if (plugin.enabled) {
-    ElMessage.warning(t('pluginMarketplace.messages.uninstallDisabled'))
-    return
-  }
+  const enabledGames = plugin.appScoped ? [] : Array.from(plugin.enabledGames || [])
+  const disableNotice = enabledGames.length
+    ? t('pluginMarketplace.messages.uninstallDisableGames', { games: enabledGames.join(', ') })
+    : plugin.enabled
+      ? t('pluginMarketplace.messages.uninstallWillDisable')
+      : ''
   try {
     await ElMessageBox.confirm(
-      t('pluginMarketplace.messages.uninstallConfirm', { name: plugin.manifest.name }),
+      [
+        t('pluginMarketplace.messages.uninstallConfirm', { name: plugin.manifest.name }),
+        disableNotice,
+      ].filter(Boolean).join('\n\n'),
       t('pluginMarketplace.messages.uninstallTitle'),
       {
         type: 'warning',

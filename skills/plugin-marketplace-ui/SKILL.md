@@ -10,6 +10,8 @@ description: 修改 SSMT 插件市场的列表、详情、设置入口与异步�
 先读 [界面与验证说明](../../docs/plugin-marketplace-ui.md)，追踪市场、设置组件和实际 IPC 调用。
 
 - 保留共享玻璃主题变量、预设游戏排序及本体/游戏插件作用域。不要为了布局更换安装、来源验证或第三方包确认流程。
+- 卸载不能只检查当前游戏快照。确认框必须提示该插件仍启用的其他游戏；用户确认后由
+  后端依次停用所有游戏作用域、执行插件清理并再次验证状态，再删除包、数据和缓存。
 - 常用设置使用详情区完整宽度；来源、版本、权限与依赖仍须可找到。短来源标签不能取代后端验证。
 - 插件未安装或未按作用域启用时，不因展示界面扫描、配置或下载插件资源。用 IPC 调用记录验证无插件、禁用和切换游戏路径。
 - 并行刷新应等待所有来源，失败保留已有结果。日志等延迟操作捕获原对象身份，不能用返回时的新选择执行清空等动作。
@@ -30,7 +32,7 @@ description: 修改 SSMT 插件市场的列表、详情、设置入口与异步�
 - 插件自带的本地服务页只能通过版本化 `postMessage` 桥请求能力。验证来源 Origin、`contentWindow`、请求 ID 和有效 Lease；后端必须从 Lease 解析插件身份，禁止信任页面自报的插件 ID。回归入口为 `scripts/dev/verify-plugin-sdk-fixture.mjs`。
 - 声明 `launchHooks` 的插件必须展示通用启动资源冲突提示。调用 `plugin_launch_plan_preview` 读取仲裁结果，不在前端按插件 ID 决定优先级；同优先级争抢同一资源时必须明确阻断，高优先级唯一归属才可生成可执行计划。回归入口为 `scripts/dev/verify-plugin-launch-plan-fixture.mjs`。
 - 已完成迁移的官方插件应从主应用删除专用 Nav、路由组件、配置面板、免责声明和 Tauri 命令；只允许保留旧地址到市场的重定向。Liquid Gravity Probe 0.2.33 必须通过 `pages[]` 本地服务页加载，并保持旧数据目录 `Mods/SSMT_LiquidGravityProbe`。回归入口为 `scripts/dev/verify-liquid-gravity-probe-migration.mjs`。
-- 静态插件页必须通过 `StaticPageLease` 使用能力桥；Tauri asset URL 只能拆分最后一个 `%2F` 文件名分隔符，否则 `./assets/*` 会错误解析到 asset 根目录。插件升级后 `PluginPageHost` 的 key 必须包含版本。Secondary Motion 3.3.1 的持久数据位于 `PluginData/ssmt.secondary-motion/SecondaryMotion`，启动前由宿主通用镜像到包内目录；回归入口为 `scripts/dev/verify-secondary-motion-migration.mjs`。
+- 静态插件页必须通过 `StaticPageLease` 使用能力桥；Tauri asset URL 只能拆分最后一个 `%2F` 文件名分隔符，否则 `./assets/*` 会错误解析到 asset 根目录。插件升级后 `PluginPageHost` 的 key 必须包含版本。Secondary Motion 3.3.2 的持久数据位于 `PluginData/ssmt.secondary-motion/SecondaryMotion`，启动前由宿主通用镜像到包内目录；总开关默认开启、切换即时保存，回归入口为 `scripts/dev/verify-secondary-motion-migration.mjs`。
 - Player Tweaks 0.2.0 的 GIMI DLL、INI 和设置均由插件包持有，通用注入只接收包内 DLL 路径。旧 GameConfig 设置只能通过 `migrations.keys` 白名单迁移，不能读取完整配置。SRMI 注册表事务仍是临时兼容层，修改时必须保留所有权 Journal、只恢复本插件写入值和关闭游戏后恢复。回归入口为 `scripts/dev/verify-player-tweaks-migration.mjs`。
 - 图形插件必须使用 `graphicsProfiles.strategy/priority/resources`，不能在 Core 新增插件 ID 到 Provider 的分派。HoYoShade 0.2.0 的 `reshade-hot` 已纳入通用计划；DLSS5 后续迁移已跳过，0.3.0 保持 `publish: false` 开发快照，不构建正式包。回归入口为 `scripts/dev/verify-graphics-profiles-migration.mjs`。
 - iframe 的 `load` 事件只表示文档开始加载，不等于编辑器可用。必须同时验证健康接口、页面 HTML/构建资源、子页面完成状态和截图；旧 session URL 在服务停止后会显示连接拒绝，刷新页面或清理会话后才能判断 UI 回归。

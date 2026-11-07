@@ -122,7 +122,8 @@ Plugin iframe
 `plugin.storage.*` 是小型键值存储。复杂预设和角色数据使用
 `contributions.dataDirectories` 声明的插件作用域目录：持久文件位于
 `PluginData/<pluginId>/<dataId>`，插件升级不会覆盖；需要兼容旧原生运行时的目录可在
-启动前镜像回插件包。
+启动前镜像回插件包。宿主记录每次镜像拥有的文件清单；持久目录中已删除的文件会在
+下一次发布时从镜像中同步删除，镜像之外的原生种子文件不会被清理。
 
 旧版宿主把插件设置保存在 `GameConfig` 时，插件可声明迁移字段：
 
@@ -232,8 +233,14 @@ node scripts/dev/verify-plugin-sdk-fixture.mjs
 - Manifest 权限是宿主能力策略输入，不是操作系统沙箱。
 - 本地服务仍以当前 Windows 用户权限运行。
 - iframe 只能加载插件包声明的页面；服务只绑定回环地址。
+- 静态页面只能通过当前租约对应的随机回环端口和路径令牌加载，不能直接访问全局
+  `asset.localhost` 或其他插件目录。
+- 静态页面的浏览器 Origin 不保证跨挂载保持不变，不能把 `localStorage`、Cookie 或
+  IndexedDB 当作插件配置的权威存储。
 - token 放在 URL fragment，健康检查和业务 API 使用实例令牌。
 - 消息桥同时校验来源 Origin、`contentWindow` 和有效 Lease。
 - 静态页面能力绑定随机 `StaticPageLease`；不得通过放宽 iframe sandbox 绕过来源和
   `contentWindow` 校验。
+- 页面 Lease 需要持续续期；WebView 崩溃或强制重载后，后端会在 TTL 到期时清理遗留的
+  静态页服务和本地服务进程。
 - Windows Job Object 负责进程树生命周期，不负责文件系统和账户隔离。

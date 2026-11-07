@@ -41,6 +41,9 @@ Plugin API 1 已冻结；`1.x` 只增加兼容能力，不删除、重命名或�
 本地服务由 SSMT 分配随机端口和令牌，等待健康检查；页面仅持有 ServiceLease，最后一个
 Lease 释放后进入空闲宽限，插件禁用、更新、卸载或 SSMT 退出时回收进程树。本地服务页
 可通过版本化 iframe 桥请求 CapabilityBroker，调用身份由 Lease 解析，页面不能自报插件 ID。
+静态插件页同样使用租约独占的随机回环文件服务，只开放当前页面目录；页面不能通过全局
+asset protocol 读取其他插件或任意本地文件。所有页面 Lease 都带心跳和 TTL，WebView
+崩溃或强制重载后由宿主清理遗留服务。
 
 安装、清单格式和安全边界见 [插件页面运行层](docs/plugin-pages.md)。
 陌生插件开发、权限和错误规范见 [插件 SDK](docs/plugin-sdk.md)。
@@ -54,7 +57,7 @@ ServiceLease 和 CapabilityBroker。主应用不再包含该插件的专用 Taur
 或业务 Vue 页面；旧 `/plugins/liquid-gravity-probe` 地址只重定向到插件市场。迁移说明见
 [Liquid Gravity Probe 迁移](docs/plugin-migration-liquid-gravity.md)。
 
-Secondary Motion 3.3.1 已迁移为 Schema 2 静态页面。预设与角色参数存放在插件作用域
+Secondary Motion 3.3.4 已迁移为 Schema 2 静态页面。预设与角色参数存放在插件作用域
 持久数据目录，宿主在启动前把数据镜像到原生 DLL 期望的包内目录；静态页面通过
 PageLease 能力桥读写数据，不再依赖专用 Tauri 命令或本体 Vue 组件。迁移说明见
 [Secondary Motion 迁移](docs/plugin-migration-secondary-motion.md)。

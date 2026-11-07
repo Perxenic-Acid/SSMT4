@@ -51,7 +51,7 @@ Rust 能力目录和前端桥版本必须与快照一致。
 | Liquid Gravity Probe | `0.2.33` | 2 | `>=1.0.0 <2.0.0` | `local-service` |
 | Player Tweaks | `0.2.0` | 2 | `>=1.0.0 <2.0.0` | `static` |
 | Poser | `0.1.1` | 1 | legacy `pluginApiVersion: 1` | 无通用页面 |
-| Secondary Motion | `3.3.1` | 2 | `>=1.0.0 <2.0.0` | `static` |
+| Secondary Motion | `3.3.4` | 2 | `>=1.0.0 <2.0.0` | `static` |
 
 DLSS5 后续迁移已跳过，因此其 0.3.0 仅作为开发快照保留 `publish: false`，不纳入正式
 发布矩阵。

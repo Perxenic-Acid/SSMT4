@@ -625,6 +625,7 @@ pub enum PluginLifecycleStatus {
 pub struct InstalledPluginSnapshot {
     pub manifest: PluginManifest,
     pub enabled: bool,
+    pub enabled_games: Vec<String>,
     pub lifecycle_status: PluginLifecycleStatus,
     pub external_dependencies: BTreeMap<String, ExternalDependencyState>,
     pub official: bool,
@@ -703,6 +704,7 @@ fn snapshot(registry: &PluginRegistry) -> Vec<InstalledPluginSnapshot> {
                 manifest
             },
             enabled: plugin.enabled,
+            enabled_games: registry.enabled_games_for_plugin(plugin.id()),
             lifecycle_status: lifecycle_status(plugin),
             external_dependencies: plugin.external_dependencies.clone(),
             official: plugin.official,
@@ -1222,6 +1224,7 @@ pub fn uninstall_plugin(
     }
     app.state::<super::page_runtime::PluginPageRuntime>()
         .stop_plugin(&plugin_id)?;
+    disable_plugin_everywhere_for_uninstall(&app, &plugin_id, game_name.as_deref())?;
     let plugins_root = crate::config::path_manager::PathManager::ssmt_plugins_folder();
     let global_root = crate::config::path_manager::PathManager::ssmt_global_config_folder();
     uninstall_plugin_from_roots(
@@ -1230,6 +1233,48 @@ pub fn uninstall_plugin(
         &plugins_root,
         &global_root,
     )
+}
+
+fn disable_plugin_everywhere_for_uninstall(
+    app: &tauri::AppHandle,
+    plugin_id: &str,
+    current_game_name: Option<&str>,
+) -> Result<(), String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let Some(plugin) = registry.find(plugin_id) else {
+        return Ok(());
+    };
+    if plugin.manifest.is_app_scoped() {
+        if registry.plugin_enabled_anywhere(plugin_id) {
+            set_plugin_enabled_for_game(
+                app.clone(),
+                current_game_name
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("Default")
+                    .to_string(),
+                plugin_id.to_string(),
+                false,
+                None,
+            )?;
+        }
+        return Ok(());
+    }
+
+    let mut enabled_games = registry.enabled_games_for_plugin(plugin_id);
+    enabled_games.sort_by_key(|name| name.to_ascii_lowercase());
+    enabled_games.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    for game_name in enabled_games {
+        set_plugin_enabled_for_game(app.clone(), game_name, plugin_id.to_string(), false, None)?;
+    }
+    let refreshed = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    if refreshed.plugin_enabled_anywhere(plugin_id) {
+        let mut registry = refreshed;
+        registry
+            .set_enabled(plugin_id, false)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn any_configured_game_process_running() -> bool {
@@ -1344,11 +1389,18 @@ fn uninstall_plugin_from_roots(
     global_root: &Path,
 ) -> Result<Vec<InstalledPluginSnapshot>, String> {
     let plugin_id = plugin_id.trim();
-    let mut registry = PluginRegistry::new(plugins_root).map_err(|error| error.to_string())?;
-    if registry.find(plugin_id).is_none() {
-        return Err(format!("插件尚未安装：{plugin_id}"));
+    if plugin_id.is_empty()
+        || plugin_id == "."
+        || plugin_id == ".."
+        || plugin_id
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | ':'))
+    {
+        return Err("插件 ID 不合法".into());
     }
-    if registry.plugin_enabled_anywhere(plugin_id) {
+    let mut registry = PluginRegistry::new(plugins_root).map_err(|error| error.to_string())?;
+    let package_installed = registry.find(plugin_id).is_some();
+    if package_installed && registry.plugin_enabled_anywhere(plugin_id) {
         return Err("请先禁用该插件的所有游戏，再执行卸载".into());
     }
 
@@ -1361,6 +1413,8 @@ fn uninstall_plugin_from_roots(
 
     let data_dir = global_root.join("PluginData").join(plugin_id);
     remove_owned_path(&data_dir, true)?;
+    let mirror_state_dir = global_root.join("PluginMirrorState").join(plugin_id);
+    remove_owned_path(&mirror_state_dir, true)?;
     let log_file = global_root
         .join("PluginLogs")
         .join(format!("{plugin_id}.log"));
@@ -1536,6 +1590,9 @@ mod tests {
         fs::create_dir_all(&logs).unwrap();
         fs::write(logs.join("example.remove.log"), b"log").unwrap();
         fs::write(logs.join("example.remove.log.tmp"), b"tmp").unwrap();
+        let mirror_state = global_root.join("PluginMirrorState/example.remove");
+        fs::create_dir_all(&mirror_state).unwrap();
+        fs::write(mirror_state.join("presets.json"), b"{}").unwrap();
         let cache = global_root.join("PluginAssetCache");
         fs::create_dir_all(&cache).unwrap();
         let cached = cache.join("fixture.asset");
@@ -1561,6 +1618,9 @@ mod tests {
         assert!(!global_root.join("PluginData/example.remove").exists());
         assert!(!logs.join("example.remove.log").exists());
         assert!(!logs.join("example.remove.log.tmp").exists());
+        assert!(!global_root
+            .join("PluginMirrorState/example.remove")
+            .exists());
         assert!(!cached.exists());
         let restarted = PluginRegistry::new(&plugins_root).unwrap();
         assert!(restarted.find("example.remove").is_none());
@@ -1575,6 +1635,55 @@ mod tests {
                 .unwrap(),
             None
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uninstall_can_retry_after_the_package_was_already_removed() {
+        let root = uninstall_test_root("retry");
+        let plugins_root = root.join("Plugins");
+        let global_root = root.join("Global");
+        let mut registry = PluginRegistry::new(&plugins_root).unwrap();
+        let package = write_uninstall_fixture(&root, "example.retry");
+        registry.install_directory_package(&package).unwrap();
+        registry
+            .set_game_enabled("GIMI", "example.retry", true)
+            .unwrap();
+        let data = global_root.join("PluginData/example.retry/presets");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("Default.json"), b"preset").unwrap();
+        let mirror_state = global_root.join("PluginMirrorState/example.retry");
+        fs::create_dir_all(&mirror_state).unwrap();
+        fs::write(mirror_state.join("SecondaryMotion.json"), b"{}").unwrap();
+
+        fs::remove_dir_all(plugins_root.join("example.retry")).unwrap();
+        uninstall_plugin_from_roots("example.retry", None, &plugins_root, &global_root).unwrap();
+
+        assert!(!global_root.join("PluginData/example.retry").exists());
+        assert!(!global_root.join("PluginMirrorState/example.retry").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_exposes_every_game_scope_enabled_for_uninstall_confirmation() {
+        let root = uninstall_test_root("enabled-games");
+        let plugins_root = root.join("Plugins");
+        let mut registry = PluginRegistry::new(&plugins_root).unwrap();
+        let package = write_uninstall_fixture(&root, "example.cross-game");
+        registry.install_directory_package(&package).unwrap();
+        registry
+            .set_game_enabled("GIMI", "example.cross-game", true)
+            .unwrap();
+        registry
+            .set_game_enabled("SRMI", "example.cross-game", true)
+            .unwrap();
+
+        let snapshot = super::snapshot(&registry);
+        let plugin = snapshot
+            .iter()
+            .find(|plugin| plugin.manifest.id == "example.cross-game")
+            .unwrap();
+        assert_eq!(plugin.enabled_games, vec!["gimi", "srmi"]);
         fs::remove_dir_all(root).unwrap();
     }
 

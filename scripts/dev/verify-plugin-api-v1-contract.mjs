@@ -113,7 +113,7 @@ const expectedLatest = new Map([
   ['ssmt.liquid-gravity-probe', { version: '0.2.33', schemaVersion: 2, pageKind: 'local-service' }],
   ['ssmt.player-tweaks', { version: '0.2.0', schemaVersion: 2, pageKind: 'static' }],
   ['ssmt.poser.genshin-probe', { version: '0.1.1', schemaVersion: 1 }],
-  ['ssmt.secondary-motion', { version: '3.3.1', schemaVersion: 2, pageKind: 'static' }],
+  ['ssmt.secondary-motion', { version: '3.3.4', schemaVersion: 2, pageKind: 'static' }],
 ])
 
 for (const [id, expected] of expectedLatest) {

@@ -93,7 +93,7 @@ test('崩铁 Player Tweaks 只保存 120 FPS，原神继续支持原有帧率和
 });
 const dlssPlugin = enabled => ({
   manifest: { id: 'ssmt.dlss5.integration', name: 'DLSS5', author: 'SSMT', version: '0.1.0', externalDependencies: [], permissions: [], contributions: { hostExtensions: [{ id: 'graphics', settingsComponent: 'ssmt.dlss5.settings' }] } },
-  enabled, externalDependencies: {}, lifecycleStatus: 'installed', official: true,
+  enabled, enabledGames: [], externalDependencies: {}, lifecycleStatus: 'installed', official: true,
 });
 
 function marketplace(t, options = {}) {
@@ -267,7 +267,7 @@ test('marketplace opens migrated Secondary Motion page and exposes its launch in
   const s = marketplace(t);
   const plugin = {
     manifest: {
-      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.3.1',
+      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.3.2',
       externalDependencies: [], permissions: ['native.inject'],
       contributions: {
         pages: [{ id: 'settings', title: 'Secondary Motion', kind: 'static' }],
@@ -287,7 +287,7 @@ test('marketplace opens migrated Secondary Motion page and exposes its launch in
   assert.equal(s.detailTab.value, 'features');
 });
 
-test('any installed plugin can be completely uninstalled after it is disabled', async t => {
+test('uninstall confirmation disables every game scope through the backend before deleting', async t => {
   const calls = [];
   let confirmation = '';
   const plugin = { ...dlssPlugin(false), manifest: { ...dlssPlugin(false).manifest, id: 'example.uninstallable' } };
@@ -312,18 +312,26 @@ test('any installed plugin can be completely uninstalled after it is disabled', 
   assert.equal(calls[0].args.gameName, 'GIMI');
   assert.deepEqual(Array.from(s.installed.value), []);
 
-  const enabled = { ...plugin, enabled: true, lifecycleStatus: 'enabled' };
-  s.installed.value = [enabled];
+  const crossGame = {
+    ...plugin,
+    enabled: false,
+    enabledGames: ['GIMI', 'SRMI'],
+    lifecycleStatus: 'incompatible',
+  };
+  s.installed.value = [crossGame];
+  s.appSettings.CurrentGameName = 'EFMI';
   await vue.nextTick();
   await s.uninstallPlugin();
-  assert.equal(calls.length, 1, '启用中的插件不得调用卸载 IPC');
+  assert.equal(calls.length, 2, '跨游戏启用状态必须由已确认的卸载流程解除');
+  assert.match(confirmation, /uninstallDisableGames/);
+  assert.equal(calls[1].command, 'uninstall_plugin');
 });
 
 test('native injection plugin requires explicit risk acknowledgement before enabling', async t => {
   const calls = [];
   const plugin = {
     manifest: {
-      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.3.1',
+      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.3.2',
       externalDependencies: [], permissions: ['native.inject'],
       contributions: {
         pages: [{ id: 'settings', title: 'Secondary Motion', kind: 'static' }],
@@ -348,7 +356,7 @@ test('native injection plugin requires explicit risk acknowledgement before enab
   assert.deepEqual(calls.map(call => call.command), ['set_plugin_setting', 'set_plugin_enabled_for_game']);
   assert.equal(calls[0].args.key, 'native_injection_risk_ack_v1');
   assert.equal(calls[0].args.value.accepted, true);
-  assert.equal(calls[0].args.value.pluginVersion, '3.3.1');
+  assert.equal(calls[0].args.value.pluginVersion, '3.3.2');
   assert.equal(s.riskDialogOpen.value, false);
 });
 

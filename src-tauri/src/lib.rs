@@ -157,6 +157,7 @@ pub fn run() {
             plugin::page_runtime::start_plugin_page_service,
             plugin::page_runtime::acquire_plugin_page_lease,
             plugin::page_runtime::release_plugin_page_lease,
+            plugin::page_runtime::touch_plugin_page_lease,
             plugin::page_runtime::stop_plugin_page_service,
             plugin::page_runtime::stop_plugin_page_services_for_plugin,
             plugin::page_runtime::stop_all_plugin_page_services,

@@ -36,9 +36,20 @@ Plugin API 和方法桥协议现已冻结；机器可读版本、能力与兼容
 
 ### 静态页面
 
-页面来自插件包内的相对路径。后端只返回经包路径校验后的绝对文件路径，
-前端在沙箱 iframe 中通过 Tauri asset protocol 加载。宿主为静态页面创建随机
-`StaticPageLease`，iframe fragment 携带不透明 Lease ID；离开路由时释放。
+页面来自插件包内的相对路径。宿主不再把第三方页面挂到 `asset.localhost`，而是为每次
+静态页面 Lease 启动仅绑定回环地址的只读文件服务：
+
+- 随机端口、随机路径令牌和独立浏览器 Origin；
+- 只允许读取当前 `ui/` 页面目录内的普通文件；
+- 拒绝目录穿越、符号链接、目录列表、非 GET/HEAD 请求和超大文件；
+- 响应 CSP 禁止访问 `asset:`、`file:` 和父页面的脚本环境；
+- 只有清单声明 `network` 权限时，页面 CSP 才允许外部 HTTPS 资源；不会重新开放
+  `asset.localhost` 或任意本地 HTTP 地址。
+
+宿主为静态页面创建随机 `StaticPageLease`，返回带令牌的本地 URL；iframe fragment
+携带不透明 Lease ID。离开路由或组件销毁时同时释放 Lease 和静态文件服务。
+静态页面的 Origin 按 Lease 隔离，`localStorage`、`sessionStorage` 和 IndexedDB
+不能作为持久设置存储；需要持久化的数据必须使用插件设置或声明式数据目录能力。
 
 ### 本地服务
 
@@ -52,6 +63,7 @@ Plugin API 和方法桥协议现已冻结；机器可读版本、能力与兼容
 - 等待健康检查；
 - 把服务加入 Windows Job Object；
 - 页面通过 `ServiceLease` 使用服务，服务本身不归页面所有；
+- 页面每 15 秒续期 Lease，超过 120 秒没有心跳的 Lease 会被后台清理；
 - 所有租约释放后保留 30 秒宽限期，再停止进程树；
 - 插件禁用、更新、卸载和 SSMT 退出时回收会话。
 
@@ -120,6 +132,7 @@ UI Page ─Release→ ServiceLease
 - `acquire_plugin_page_lease(pluginId, pageId, gameName)`：创建或复用 ServiceInstance，
   并返回新 Lease。
 - `release_plugin_page_lease(leaseId)`：释放 Lease；最后一个 Lease 释放后进入空闲宽限。
+- `touch_plugin_page_lease(leaseId)`：为当前页面续期；TTL 过期后不可复活。
 - `plugin_page_session_status(sessionId)`：按 Lease 读取可用服务信息。
 - `plugin_page_service_status(serviceKey)`：读取服务、Lease 数量和进程状态。
 - `start_plugin_page_service(...)`：兼容入口，等价于 Acquire Lease。
@@ -128,7 +141,7 @@ UI Page ─Release→ ServiceLease
 - `plugin_capability_catalog()`：返回版本化能力清单、输入输出 Schema 和权限要求。
 - `plugin_capability_request_for_lease(...)`：由当前 Lease 解析插件身份并执行能力请求。
 - `acquire_static_plugin_page_lease(...)` / `release_static_plugin_page_lease(...)`：
-  为静态页面创建和释放不依赖后台进程的页面 Lease。
+  为静态页面创建和释放页面 Lease，同时管理该页面的隔离只读文件服务。
 
 前端只接收不透明 URL、令牌和 `sessionId`，不传 Migoto 路径、Python 路径或任意可执行文件。
 

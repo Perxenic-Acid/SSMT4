@@ -74,6 +74,7 @@ export interface StaticPluginPageLease {
   gameName: string
   pageId: string
   pagePath: string
+  url: string
 }
 
 export interface PluginCapabilityResponse {
@@ -115,6 +116,10 @@ export const acquireStaticPluginPageLease = async (
 
 export const releaseStaticPluginPageLease = async (leaseId: string): Promise<boolean> =>
   invoke<boolean>('release_static_plugin_page_lease', { leaseId })
+
+// Renew the backend lease while a plugin page remains mounted.
+export const touchPluginPageLease = async (leaseId: string): Promise<boolean> =>
+  invoke<boolean>('touch_plugin_page_lease', { leaseId })
 
 export const stopPluginPageService = async (sessionId: string): Promise<boolean> =>
   invoke<boolean>('stop_plugin_page_service', { sessionId })

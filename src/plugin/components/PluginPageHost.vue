@@ -9,7 +9,6 @@ import {
   ref,
   watch,
 } from 'vue'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { onBeforeRouteLeave } from 'vue-router'
@@ -20,6 +19,7 @@ import {
   acquireStaticPluginPageLease,
   releasePluginPageLease,
   releaseStaticPluginPageLease,
+  touchPluginPageLease,
   requestPluginCapability,
   requestPluginCapabilityForLease,
   stopPluginPageService,
@@ -55,6 +55,7 @@ const declarativeValues = reactive<Record<string, unknown>>({})
 const savingKey = ref('')
 let disposed = false
 let healthTimer: number | undefined
+let leaseHeartbeatTimer: number | undefined
 let serviceGeneration = 0
 let pageActive = true
 let startPending = false
@@ -64,16 +65,13 @@ const selectedPage = computed(() =>
 )
 const staticUrl = computed(() => {
   const page = selectedPage.value
-  if (page?.kind !== 'static' || !page.pagePath || !staticLease.value) return ''
+  if (page?.kind !== 'static' || !staticLease.value?.url) return ''
   const fragment = new URLSearchParams({
     pageLeaseId: staticLease.value.leaseId,
     pluginId: props.pluginId,
     game: props.gameName,
   })
-  // Tauri's asset URL encodes the entire Windows path, including the final slash.
-  // Split only the filename so relative bundled asset URLs resolve beside index.html.
-  const assetUrl = convertFileSrc(page.pagePath).replace(/%2F([^/%]+)$/i, '/$1')
-  return `${assetUrl}#${fragment}`
+  return `${staticLease.value.url}#${fragment}`
 })
 const serviceUrl = computed(() =>
   selectedPage.value?.kind === 'local-service' && serviceInfo.value?.running
@@ -340,6 +338,16 @@ function startHealthPoll() {
   }, 5000)
 }
 
+function startLeaseHeartbeat() {
+  if (leaseHeartbeatTimer !== undefined) window.clearInterval(leaseHeartbeatTimer)
+  leaseHeartbeatTimer = window.setInterval(() => {
+    const leaseId = selectedPage.value?.kind === 'static'
+      ? staticLease.value?.leaseId
+      : serviceInfo.value?.leaseId
+    if (leaseId && !disposed) void touchPluginPageLease(leaseId).catch(() => undefined)
+  }, 15_000)
+}
+
 async function mountSelectedPage() {
   if (disposed) return
   await releaseServiceLease()
@@ -388,6 +396,7 @@ watch(() => props.enabled, enabled => {
 onMounted(() => {
   pageActive = true
   window.addEventListener('message', handlePluginCapabilityMessage)
+  startLeaseHeartbeat()
   void refreshCatalog()
 })
 onActivated(async () => {
@@ -426,6 +435,7 @@ onBeforeUnmount(() => {
   disposed = true
   pageActive = false
   startPending = false
+  if (leaseHeartbeatTimer !== undefined) window.clearInterval(leaseHeartbeatTimer)
   window.removeEventListener('message', handlePluginCapabilityMessage)
   clearHealthPoll()
   void releaseServiceLease()
@@ -581,8 +591,43 @@ onBeforeUnmount(() => {
 .declarative-field strong { color:#d7e4e7; font-size:12px; }
 .declarative-field small { color:#789096; font-size:10px; line-height:1.5; }
 .declarative-field input:not([type=checkbox]),.declarative-field select { min-height:32px; border:1px solid #34464d; border-radius:5px; background:#10191e; color:#e4edef; padding:5px 9px; }
-.plugin-page-frame-wrap,.local-service-page { position:relative; min-height:70vh; overflow:hidden; border:1px solid #26363d; border-radius:8px; background:#080d10; }
-.plugin-page-frame { display:block; width:100%; height:72vh; min-height:520px; border:0; background:#080d10; }
+.plugin-page-frame-wrap,.local-service-page {
+  /* Parent .app-ui-scale uses a transform. Render the iframe at the scaled
+     pixel density, then undo that transform locally so text is not bitmap-stretched. */
+  --plugin-page-height:72vh;
+  --plugin-page-min-height:520px;
+  --plugin-frame-scale:var(--app-ui-scale, 1);
+  --plugin-frame-inverse-scale:var(--app-ui-scale-inverse, 1);
+  position:relative;
+  height:var(--plugin-page-height);
+  min-height:var(--plugin-page-min-height);
+  overflow:hidden;
+  border:1px solid #26363d;
+  border-radius:8px;
+  background:#080d10;
+}
+.local-service-page {
+  height:calc(var(--plugin-page-height) + 52px);
+  min-height:calc(var(--plugin-page-min-height) + 52px);
+}
+.plugin-page-frame {
+  position:absolute;
+  top:0;
+  left:0;
+  display:block;
+  width:calc(100% * var(--plugin-frame-scale));
+  height:calc(100% * var(--plugin-frame-scale));
+  min-height:0;
+  border:0;
+  background:#080d10;
+  zoom:var(--plugin-frame-scale);
+  transform:scale(var(--plugin-frame-inverse-scale));
+  transform-origin:top left;
+}
+.local-service-page .plugin-page-frame {
+  top:52px;
+  height:calc((100% - 52px) * var(--plugin-frame-scale));
+}
 .local-service-toolbar { position:relative; z-index:2; display:flex; align-items:center; justify-content:space-between; gap:14px; padding:10px 12px; border-bottom:1px solid #26363d; background:#0d161a; }
 .local-service-toolbar > div { display:flex; align-items:center; gap:9px; }
 .local-service-toolbar strong { color:#e6f0f2; font-size:12px; }

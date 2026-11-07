@@ -7,12 +7,15 @@
 use super::registry::{PluginRegistry, PluginRegistryError};
 use super::PluginDataDirectoryContribution;
 use crate::config::path_manager::PathManager;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const MAX_READ_BYTES: u64 = 16 * 1024 * 1024;
+const MIRROR_MANIFEST_SCHEMA_VERSION: u32 = 1;
+const MAX_MIRROR_FILES: usize = 100_000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,7 +30,15 @@ pub struct DataEntry {
 pub struct ScopedDataStore {
     persistent_root: PathBuf,
     package_root: PathBuf,
+    mirror_manifest: PathBuf,
     seed_from_package: bool,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MirrorManifest {
+    schema_version: u32,
+    files: Vec<String>,
 }
 
 impl ScopedDataStore {
@@ -53,9 +64,14 @@ impl ScopedDataStore {
             .join(plugin_id)
             .join(data_id);
         let package_root = plugin.package_root.join(&data.package_path);
+        let mirror_manifest = PathManager::ssmt_global_config_folder()
+            .join("PluginMirrorState")
+            .join(plugin_id)
+            .join(format!("{}.json", data_id));
         Ok(Self {
             persistent_root,
             package_root,
+            mirror_manifest,
             seed_from_package: data.seed_from_package,
         })
     }
@@ -135,7 +151,21 @@ impl ScopedDataStore {
     pub fn publish(&self) -> Result<(), String> {
         self.ensure_seeded()?;
         require_plain_directory(&self.package_root)?;
-        copy_tree(&self.persistent_root, &self.package_root)
+        let current_files = collect_relative_files(&self.persistent_root)?;
+        let previous = read_mirror_manifest(&self.mirror_manifest)?;
+        copy_tree(&self.persistent_root, &self.package_root)?;
+        let current_normalized: HashSet<String> = current_files
+            .iter()
+            .map(|path| path.to_ascii_lowercase())
+            .collect();
+        for stale in previous
+            .files
+            .iter()
+            .filter(|path| !current_normalized.contains(&path.to_ascii_lowercase()))
+        {
+            remove_mirrored_file(&self.package_root, stale)?;
+        }
+        write_mirror_manifest(&self.mirror_manifest, current_files)
     }
 
     pub fn read_runtime(&self, relative: &str) -> Result<String, String> {
@@ -177,6 +207,10 @@ impl ScopedDataStore {
                 .join(&plugin.manifest.id)
                 .join(&data.id),
             package_root: plugin.package_root.join(&data.package_path),
+            mirror_manifest: PathManager::ssmt_global_config_folder()
+                .join("PluginMirrorState")
+                .join(&plugin.manifest.id)
+                .join(format!("{}.json", data.id)),
             seed_from_package: data.seed_from_package,
         })
     }
@@ -278,6 +312,95 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn collect_relative_files(root: &Path) -> Result<Vec<String>, String> {
+    require_plain_directory(root)?;
+    let mut files = BTreeSet::new();
+    let mut pending = vec![(root.to_path_buf(), String::new())];
+    while let Some((directory, prefix)) = pending.pop() {
+        for entry in fs::read_dir(&directory).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let meta = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+            if reparse(&meta) {
+                return Err(format!(
+                    "plugin data mirror cannot contain links: {}",
+                    entry.path().display()
+                ));
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let relative = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if meta.is_dir() {
+                pending.push((entry.path(), relative));
+            } else if meta.is_file() {
+                super::validate_package_relative_path(&relative)
+                    .map_err(|error| error.to_string())?;
+                files.insert(relative);
+                if files.len() > MAX_MIRROR_FILES {
+                    return Err(format!(
+                        "plugin data mirror exceeds {MAX_MIRROR_FILES} files"
+                    ));
+                }
+            } else {
+                return Err(format!(
+                    "unsupported plugin data entry: {}",
+                    entry.path().display()
+                ));
+            }
+        }
+    }
+    Ok(files.into_iter().collect())
+}
+
+fn read_mirror_manifest(path: &Path) -> Result<MirrorManifest, String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let manifest: MirrorManifest =
+                serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+            if manifest.schema_version != MIRROR_MANIFEST_SCHEMA_VERSION {
+                return Err(format!(
+                    "unsupported plugin mirror manifest schema: {}",
+                    manifest.schema_version
+                ));
+            }
+            Ok(manifest)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(MirrorManifest {
+            schema_version: MIRROR_MANIFEST_SCHEMA_VERSION,
+            files: Vec::new(),
+        }),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_mirror_manifest(path: &Path, files: Vec<String>) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let manifest = MirrorManifest {
+        schema_version: MIRROR_MANIFEST_SCHEMA_VERSION,
+        files,
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    write_atomic(path, &bytes)
+}
+
+fn remove_mirrored_file(root: &Path, relative: &str) -> Result<(), String> {
+    let target = checked_target(root, relative, false)?;
+    match fs::symlink_metadata(&target) {
+        Ok(meta) if meta.is_file() && !reparse(&meta) => {
+            fs::remove_file(target).map_err(|error| error.to_string())
+        }
+        Ok(_) => Err(format!(
+            "plugin mirror path is not a regular file: {relative}"
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn read_text_limited(path: &Path) -> Result<String, String> {
@@ -409,6 +532,10 @@ mod tests {
         ScopedDataStore {
             persistent_root: persistent.to_path_buf(),
             package_root: package.to_path_buf(),
+            mirror_manifest: package
+                .parent()
+                .unwrap_or(package)
+                .join("mirror-state.json"),
             seed_from_package: true,
         }
     }
@@ -449,6 +576,23 @@ mod tests {
         if result.is_ok() {
             assert!(data.write_atomic("linked/escape.json", "{}").is_err());
         }
+        fs::remove_dir_all(persistent.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn publish_removes_files_deleted_from_the_persistent_mirror() {
+        let (persistent, package) = fixture("mirror-delete");
+        let data = store(&persistent, &package);
+        data.ensure_seeded().unwrap();
+        data.write_atomic("runtime/old.json", "old").unwrap();
+        data.write_atomic("runtime/keep.json", "keep").unwrap();
+        data.publish().unwrap();
+        assert!(package.join("runtime/old.json").is_file());
+
+        data.remove("runtime/old.json").unwrap();
+        data.publish().unwrap();
+        assert!(!package.join("runtime/old.json").exists());
+        assert_eq!(data.read_runtime("runtime/keep.json").unwrap(), "keep");
         fs::remove_dir_all(persistent.parent().unwrap()).unwrap();
     }
 }

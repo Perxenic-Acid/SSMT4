@@ -509,7 +509,10 @@ onUnmounted(() => {
       </section>
     </div>
 
-    <div class="app-ui-scale" :style="{ '--app-ui-scale': appUiScale }">
+    <div class="app-ui-scale" :style="{
+      '--app-ui-scale': appUiScale,
+      '--app-ui-scale-inverse': 1 / appUiScale,
+    }">
       <!-- WinUI3 shell: full-width caption bar on top, nav pane + content below -->
       <div class="app-shell" :class="{ 'is-classic-ui': isClassicUi }">
         <!-- Reserves the caption bar's layout space; the bar itself is
