@@ -407,10 +407,6 @@
     "localBuild": "本地构建",
     "gameCompatibilityUnspecified": "插件包未列出游戏；以实际兼容性为准。",
     "noFeatures": "该插件没有可配置的功能选项。",
-    "legacyUi": {
-      "secondaryMotion": "旧版设置页已停用，请升级到至少 3.3.1；推荐升级到 3.3.4。",
-      "liquidGravityProbe": "旧版内嵌页面已停用，请升级到 0.2.33。"
-    },
     "launchPlan": {
       "checking": "正在检查启动资源冲突…",
       "title": "启动资源冲突",

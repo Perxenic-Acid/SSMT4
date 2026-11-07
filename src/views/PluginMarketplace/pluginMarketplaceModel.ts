@@ -104,25 +104,6 @@ export const versionRequirementState = (
   return 'supported'
 }
 
-export type LegacyPluginUiHint = 'secondaryMotion' | 'liquidGravityProbe'
-
-export const legacyPluginUiHint = (
-  pluginId: string,
-  version: string,
-): LegacyPluginUiHint | null => {
-  const parsedVersion = parseVersion(version)
-  if (!parsedVersion) return null
-  if (pluginId === 'ssmt.secondary-motion'
-    && compareParsedVersions(parsedVersion, [3, 3, 1]) < 0) {
-    return 'secondaryMotion'
-  }
-  if (pluginId === 'ssmt.liquid-gravity-probe'
-    && compareParsedVersions(parsedVersion, [0, 2, 33]) < 0) {
-    return 'liquidGravityProbe'
-  }
-  return null
-}
-
 const PERMISSION_ORDER = [
   'native.inject',
   'process.spawn',

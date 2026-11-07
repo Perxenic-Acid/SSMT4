@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { normalizeSsmtUiMode } from '../src/store/AppSettings'
 import {
-  legacyPluginUiHint,
   permissionDefinitionFor,
   versionRequirementState,
 } from '../src/views/PluginMarketplace/pluginMarketplaceModel'
@@ -38,17 +37,6 @@ test('plugin version requirements use the current SSMT version', () => {
   expect(versionRequirementState('4.2.2', null, '4.2.2')).toBe('supported')
   expect(versionRequirementState('4.2.2', null, '4.2.1')).toBe('blocked')
   expect(versionRequirementState('', '>=4.0.0', null)).toBe('unknown')
-})
-
-test('legacy plugin UI hints target only incompatible package versions', () => {
-  expect(legacyPluginUiHint('ssmt.secondary-motion', '3.2.1')).toBe('secondaryMotion')
-  expect(legacyPluginUiHint('ssmt.secondary-motion', '3.3.0')).toBe('secondaryMotion')
-  expect(legacyPluginUiHint('ssmt.secondary-motion', '3.3.1')).toBeNull()
-  expect(legacyPluginUiHint('ssmt.secondary-motion', '3.3.4')).toBeNull()
-  expect(legacyPluginUiHint('ssmt.liquid-gravity-probe', '0.2.32')).toBe('liquidGravityProbe')
-  expect(legacyPluginUiHint('ssmt.liquid-gravity-probe', '0.2.33')).toBeNull()
-  expect(legacyPluginUiHint('example.plugin', '1.0.0')).toBeNull()
-  expect(legacyPluginUiHint('ssmt.secondary-motion', 'not-a-version')).toBeNull()
 })
 
 test('frontend and Rust plugin permission identifiers stay aligned', () => {
