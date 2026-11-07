@@ -9,9 +9,8 @@
   padding: 9px 12px;
   border: 1px solid color-mix(in srgb, rgb(var(--theme-surface-tint-rgb)) 34%, #334155);
   border-radius: 10px;
-  background:
-    linear-gradient(145deg, rgba(var(--theme-surface-tint-rgb), 0.13), rgba(255, 255, 255, 0.035)),
-    rgba(38, 46, 60, 0.34) !important;
+  /* 四个方向的箭头和面板共用实色，避免不同透明度或渐变造成接缝色差。 */
+  background: var(--ssmt-tooltip-background, #26303e) !important;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.32);
   color: rgba(var(--theme-text-primary-rgb), 0.94);
   font-size: 12px;
@@ -27,7 +26,7 @@
 .el-popper.is-light[role='tooltip']:not(.el-select__popper):not(.el-dropdown__popper):not(.el-picker__popper):not(.el-cascader__dropdown):not(.el-autocomplete__popper) .el-popper__arrow::before,
 .el-popover.el-popper .el-popper__arrow::before {
   border-color: color-mix(in srgb, rgb(var(--theme-surface-tint-rgb)) 34%, #334155);
-  background: rgba(38, 46, 60, 0.62) !important;
+  background: var(--ssmt-tooltip-background, #26303e) !important;
 }
 
 .el-popper.is-dark[role='tooltip']:not(.el-select__popper):not(.el-dropdown__popper):not(.el-picker__popper):not(.el-cascader__dropdown):not(.el-autocomplete__popper),
@@ -39,14 +38,32 @@
   padding: 8px 10px;
 }
 
+/* 箭头由旋转方块绘制；半透明面板无法遮住内半块，按朝向裁掉重叠区域。 */
+.el-popper[role='tooltip'][data-popper-placement^='right'] > .el-popper__arrow {
+  clip-path: inset(-5px 5px -5px -5px);
+}
+
+.el-popper[role='tooltip'][data-popper-placement^='left'] > .el-popper__arrow {
+  clip-path: inset(-5px -5px -5px 5px);
+}
+
+.el-popper[role='tooltip'][data-popper-placement^='top'] > .el-popper__arrow {
+  clip-path: inset(5px -5px -5px -5px);
+}
+
+.el-popper[role='tooltip'][data-popper-placement^='bottom'] > .el-popper__arrow {
+  clip-path: inset(-5px -5px 5px -5px);
+}
+
 /* 游戏切换会替换大面积背景，提示框使用普通绘制，避免模糊合成层残留。 */
 .el-popper.game-switch-tooltip[role='tooltip'] {
+  /* 面板和箭头从通用规则读取同一底色，避免被高优先级的半透明背景覆盖。 */
+  --ssmt-tooltip-background: #26303e;
   animation: none !important;
   transition: none !important;
   filter: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  background: #26303e !important;
 }
 
 /* Popper 只标记锚点被裁剪，不会自动隐藏传送到 body 的提示框。保留布局供重新定位。 */
