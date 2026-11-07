@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { ElMessage } from 'element-plus';
+import { ElMessage, type TooltipInstance } from 'element-plus';
 import { getAlwaysOnTop, setAlwaysOnTop } from '../store/WindowPinStore';
 import { AppStateManager, type GameInfo } from '../store/AppStateManager';
 import { getGamePresetDisplayName } from '../store/GamePreset';
@@ -67,6 +67,12 @@ const isGameSwitcherHidden = computed(() => isHome.value && appSettings.homeGame
 const otherGames = computed(() => gamesList.filter(g => !g.showSidebar));
 
 const isGameSwitcherOpen = ref(false);
+const gameSwitcherTooltip = ref<TooltipInstance>();
+
+watch([isGameSwitcherHidden, () => appSettings.CurrentGameName], () => {
+    // 入口隐藏或游戏切换时，取消延迟悬停，避免独立浮层继续引用失效位置。
+    gameSwitcherTooltip.value?.onClose();
+});
 
 const toggleGameSwitcher = () => {
     if (isGameSwitcherHidden.value) return;
@@ -501,8 +507,10 @@ const toggleSettingsPage = () => {
         <!-- Game quick-switcher at the far left: current game icon, opens the game picker card -->
         <div class="game-switcher-root" :class="{ 'is-home-sidebar': isGameSwitcherHidden }"
             :inert="isGameSwitcherHidden" :aria-hidden="isGameSwitcherHidden || undefined">
-            <el-tooltip :content="t('titlebar.selectGame')" placement="right"
-                popper-class="caption-game-switcher-tooltip" :show-after="250" :disabled="isGameSwitcherOpen">
+            <el-tooltip ref="gameSwitcherTooltip" :content="t('titlebar.selectGame')" :placement="isLegacyUi ? 'bottom-start' : 'right'"
+                popper-class="caption-game-switcher-tooltip game-switch-tooltip" :gpu-acceleration="false" transition="game-switch-tooltip"
+                :show-after="250" :hide-after="0" :enterable="false"
+                :disabled="isGameSwitcherOpen || isGameSwitcherHidden">
                 <button
                     type="button"
                     class="caption-button game-switcher-button"
@@ -1459,6 +1467,12 @@ const toggleSettingsPage = () => {
     width: 46px;
     height: 32px;
     border-radius: 0;
+}
+
+.is-legacy-ui .game-switcher-card {
+    top: calc(100% + 8px);
+    bottom: auto;
+    left: 0;
 }
 
 .is-legacy-ui .game-switcher-icon-frame {

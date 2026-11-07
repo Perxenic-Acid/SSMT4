@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ElMessage } from 'element-plus';
+import { ElMessage, type TooltipInstance } from 'element-plus';
 import { AppStateManager, type GameInfo } from '../store/AppStateManager';
 import { getGamePresetDisplayName } from '../store/GamePreset';
 import { orderedFavoriteGames } from '../common/GameSwitcher';
@@ -9,6 +9,13 @@ import GameSwitcherPin from './GameSwitcherPin.vue';
 
 const { t } = useI18n();
 const appSettings = AppStateManager.appSettings;
+const gameTooltips = ref<TooltipInstance[]>([]);
+const pendingGameSwitches = ref(0);
+const closeGameTooltips = () => {
+    // 同时取消尚未触发的悬停定时器，不能仅隐藏已经显示的提示。
+    gameTooltips.value.forEach(tooltip => tooltip.onClose());
+};
+watch(() => appSettings.CurrentGameName, closeGameTooltips);
 const isModernUi = computed(() => appSettings.uiMode === 'modern');
 const groups = computed(() => [
     { label: t('titlebar.favoriteGames'), games: orderedFavoriteGames(AppStateManager.gamesList, appSettings.sidebarGameOrder) },
@@ -22,9 +29,17 @@ const unpin = async () => {
 };
 
 const selectGame = async (game: GameInfo) => {
+    closeGameTooltips();
     if (game.name === appSettings.CurrentGameName) return;
+    pendingGameSwitches.value++;
     try { await AppStateManager.selectGame(game); }
     catch (error) { ElMessage.error(t('appState.messages.loadSettingsFailed', { error: String(error) })); }
+    finally {
+        // 切换期间移入其他图标也不能创建提示；等待布局提交后再恢复悬停。
+        await nextTick();
+        closeGameTooltips();
+        pendingGameSwitches.value--;
+    }
 };
 </script>
 
@@ -45,7 +60,10 @@ const selectGame = async (game: GameInfo) => {
         </div>
         <div class="home-game-sidebar-list">
             <div v-for="group in groups" :key="group.label" class="home-game-sidebar-group" role="group" :aria-label="group.label">
-                <el-tooltip v-for="game in group.games" :key="game.name" :content="getGamePresetDisplayName(game.name, t)" placement="right" :show-after="200">
+                <el-tooltip v-for="game in group.games" :key="game.name" ref="gameTooltips"
+                    :content="getGamePresetDisplayName(game.name, t)" placement="right" :show-after="200"
+                    popper-class="game-switch-tooltip" :gpu-acceleration="false" transition="game-switch-tooltip"
+                    :disabled="pendingGameSwitches > 0" :hide-after="0" :enterable="false">
                     <button type="button" class="home-game-sidebar-item"
                         :class="{ active: appSettings.CurrentGameName === game.name }"
                         :aria-label="getGamePresetDisplayName(game.name, t)"

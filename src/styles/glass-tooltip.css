@@ -39,6 +39,22 @@
   padding: 8px 10px;
 }
 
+/* 游戏切换会替换大面积背景，提示框使用普通绘制，避免模糊合成层残留。 */
+.el-popper.game-switch-tooltip[role='tooltip'] {
+  animation: none !important;
+  transition: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: #26303e !important;
+}
+
+/* Popper 只标记锚点被裁剪，不会自动隐藏传送到 body 的提示框。保留布局供重新定位。 */
+.el-popper.game-switch-tooltip[data-popper-reference-hidden='true'] {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 /* Named page popovers inherit the same acrylic shell even when their
    component-scoped rules were emitted later in the bundle. */
 .el-popper.version-info-popper,
