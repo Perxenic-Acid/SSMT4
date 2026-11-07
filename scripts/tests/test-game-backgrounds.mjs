@@ -33,11 +33,12 @@ const video = 'https://mc.kurogames.com/website-preface/video/bg/bg-video.mp4';
 async function resources(t, options = {}) {
   const root = await fs.mkdtemp(path.join(tmpdir(), 'ssmt-background-test-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const dir = path.join(root, 'WWMI');
+  const gameName = options.gameName || 'WWMI';
+  const dir = path.join(root, gameName);
   await fs.mkdir(dir);
-  const config = { backgroundType: 'Video', ...options.config };
+  const config = { gamePreset: gameName, backgroundType: 'Video', ...options.config };
   const requests = [], signatures = [];
-  const manager = load('../../src/store/ResourceManager.ts', {
+  const resourceModule = load('../../src/store/ResourceManager.ts', {
     pinia,
     './GlobalConfig': { GlobalConfig: { GlobalGamesFolder: async () => root } },
     '../utils/SSMTFileUtils': { SSMTFileUtils: { JoinPath: async (...parts) => path.join(...parts) } },
@@ -60,8 +61,16 @@ async function resources(t, options = {}) {
       if (options.fail === 'signing') throw new Error('签名不可用');
       return `${args.url}?auth_key=fresh-signature`;
     } },
-    '@tauri-apps/plugin-http': { fetch: async url => {
+    '@tauri-apps/plugin-http': { fetch: async (url, init = {}) => {
       requests.push(url);
+      if (url.includes('getAllGameBasicInfo')) {
+        assert.ok(init.signal, '官网背景列表请求必须带超时信号');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => structuredClone(options.hypResponse),
+        };
+      }
       if (options.posterFail && url === poster) throw new Error('海报下载失败');
       const isVideo = url.startsWith(video);
       if (isVideo) {
@@ -78,15 +87,35 @@ async function resources(t, options = {}) {
       };
     } },
     '../utils/SSMTJsonUtils': {}, '../helper/PathHelper': {},
-    '../i18n': { i18n: { global: { t: key => key } } }, '../utils/debugLog': {},
+    '../i18n': { i18n: { global: { locale: { value: 'zhs' }, t: key => key } } }, '../utils/debugLog': {},
     './GameConfig': { GameConfigManager: {
       loadGameConfig: async () => structuredClone(config),
       saveGameConfig: async (_name, updated) => Object.assign(config, structuredClone(updated)),
+      updateGameConfig: async (_name, updater) => {
+        const latest = structuredClone(config);
+        const updated = await updater(latest);
+        if (updated == null) return latest;
+        Object.assign(config, structuredClone(updated));
+        return structuredClone(updated);
+      },
     } },
     './GamePreset': {},
-  }).ResourceManager;
-  const update = type => manager.updateGameBackground('WWMI', 'WWMI', type || 'Video', config.lastBackgroundUrl);
-  return { config, requests, signatures, dir, update, manager };
+  });
+  const manager = resourceModule.ResourceManager;
+  const update = type => {
+    if (type) config.backgroundType = type;
+    return manager.updateGameBackground(gameName, gameName, type || 'Video', config.lastBackgroundUrl);
+  };
+  return {
+    config,
+    requests,
+    signatures,
+    dir,
+    gameName,
+    update,
+    manager,
+    isAllowedBackgroundPath: resourceModule.isAllowedBackgroundPath,
+  };
 }
 
 test('鸣潮动态和静态各占一个列表项，共用海报且不保存临时签名', async t => {
@@ -164,7 +193,127 @@ test('替换视频失败时保留原缓存并允许下次重试', async t => {
   assert.equal((await fs.readFile(cached)).subarray(4, 8).toString(), 'ftyp');
 });
 
-function state(t) {
+test('调用方传入错误预设时仍使用目标游戏自己的配置', async t => {
+  const h = await resources(t);
+  await h.manager.updateGameBackground('WWMI', 'NTEMI', 'Image');
+  assert.equal(h.config.gamePreset, 'WWMI');
+  assert.deepEqual(h.config.backgroundEntries.map(entry => entry.type), ['Image', 'Video']);
+  assert.ok(h.requests.some(url => url === poster));
+  assert.ok(h.requests.some(url => url.startsWith(video)));
+});
+
+test('背景路径允许外部共享目录但拒绝兄弟游戏目录和路径穿越', async t => {
+  const h = await resources(t);
+  const root = path.dirname(h.dir);
+  const current = h.dir;
+  const sibling = path.join(root, 'GIMI');
+  const external = path.join(path.dirname(root), 'SharedBackgrounds');
+  const directories = [current, sibling];
+
+  assert.equal(h.isAllowedBackgroundPath(path.join(current, 'Background.webp'), current, directories), true);
+  assert.equal(h.isAllowedBackgroundPath(path.join(external, 'Shared.webp'), current, directories), true);
+  assert.equal(h.isAllowedBackgroundPath(path.join(sibling, 'Background.webp'), current, directories), false);
+  assert.equal(
+    h.isAllowedBackgroundPath(path.join(current, '..', 'GIMI', 'Background.webp'), current, directories),
+    false,
+  );
+});
+
+test('官网返回多个游戏时只采用与目标 game_id 匹配的背景', async t => {
+  const wrongImage = 'https://launcher-webstatic.mihoyo.com/genshin.webp';
+  const wrongVideo = 'https://launcher-webstatic.mihoyo.com/genshin.webm';
+  const rightImage = 'https://launcher-webstatic.mihoyo.com/zenless.webp';
+  const rightVideo = 'https://launcher-webstatic.mihoyo.com/zenless.webm';
+  const h = await resources(t, {
+    gameName: 'ZZMI',
+    config: { gamePreset: 'ZZMI', backgroundType: 'Video' },
+    hypResponse: {
+      data: {
+        game_info_list: [
+          {
+            game: { id: '1Z8W5NHUQb' },
+            backgrounds: [{
+              id: 'genshin-entry',
+              background: { url: wrongImage },
+              video: { url: wrongVideo },
+            }],
+          },
+          {
+            game: { id: 'x6znKlJ0xK' },
+            backgrounds: [{
+              id: 'zenless-entry',
+              background: { url: rightImage },
+              video: { url: rightVideo },
+            }],
+          },
+        ],
+      },
+    },
+  });
+
+  await h.manager.updateGameBackground('ZZMI', 'GIMI', 'Video');
+
+  assert.equal(h.config.backgroundEntries.length, 1);
+  assert.equal(h.config.backgroundEntries[0].id, 'zenless-entry');
+  assert.equal(h.config.backgroundEntries[0].imageUrl, rightImage);
+  assert.equal(h.config.backgroundEntries[0].videoUrl, rightVideo);
+  assert.ok(h.config.backgroundEntries[0].videoPath.startsWith(h.dir));
+  assert.ok(!h.requests.includes(wrongImage));
+  assert.ok(!h.requests.includes(wrongVideo));
+});
+
+test('设置弹窗保存只合并用户实际修改的字段', () => {
+  const { mergeChangedConfig } = load('../../src/store/GameConfigMerge.ts', {});
+  const baseline = {
+    installDir: 'old-dir',
+    launchArgs: 'old-args',
+    backgroundEntries: [{ id: 'old-background' }],
+  };
+  const current = {
+    installDir: 'new-dir',
+    launchArgs: 'old-args',
+    backgroundEntries: [{ id: 'old-background' }],
+  };
+  const latest = {
+    installDir: 'old-dir',
+    launchArgs: 'externally-updated',
+    backgroundEntries: [{ id: 'new-background' }],
+  };
+
+  const result = mergeChangedConfig(baseline, current, latest);
+
+  assert.equal(result.changed, true);
+  assert.equal(result.config.installDir, 'new-dir');
+  assert.equal(result.config.launchArgs, 'externally-updated');
+  assert.equal(
+    JSON.stringify(result.config.backgroundEntries),
+    JSON.stringify([{ id: 'new-background' }]),
+  );
+});
+
+test('设置弹窗没有改动时不会覆盖磁盘新配置', () => {
+  const { mergeChangedConfig } = load('../../src/store/GameConfigMerge.ts', {});
+  const baseline = { installDir: 'old-dir', backgroundEntries: [{ id: 'old' }] };
+  const latest = { installDir: 'new-dir', backgroundEntries: [{ id: 'new' }] };
+  const result = mergeChangedConfig(baseline, baseline, latest);
+
+  assert.equal(result.changed, false);
+  assert.equal(JSON.stringify(result.config), JSON.stringify(latest));
+});
+
+test('设置弹窗合并嵌套配置时不会覆盖其他子字段', () => {
+  const { mergeChangedConfig } = load('../../src/store/GameConfigMerge.ts', {});
+  const baseline = { playerTweaks: { camera: 'old', gameplay: 'keep' } };
+  const current = { playerTweaks: { camera: 'new', gameplay: 'keep' } };
+  const latest = { playerTweaks: { camera: 'old', gameplay: 'external' } };
+  const result = mergeChangedConfig(baseline, current, latest);
+
+  assert.equal(result.changed, true);
+  assert.equal(result.config.playerTweaks.camera, 'new');
+  assert.equal(result.config.playerTweaks.gameplay, 'external');
+});
+
+function appStateModule(t) {
   const scope = vue.effectScope();
   t.after(() => scope.stop());
   return scope.run(() => load('../../src/store/AppStateManager.ts', {
@@ -176,7 +325,11 @@ function state(t) {
       AppSettings: class { bgType = 'Image'; bgImage = ''; bgVideo = ''; CurrentGameName = ''; },
     },
     '../i18n': { i18n: { global: { t: key => key } } },
-  }).AppStateManager);
+  }));
+}
+
+function state(t) {
+  return appStateModule(t).AppStateManager;
 }
 
 function game(name = 'WWMI') {
@@ -188,6 +341,17 @@ function game(name = 'WWMI') {
     ],
   };
 }
+
+test('无效选择 ID 时按背景类型回退，而不是固定选择第一项', t => {
+  const h = appStateModule(t);
+  const entries = [
+    { id: 'video', type: 'Video', videoPath: 'asset://video.webm' },
+    { id: 'image', type: 'Image', imagePath: 'asset://image.webp' },
+  ];
+  assert.equal(h.resolveBackgroundIndex(entries, 'missing', 'Image'), 1);
+  assert.equal(h.resolveBackgroundIndex(entries, 'video', 'Image'), 0);
+  assert.equal(h.resolveBackgroundIndex(entries, undefined, 'Video'), 0);
+});
 
 test('解码或播放错误回退海报，保持所选背景以便下次重试', t => {
   const h = state(t), current = game();

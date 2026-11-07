@@ -47,6 +47,7 @@ struct Candidate {
     source_leveldb: PathBuf,
     modified: SystemTime,
     score: usize,
+    source_priority: u8,
 }
 
 struct StagedAsset {
@@ -451,6 +452,15 @@ fn discover_endfield_background(
                     .unwrap_or(SystemTime::UNIX_EPOCH),
             )
         });
+        let newest_table_modified = files
+            .iter()
+            .filter(|path| leveldb_source_kind(path) == 1)
+            .filter_map(|path| {
+                path.metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+            })
+            .max();
         for path in files {
             let Ok(bytes) = fs::read(&path) else {
                 continue;
@@ -473,6 +483,11 @@ fn discover_endfield_background(
                     source_leveldb: path.clone(),
                     modified,
                     score,
+                    source_priority: leveldb_source_priority(
+                        &path,
+                        modified,
+                        newest_table_modified,
+                    ),
                 });
                 break;
             }
@@ -481,6 +496,7 @@ fn discover_endfield_background(
 
     candidates.sort_by_key(|candidate| {
         (
+            candidate.source_priority,
             std::cmp::Reverse(candidate.modified),
             std::cmp::Reverse(candidate.score),
         )
@@ -488,6 +504,32 @@ fn discover_endfield_background(
     candidates.into_iter().next().ok_or_else(|| {
         "没有找到终末地当前背景。请先打开一次海猫启动器并进入终末地，再让页面完全加载".into()
     })
+}
+
+fn leveldb_source_kind(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("log") => 0,
+        Some("ldb") => 1,
+        _ => 2,
+    }
+}
+
+fn leveldb_source_priority(
+    path: &Path,
+    modified: SystemTime,
+    newest_table_modified: Option<SystemTime>,
+) -> u8 {
+    match leveldb_source_kind(path) {
+        // Prefer the active WAL only when it is not older than compacted tables.
+        0 if newest_table_modified.map_or(true, |table| modified >= table) => 0,
+        0 => 1,
+        kind => kind,
+    }
 }
 
 fn read_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -775,6 +817,30 @@ mod tests {
         assert!(validate_image_url("http://hg-utils-public.hycdn.cn/a.webp").is_err());
         assert!(validate_video_url("https://hg-utils-public.hycdn.cn/a.webm").is_err());
         assert!(validate_image_url("https://hg-utils-public.hycdn.cn/a.webp").is_ok());
+    }
+
+    #[test]
+    fn prefers_active_log_over_compacted_tables() {
+        let table = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20);
+        let older_log = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10);
+        let newer_log = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(30);
+        assert_eq!(
+            leveldb_source_priority(Path::new("000491.log"), newer_log, Some(table)),
+            0
+        );
+        assert_eq!(
+            leveldb_source_priority(Path::new("000491.log"), older_log, Some(table)),
+            1,
+            "stale WAL must not outrank a newer compacted table"
+        );
+        assert_eq!(
+            leveldb_source_priority(Path::new("000492.ldb"), table, Some(table)),
+            1
+        );
+        assert_eq!(
+            leveldb_source_priority(Path::new("CURRENT"), table, Some(table)),
+            2
+        );
     }
 
     #[test]

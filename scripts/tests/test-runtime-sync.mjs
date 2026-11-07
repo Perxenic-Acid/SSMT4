@@ -288,6 +288,35 @@ test('runtime lock survives config save and reload independently for each game',
   assert.equal((await GameConfigManager.loadGameConfig('custom')).lockRuntimeUpdates, false);
 });
 
+test('config updates are serialized per game without losing concurrent fields', async t => {
+  const h = await harness(t);
+  const { GameConfigManager } = load('../../src/store/GameConfig.ts', {
+    pinia: { defineStore: (_id, setup) => { const store = setup(); return () => store; } },
+    './GlobalConfig': { GlobalConfig: { GlobalGamesFolder: async () => h.root } },
+    '../utils/SSMTFileUtils': { SSMTFileUtils: { JoinPath: async (...parts) => path.join(...parts) } },
+    '@tauri-apps/plugin-fs': { exists: file => fs.access(file).then(() => true, () => false),
+      mkdir: fs.mkdir, readTextFile: file => fs.readFile(file, 'utf8'), writeTextFile: fs.writeFile },
+    '../utils/RecycleBin': {},
+    './GamePreset': { isValidGamePreset: () => true, resolveGamePresetByGameName: () => '' },
+  });
+
+  await GameConfigManager.createNewConfig('custom');
+  await Promise.all([
+    GameConfigManager.updateGameConfig('custom', async config => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return { ...config, installDir: 'dir-from-first' };
+    }),
+    GameConfigManager.updateGameConfig('custom', config => ({
+      ...config,
+      launchArgs: 'args-from-second',
+    })),
+  ]);
+
+  const saved = await GameConfigManager.loadGameConfig('custom');
+  assert.equal(saved.installDir, 'dir-from-first');
+  assert.equal(saved.launchArgs, 'args-from-second');
+});
+
 test('online update failure shows its reason once without blocking launch', async t => {
   const h = await harness(t, { remoteWarning: 'GitHub timed out' });
   await h.launch.launch('GIMI', { gameLaunchMode: 'always-normal' }, () => assert.fail('No update dialog'));

@@ -168,6 +168,19 @@ export const getEffectiveUseUpx = (
 }
 
 export const useGameConfigStore = defineStore('gameConfig', () => {
+    const saveQueues = new Map<string, Promise<void>>();
+
+    function enqueueConfigTask<T>(gameName: string, task: () => Promise<T>): Promise<T> {
+        const previous = saveQueues.get(gameName) ?? Promise.resolve();
+        const result = previous.catch(() => {}).then(task);
+        const tail = result.then(() => undefined, () => undefined);
+        saveQueues.set(gameName, tail);
+        void tail.finally(() => {
+            if (saveQueues.get(gameName) === tail) saveQueues.delete(gameName);
+        });
+        return result;
+    }
+
     async function getConfigPath(gameName: string): Promise<string> {
         const gamesRoot = await GlobalConfig.GlobalGamesFolder();
         return SSMTFileUtils.JoinPath(gamesRoot, gameName, 'Config.json');
@@ -310,7 +323,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
         }
     }
 
-    async function saveGameConfig(gameName: string, config: GameConfig): Promise<void> {
+    async function writeGameConfig(gameName: string, config: GameConfig): Promise<GameConfig> {
         const gamesRoot = await GlobalConfig.GlobalGamesFolder();
         const dirPath = await SSMTFileUtils.JoinPath(gamesRoot, gameName);
         const configPath = await SSMTFileUtils.JoinPath(dirPath, 'Config.json');
@@ -318,6 +331,26 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
 
         await mkdir(dirPath, { recursive: true });
         await writeTextFile(configPath, JSON.stringify(normalizedConfig, null, 2));
+        return normalizedConfig;
+    }
+
+    async function saveGameConfig(gameName: string, config: GameConfig): Promise<void> {
+        await enqueueConfigTask(gameName, async () => {
+            await writeGameConfig(gameName, config);
+        });
+    }
+
+    async function updateGameConfig(
+        gameName: string,
+        updater: (config: GameConfig) => GameConfig | null | undefined | Promise<GameConfig | null | undefined>,
+    ): Promise<GameConfig> {
+        return enqueueConfigTask(gameName, async () => {
+            const current = await loadGameConfig(gameName);
+            const currentCopy = JSON.parse(JSON.stringify(current)) as GameConfig;
+            const updated = await updater(currentCopy);
+            if (updated == null) return current;
+            return writeGameConfig(gameName, updated);
+        });
     }
 
     return {
@@ -327,6 +360,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
         deleteGameConfigFolder,
         loadGameConfig,
         saveGameConfig,
+        updateGameConfig,
     }
 })
 
@@ -338,4 +372,5 @@ export const GameConfigManager = {
     get deleteGameConfigFolder() { return useGameConfigStore().deleteGameConfigFolder },
     get loadGameConfig() { return useGameConfigStore().loadGameConfig },
     get saveGameConfig() { return useGameConfigStore().saveGameConfig },
+    get updateGameConfig() { return useGameConfigStore().updateGameConfig },
 }
