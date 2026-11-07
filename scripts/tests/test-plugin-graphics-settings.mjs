@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { setImmediate } from 'node:timers/promises';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -78,6 +78,19 @@ function gameplaySettings(t, registryFps) {
 }
 
 test('崩铁 Player Tweaks 只保存 120 FPS，原神继续支持原有帧率和队伍页选项', async t => {
+  const playerTweaksFixtures = [
+    new URL('../../native/player-tweaks-ui/src/playerTweaksGameplay.ts', import.meta.url),
+    new URL('../../native/player-tweaks-ui/src/PlayerTweaksGameplaySettings.vue', import.meta.url),
+  ];
+  const presentFixtures = playerTweaksFixtures.filter(path => existsSync(path));
+  assert.ok(
+    presentFixtures.length === 0 || presentFixtures.length === playerTweaksFixtures.length,
+    'Player Tweaks source fixtures are only partially present',
+  );
+  if (presentFixtures.length === 0) {
+    t.skip('Player Tweaks UI is outside the minimal Native checkout');
+    return;
+  }
   for (const registry of [true, false]) {
     const { s, saved } = gameplaySettings(t, registry);
     await setImmediate();

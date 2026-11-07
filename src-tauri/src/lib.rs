@@ -149,8 +149,6 @@ pub fn run() {
             commands::launch_shortcut::set_launch_console_shortcut,
             plugin::commands::plugin_registry_snapshot,
             plugin::commands::plugin_registry_snapshot_for_game,
-            plugin::commands::plugin_ui_routes,
-            plugin::commands::plugin_capabilities,
             plugin::page_runtime::plugin_page_catalog,
             plugin::page_runtime::acquire_static_plugin_page_lease,
             plugin::page_runtime::release_static_plugin_page_lease,

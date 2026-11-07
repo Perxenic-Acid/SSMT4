@@ -32,6 +32,7 @@ import { ResourceManager } from '../../store/ResourceManager'
 import PluginCompatibilityPanel from './PluginCompatibilityPanel.vue'
 import PluginPermissionList from './PluginPermissionList.vue'
 import {
+  legacyPluginUiHint,
   orderedPermissions,
   permissionDefinitionFor,
   type PluginCompatibilityItem,
@@ -214,6 +215,9 @@ const installedById = computed(() => {
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
 const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
 const selectedPages = computed(() => selectedPlugin.value?.manifest.contributions?.pages ?? [])
+const selectedLegacyUiHint = computed(() => selectedPlugin.value
+  ? legacyPluginUiHint(selectedPlugin.value.manifest.id, selectedPlugin.value.manifest.version)
+  : null)
 const selectedLaunchHooks = computed(() => selectedPlugin.value?.manifest.contributions?.launchHooks ?? [])
 const selectedInjectedDlls = computed(() => selectedPlugin.value?.manifest.contributions?.injectedDlls ?? [])
 const selectedRuntimePlugins = computed(() => selectedPlugin.value?.manifest.contributions?.runtimePlugins ?? [])
@@ -1245,7 +1249,10 @@ onMounted(async () => {
                 <div v-else class="muted-copy">{{ t('pluginMarketplace.dlss5ConfigureTarget') }}</div>
               </template>
               <template v-else>
-                <div class="muted-copy">{{ t('pluginMarketplace.noFeatures') }}</div>
+                <div v-if="selectedLegacyUiHint" class="muted-copy legacy-ui-hint" role="status">
+                  {{ t(`pluginMarketplace.legacyUi.${selectedLegacyUiHint}`) }}
+                </div>
+                <div v-else class="muted-copy">{{ t('pluginMarketplace.noFeatures') }}</div>
               </template>
             </section>
             <section v-else-if="detailTab === 'dependencies'" class="detail-section">
@@ -1574,6 +1581,13 @@ onMounted(async () => {
   color: var(--market-muted);
   font-size: 12px;
   line-height: 1.7;
+}
+.legacy-ui-hint {
+  padding: 10px 12px;
+  border: 1px solid var(--t-warning-border);
+  border-radius: 7px;
+  background: var(--t-warning-bg);
+  color: var(--t-warning-text);
 }
 .marketplace-layout { display: grid; grid-template-columns: minmax(280px, 330px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; flex: 1; align-items: stretch; min-height: 0; }
 .marketplace-sidebar, .plugin-detail {

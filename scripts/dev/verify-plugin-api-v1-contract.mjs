@@ -11,6 +11,15 @@ const packageRoot = join(root, 'native', 'official-plugin-packages')
 const currentApi = contract.pluginApiVersion
 const [major, minor, patch] = currentApi.split('.').map(Number)
 
+async function pathExists(path) {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function parseVersion(value) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value)
   if (!match) throw new Error(`Invalid semantic version: ${value}`)
@@ -108,18 +117,28 @@ for (const id of idDirectories) {
 }
 
 const expectedLatest = new Map([
-  ['ssmt.dlss5.integration', { version: '0.3.0', schemaVersion: 2, pageKind: 'static', draft: true }],
-  ['ssmt.hoyoshade.bridge', { version: '0.2.0', schemaVersion: 2 }],
+  ['ssmt.dlss5.integration', { version: '0.3.0', schemaVersion: 2, pageKind: 'static', draft: true, optionalInSubset: true }],
+  ['ssmt.hoyoshade.bridge', { version: '0.2.0', schemaVersion: 2, optionalInSubset: true }],
   ['ssmt.liquid-gravity-probe', { version: '0.2.33', schemaVersion: 2, pageKind: 'local-service' }],
-  ['ssmt.player-tweaks', { version: '0.2.0', schemaVersion: 2, pageKind: 'static' }],
-  ['ssmt.poser.genshin-probe', { version: '0.1.1', schemaVersion: 1 }],
+  ['ssmt.player-tweaks', { version: '0.2.0', schemaVersion: 2, pageKind: 'static', optionalInSubset: true }],
+  ['ssmt.poser.genshin-probe', { version: '0.1.1', schemaVersion: 1, optionalInSubset: true }],
   ['ssmt.secondary-motion', { version: '3.3.4', schemaVersion: 2, pageKind: 'static' }],
 ])
 
+const verifiedLatest = []
+const optionalPackagesOutsideSubset = []
 for (const [id, expected] of expectedLatest) {
   const candidates = manifests.filter(item => item.id === id)
+  if (!candidates.length && expected.optionalInSubset) {
+    optionalPackagesOutsideSubset.push(`${id}@${expected.version}`)
+    continue
+  }
   assert.ok(candidates.length, `${id}: no package versions found`)
   const latest = candidates.sort((a, b) => compareVersions(a.version, b.version)).at(-1)
+  if (expected.optionalInSubset && compareVersions(latest.version, expected.version) < 0) {
+    optionalPackagesOutsideSubset.push(`${id}@${expected.version} (checkout latest: ${latest.version})`)
+    continue
+  }
   assert.equal(latest.version, expected.version, `${id}: unexpected latest package version`)
   assert.equal(latest.manifest.schemaVersion, expected.schemaVersion, `${id}: unexpected latest schema`)
   if (expected.pageKind) {
@@ -140,6 +159,7 @@ for (const [id, expected] of expectedLatest) {
     const status = JSON.parse(await readFile(join(latest.root, 'release-status.json'), 'utf8'))
     assert.equal(status.publish, false, `${id}@${latest.version}: draft package must not be publishable`)
   }
+  verifiedLatest.push(`${id}@${latest.version}`)
 }
 
 const pageRuntime = await readFile(join(root, 'src', 'plugin', 'pageRuntime.ts'), 'utf8')
@@ -164,6 +184,7 @@ const bridgeFiles = [
   join(root, 'examples', 'plugin-sdk-fixture', 'ui', 'index.html'),
 ]
 for (const file of bridgeFiles) {
+  if (!await pathExists(file)) continue
   const source = await readFile(file, 'utf8')
   assert.ok(
     source.includes(`protocolVersion: ${contract.pageBridgeProtocolVersion}`),
@@ -199,6 +220,7 @@ async function collectSourceFiles(directory) {
 }
 
 for (const directory of pluginUiRoots) {
+  if (!await pathExists(directory)) continue
   for (const file of await collectSourceFiles(directory)) {
     const source = await readFile(file, 'utf8')
     assert.ok(
@@ -232,7 +254,8 @@ console.log(JSON.stringify({
   pluginApiVersion: currentApi,
   bridgeProtocolVersion: contract.pageBridgeProtocolVersion,
   packagesChecked: manifests.length,
-  latestPackages: [...expectedLatest].map(([id, value]) => `${id}@${value.version}`),
+  latestPackages: verifiedLatest,
+  optionalPackagesOutsideSubset,
   capabilities: contract.capabilities.length,
   errorCodes: contract.errorCodes.length,
 }, null, 2))

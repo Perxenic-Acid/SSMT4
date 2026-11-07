@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { setImmediate } from 'node:timers/promises'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -108,6 +108,11 @@ function baseHandler(overrides = {}) {
 }
 
 test('DLSS5 plugin page reads state only through the PageLease capability bridge', async t => {
+  const pagePath = new URL('../../native/dlss5-integration-ui/src/Dlss5Page.vue', import.meta.url)
+  if (!existsSync(pagePath)) {
+    t.skip('DLSS5 UI is outside the minimal Native checkout')
+    return
+  }
   const { handler, calls } = baseHandler()
   const s = page(t, handler)
   await s.refresh()
@@ -125,6 +130,11 @@ test('DLSS5 plugin page reads state only through the PageLease capability bridge
 })
 
 test('DLSS5 download uses a host task, reports progress and resumes after remount', async t => {
+  const pagePath = new URL('../../native/dlss5-integration-ui/src/Dlss5Page.vue', import.meta.url)
+  if (!existsSync(pagePath)) {
+    t.skip('DLSS5 UI is outside the minimal Native checkout')
+    return
+  }
   let taskReads = 0
   const { handler, calls } = baseHandler({
     'graphics.task.start': () => ({
@@ -181,6 +191,11 @@ test('DLSS5 download uses a host task, reports progress and resumes after remoun
 })
 
 test('DLSS5 offline import uses the host directory picker before creating an import task', async t => {
+  const pagePath = new URL('../../native/dlss5-integration-ui/src/Dlss5Page.vue', import.meta.url)
+  if (!existsSync(pagePath)) {
+    t.skip('DLSS5 UI is outside the minimal Native checkout')
+    return
+  }
   const { handler, calls } = baseHandler({
     'graphics.directory.select': () => ({ path: 'D:/Offline/GIMI' }),
     'graphics.task.start': payload => ({

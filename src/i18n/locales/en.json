@@ -408,6 +408,10 @@
     "localBuild": "Local build",
     "gameCompatibilityUnspecified": "No games listed by the package; check actual compatibility.",
     "noFeatures": "This plugin has no configurable options here.",
+    "legacyUi": {
+      "secondaryMotion": "The legacy settings page is disabled. Upgrade to at least 3.3.1; version 3.3.4 is recommended.",
+      "liquidGravityProbe": "The legacy embedded page is disabled. Upgrade to 0.2.33."
+    },
     "launchPlan": {
       "checking": "Checking launch resource conflicts…",
       "title": "Launch resource conflict",
