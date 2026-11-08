@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { ref, reactive } from 'vue';
+import TreeStore from 'element-plus/es/components/tree/src/model/tree-store.mjs';
 
 function load(name, dependencies = {}) {
   const source = readFileSync(new URL(`../../src/views/ModsManagement/ModsManagement.${name}.ts`, import.meta.url), 'utf8');
@@ -14,6 +15,115 @@ function load(name, dependencies = {}) {
 }
 const { reconcileModSnapshot } = load('snapshot', { './ModsManagement.paths': load('paths') });
 const mod = (relativePath, enabled = true) => ({ id: relativePath, relativePath, enabled });
+
+test('切换游戏后的流式监听拒绝旧游戏分块及迟到的最终结果', async () => {
+  const vue = readFileSync(new URL('../../src/views/ModsManagement/ModsManagement.vue', import.meta.url), 'utf8');
+  const source = vue.slice(vue.indexOf('const loadGroupModsStreaming ='), vue.indexOf('const setGroupIcon ='));
+  const code = ts.transpileModule(source + '\nexports.scan = loadGroupModsStreaming;', {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const listeners = new Set();
+  const requests = [];
+  const groups = [];
+  const context = {
+    exports: {}, Date, console, Promise,
+    selectedGame: ref('A'), selectedGroup: ref('Root'), refreshModsToken: 1, groupLoadToken: 1,
+    totalModsCount: ref(0), hasVisibleContent: () => false,
+    ModManager: { getInstallDir: async game => game, isScanCancelled: () => false },
+    listen: async (_event, callback) => { listeners.add(callback); return () => listeners.delete(callback); },
+    invoke: async (_command, args) => new Promise(resolve => requests.push({ args, resolve })),
+    updateAvailableGroups: incoming => groups.push(...incoming.map(group => group.id)),
+    dedupeGroupsById: incoming => incoming, reconcileCurrentSubGroups: () => {},
+    appendModsIncrementally: async () => {},
+  };
+  vm.runInNewContext(code, context);
+  const first = context.exports.scan('A', 'Root', 1);
+  await new Promise(resolve => setImmediate(resolve));
+  context.selectedGame.value = 'B';
+  context.refreshModsToken = 2;
+  context.groupLoadToken = 2;
+  const second = context.exports.scan('B', 'Root', 2);
+  await new Promise(resolve => setImmediate(resolve));
+  for (const listener of listeners) listener({ payload: {
+    phase: 'chunk', scanId: requests[0].args.scanId, groups: [{ id: 'A/Old' }],
+  } });
+  for (const listener of listeners) listener({ payload: {
+    phase: 'chunk', scanId: requests[1].args.scanId, groups: [{ id: 'B/New' }],
+  } });
+  requests[0].resolve({ mods: [], groups: [{ id: 'A/Late' }] });
+  requests[1].resolve({ mods: [], groups: [{ id: 'B/Final' }] });
+  await Promise.all([first, second]);
+  assert.deepEqual(groups, ['B/New', 'B/Final']);
+  assert.equal(listeners.size, 0);
+});
+
+test('懒加载箭头无需选中即可展开，重复展开不扫描，失败可重试', async () => {
+  const { createGroupTreeLoader } = load('tree');
+  const data = reactive([{ id: 'A', leaf: false, children: [] }]);
+  let scans = 0;
+  let fail = true;
+  const loadChildren = createGroupTreeLoader(() => data, async () => {
+    scans++;
+    if (fail) throw new Error('读取失败');
+    return [{ id: 'A/Child', leaf: true, children: [] }];
+  });
+  const store = new TreeStore({ key: 'id', data, lazy: true, load: loadChildren,
+    props: { children: 'children', isLeaf: 'leaf' } });
+  store.initialize();
+  const parent = store.getNode('A');
+  assert.equal(parent.isLeaf, false);
+  parent.expand();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(parent.loaded, false);
+  assert.equal(parent.loading, false);
+  fail = false;
+  await new Promise(resolve => parent.expand(resolve));
+  const child = store.getNode('A/Child');
+  assert.ok(child);
+  assert.equal(child.isLeaf, true);
+  assert.equal(store.currentNode, null);
+  parent.collapse();
+  await new Promise(resolve => parent.expand(resolve));
+  assert.equal(store.getNode('A/Child'), child);
+  assert.equal(scans, 2);
+});
+
+test('分类缓存与扫描更新保留 Element Plus 内部节点、展开和选中状态', () => {
+  const { reconcileGroupTree } = load('tree');
+  const entry = (id, children = [], count = 1) => ({ id, label: id, count, children });
+  const data = reactive([entry('A', [entry('A/Child')]), entry('B')]);
+  const store = new TreeStore({ key: 'id', data, props: { label: 'label', children: 'children' } });
+  store.initialize();
+  const parent = store.getNode('A');
+  const child = store.getNode('A/Child');
+  const children = data[0].children;
+  parent.expand();
+  for (const selected of ['A/Child', 'B', 'A', 'A/Child']) {
+    store.setCurrentNodeKey(selected);
+    reconcileGroupTree(data, [entry('A', [entry('A/Child')], 2), entry('B')]);
+    store.setData(data);
+    parent.updateChildren();
+    assert.equal(store.getNode('A'), parent);
+    assert.equal(store.getNode('A/Child'), child);
+    assert.equal(data[0].children, children);
+    assert.equal(parent.expanded, true);
+    assert.equal(store.currentNode.key, selected);
+    assert.equal(parent.data.count, 2);
+  }
+  // 实际新增和删除子项时，只改变相应节点。
+  reconcileGroupTree(data, [entry('A', [entry('A/Child'), entry('A/New')]), entry('B')]);
+  store.setData(data);
+  parent.updateChildren();
+  assert.equal(store.getNode('A/Child'), child);
+  assert.ok(store.getNode('A/New'));
+  reconcileGroupTree(data, [entry('A', [entry('A/Child')]), entry('B')]);
+  store.setData(data);
+  parent.updateChildren();
+  assert.equal(store.getNode('A/New'), null);
+  assert.equal(store.getNode('A'), parent);
+  assert.equal(store.getNode('A/Child'), child);
+  assert.equal(parent.expanded, true);
+});
 
 test('启停目录前缀变化时复用对象，完整刷新一次替换旧结果', () => {
   const existing = mod('Characters/A');

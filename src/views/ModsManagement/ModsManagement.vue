@@ -43,6 +43,7 @@ import { buildModSortComparator, compareModsByDefault, type SortCriterion, type 
 import { mergeGroupOrder } from './ModsManagement.order';
 import { createMutationReconciler, type MutationImpact } from './ModsManagement.mutations';
 import { reconcileModSnapshot } from './ModsManagement.snapshot';
+import { createGroupTreeLoader, reconcileGroupTree } from './ModsManagement.tree';
 import { readImage } from '@tauri-apps/plugin-clipboard-manager';
 import {
     buildMovedModRelativePath as buildMovedModRelativePathUtil,
@@ -62,7 +63,6 @@ import {
     dedupeGroupsById,
 } from './ModsManagement.paths';
 import {
-    loadExpandedState as loadExpandedStateStorage,
     loadGroupOrders as loadGroupOrdersStorage,
     loadManualOrders as loadManualOrdersStorage,
     loadSelectedGroupState as loadSelectedGroupStateStorage,
@@ -948,7 +948,8 @@ const groupDragState = reactive({
     sourceParent: '' as string,
 });
 const groupHoverId = ref<string | null>(null);
-const expandedState = ref<Record<string, string[]>>(loadExpandedStateStorage());
+// 展开状态仅用于当前浏览过程中的树更新，不从上次会话恢复。
+const expandedState = ref<Record<string, string[]>>({});
 const expandedKeys = ref<string[]>([]);
 const canCollapseSelectedGroup = computed(() => {
     const currentGroup = String(sidebarSelectedGroup.value || '');
@@ -969,6 +970,7 @@ const orderPersistencePauseDepth = ref(0);
 const isOrderPersistencePaused = computed(() => orderPersistencePauseDepth.value > 0);
 let groupLoadToken = 0;
 let startWatchingToken = 0;
+let gameContextToken = 0;
 let refreshModsToken = 0;
 let needsReactivationRescan = false;
 let reactivationRescanRunning = false;
@@ -1580,12 +1582,6 @@ const applyExpandedToTree = async () => {
             getNode?: (key: string) => ElTreeNode | null;
             store?: { root?: ElTreeNode & { expanded?: boolean; expand?: () => void }; getNode?: (key: string) => ElTreeNode | null };
         } | null;
-        const root = tree?.store?.root;
-        if (root && !root.expanded && typeof root.expand === 'function') {
-            root.expand();
-            await nextTick();
-        }
-
         for (const key of expandedKeys.value) {
             const node = tree?.getNode?.(key) || tree?.store?.getNode?.(key);
             if (node && !node.expanded && typeof node.expand === 'function') {
@@ -2107,23 +2103,49 @@ onUnmounted(() => {
 });
 
 watch(selectedGame, (newVal) => {
+    ++gameContextToken;
+    const remembered = newVal ? selectedGroupState.value[newVal] : undefined;
+    // 先隔离旧游戏任务，再加载新游戏；同游戏刷新才允许保留当前列表。
+    const switchToken = ++startWatchingToken;
+    ++groupLoadToken;
+    ++refreshModsToken;
+    ++searchToken;
+    if (searchTimer) clearTimeout(searchTimer);
+    if (subgroupPreviewPreloadTimer) clearTimeout(subgroupPreviewPreloadTimer);
+    if (groupTreeBumpTimer) clearTimeout(groupTreeBumpTimer);
+    groupTreeBumpTimer = null;
+    availableGroups.value = [];
+    currentSubGroups.value = [];
+    mods.value = [];
+    selectedGroup.value = 'Root';
+    sidebarSelectedGroup.value = 'Root';
+    rootTreeNodes.value.splice(0);
+    loadedModsCount.value = 0;
+    totalModsCount.value = 0;
+    groupNavigationHistory.value = [];
+    groupNavigationForwardHistory.value = [];
+    searchQuery.value = '';
+    searchMatchedModPaths.value = new Set();
+    searchLoading.value = false;
+    switchingGroup.value = false;
+    loading.value = !!newVal;
+    loadedGroupIds.value = new Set();
+    expandedKeys.value = [];
+    if (newVal) expandedState.value[newVal] = [];
     if (newVal) {
         void (async () => {
             if (!isModsPageActive.value) {
                 needsReactivationRescan = true;
                 return;
             }
-            const remembered = selectedGroupState.value[newVal];
             const nextGroup = await resolvePreferredGroup(newVal, remembered);
-            if (selectedGame.value !== newVal) {
+            if (selectedGame.value !== newVal || startWatchingToken !== switchToken) {
                 return;
             }
 
             resetModKeyPopoverState();
             selectedGroup.value = nextGroup;
             sidebarSelectedGroup.value = nextGroup;
-            expandedKeys.value = [...sanitizeExpanded(newVal)];
-            applyExpandedToTree();
             await startWatching(newVal);
         })();
     }
@@ -2192,10 +2214,12 @@ watch(availableGroups, () => {
 
 const startWatching = async (gameName: string) => {
     const currentToken = ++startWatchingToken;
+    const isCurrent = () => currentToken === startWatchingToken && selectedGame.value === gameName;
     const hadContent = hasVisibleContent();
     try {
         await withOrderPersistencePaused(async () => {
             const usedCache = await applyCachedSnapshot(gameName);
+            if (!isCurrent()) return;
             if (!hadContent && !usedCache) {
                 loading.value = true;
             }
@@ -2204,8 +2228,11 @@ const startWatching = async (gameName: string) => {
             await refreshMods(gameName, { preserveVisible: hadContent || usedCache });
         });
 
+        if (!isCurrent()) return;
         const installDir = await ModManager.getInstallDir(gameName);
+        if (!isCurrent()) return;
         await invoke('watch_mod_library', { installDir });
+        if (!isCurrent()) return;
         watchedGameName = gameName;
     } catch (error) {
         console.error('Failed to start watching:', error);
@@ -2249,6 +2276,7 @@ const refreshMods = async (gameName: string, options?: { preserveVisible?: boole
             }
 
             const nextGroup = await resolvePreferredGroup(gameName, selectedGroup.value);
+            if (signal.isCancelled() || selectedGame.value !== gameName) return;
             if (selectedGroup.value !== nextGroup) {
                 selectedGroup.value = nextGroup;
             }
@@ -2299,13 +2327,16 @@ mutationReconciler = createMutationReconciler({
         }
     },
     refreshStructure: async (gameName) => {
+        const context = gameContextToken;
         // Rebuild the persistent Rust index first, then hydrate the current
         // view and group tree from that fresh source of truth.
         const library = await ModManager.refreshLibrary(gameName);
+        if (selectedGame.value !== gameName || gameContextToken !== context) return;
         const allGroups = dedupeGroupsById(library.groups);
         availableGroups.value = allGroups;
         loadedGroupIds.value = new Set(allGroups.map((group) => group.id));
         await refreshMods(gameName, { preserveVisible: true });
+        if (selectedGame.value !== gameName || gameContextToken !== context) return;
         bumpGroupTree();
     },
     onError: (error, impact) => {
@@ -2364,6 +2395,7 @@ const updateAvailableGroups = (newGroups: GroupInfo[]) => {
                 g.enabled !== fresh.enabled
                 || g.iconPath !== fresh.iconPath
                 || g.modCount !== fresh.modCount
+                || g.hasChildGroups !== fresh.hasChildGroups
                 || g.path !== fresh.path
                 || g.name !== fresh.name
             ) {
@@ -2375,6 +2407,7 @@ const updateAvailableGroups = (newGroups: GroupInfo[]) => {
                     enabled: fresh.enabled,
                     iconPath: fresh.iconPath,
                     modCount: fresh.modCount,
+                    hasChildGroups: fresh.hasChildGroups,
                 };
             }
         }
@@ -2397,23 +2430,27 @@ const groupChildrenLoadTasks = new Map<string, Promise<void>>();
 const ensureGroupChildrenLoaded = async (groupId: string) => {
     if (!selectedGame.value || !groupId || groupId === 'All' || groupId === 'Root') return;
     if (loadedGroupIds.value.has(groupId)) return;
-    const pending = groupChildrenLoadTasks.get(groupId);
+    const game = selectedGame.value;
+    const context = gameContextToken;
+    const taskKey = `${context}::${game}::${groupId}`;
+    const pending = groupChildrenLoadTasks.get(taskKey);
     if (pending) return pending;
 
     const task = (async () => {
         try {
-            const cached = ModManager.getCachedGroup(selectedGame.value, groupId);
-            const groups = cached?.groups ?? (await ModManager.scanGroup(selectedGame.value, groupId)).groups;
+            const cached = ModManager.getCachedGroup(game, groupId);
+            const groups = cached?.groups ?? (await ModManager.scanGroup(game, groupId)).groups;
+            if (selectedGame.value !== game || gameContextToken !== context) throw new Error('分类加载期间游戏已切换');
             updateAvailableGroups(groups);
             markGroupChildrenLoaded(groupId);
-            bumpGroupTree();
         } catch (error) {
             console.error(`Failed to load child groups for ${groupId}:`, error);
+            throw error;
         } finally {
-            groupChildrenLoadTasks.delete(groupId);
+            groupChildrenLoadTasks.delete(taskKey);
         }
     })();
-    groupChildrenLoadTasks.set(groupId, task);
+    groupChildrenLoadTasks.set(taskKey, task);
     return task;
 };
 
@@ -2788,7 +2825,8 @@ const groups = computed(() => {
     return [{ id: 'All', name: t('modsManagement.ui.all'), path: '', enabled: true }, ...list];
 });
 
-const rootTreeNodes = computed(() => {
+const rootTreeNodes = ref<GroupTreeNode[]>([]);
+const incomingTreeNodes = computed(() => {
     const childrenByParent = new Map<string, GroupInfo[]>();
     for (const group of dedupeGroupsById(groups.value)) {
         if (group.id === 'All') continue;
@@ -2807,7 +2845,7 @@ const rootTreeNodes = computed(() => {
         return {
             ...group,
             label: group.name,
-            leaf: loadedGroupIds.value.has(group.id) && children.length === 0,
+            leaf: children.length === 0 && group.hasChildGroups !== true,
             icon: group.iconPath,
             count: group.modCount ?? 0,
             children,
@@ -2816,6 +2854,33 @@ const rootTreeNodes = computed(() => {
 
     return buildNodes(ROOT_PARENT_ID);
 });
+
+watch(incomingTreeNodes, async nodes => {
+    reconcileGroupTree(rootTreeNodes.value, nodes);
+    await nextTick();
+    // 懒加载节点只在初始化时读取 isLeaf；旧缓存被新扫描替换时也要更新箭头。
+    const tree = groupTreeRef.value as { getNode?: (key: string) => {
+        isLeafByUser?: boolean; updateLeafState: () => void;
+    } | null } | null;
+    const syncLeafState = (entries: GroupTreeNode[]) => entries.forEach(entry => {
+        const node = tree?.getNode?.(entry.id);
+        if (node) {
+            node.isLeafByUser = entry.leaf;
+            node.updateLeafState();
+        }
+        syncLeafState(entry.children);
+    });
+    syncLeafState(rootTreeNodes.value);
+}, { immediate: true });
+
+const loadGroupTreeNode = createGroupTreeLoader(
+    () => rootTreeNodes.value,
+    async (data: GroupTreeNode) => {
+        await ensureGroupChildrenLoaded(data.id);
+        await nextTick();
+        return data.children;
+    },
+);
 
 const syncTreeCurrentSelection = (groupId: string) => {
     sidebarSelectedGroup.value = groupId;
@@ -2945,12 +3010,13 @@ const onMouseSideBack = (e: MouseEvent) => {
 
 const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean; signal?: { isCancelled?: () => boolean }; refresh?: boolean }) => {
     if (!selectedGame.value) return;
+    const gameName = selectedGame.value;
     const token = ++groupLoadToken;
     const showProgress = options?.showProgress !== false;
     const isAllGroup = groupId === 'All';
     const path = groupId === 'Root' ? 'Root' : groupId;
     const signal = {
-        isCancelled: () => token !== groupLoadToken || !!options?.signal?.isCancelled?.(),
+        isCancelled: () => token !== groupLoadToken || selectedGame.value !== gameName || !!options?.signal?.isCancelled?.(),
     };
 
     if (showProgress) {
@@ -2960,14 +3026,13 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
     try {
         // Show cached data immediately for instant perceived response
         if (!options?.refresh && !isAllGroup) {
-            const cached = ModManager.getCachedGroup(selectedGame.value, String(path));
+            const cached = ModManager.getCachedGroup(gameName, String(path));
             if (cached) {
                 usedCache = true;
                 updateAvailableGroups(cached.groups);
                 reconcileCurrentSubGroups(cached.groups);
                 if (!isAllGroup) {
                     markGroupChildrenLoaded(groupId);
-                    bumpGroupTree();
                 }
                 void preloadSubgroupPreviewImages(cached.groups);
                 await appendModsIncrementally(cached.mods, token);
@@ -2980,8 +3045,8 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
             // again.  The persistent index is rebuilt only at startup,
             // reactivation, a known local mutation, or a filesystem-change
             // notification.
-            ? await ModManager.scanAllMods(selectedGame.value, signal)
-            : await ModManager.scanGroup(selectedGame.value, path as string, signal, { refresh: !!options?.refresh });
+            ? await ModManager.scanAllMods(gameName, signal)
+            : await ModManager.scanGroup(gameName, path as string, signal, { refresh: !!options?.refresh });
         if (token !== groupLoadToken) return;
         if (signal?.isCancelled?.()) return;
         const nextGroups = dedupeGroupsById(newGroups);
@@ -2989,7 +3054,6 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
         reconcileCurrentSubGroups(isAllGroup ? [] : nextGroups);
         if (!isAllGroup) {
             markGroupChildrenLoaded(groupId);
-            bumpGroupTree();
         }
         if (!isAllGroup) {
             void preloadSubgroupPreviewImages(nextGroups);
@@ -3015,6 +3079,7 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
 
 
 interface ScanChunkEvent {
+    scanId?: string;
     phase: 'start' | 'chunk' | 'done';
     total?: number;
     mods?: ModInfo[];
@@ -3032,10 +3097,12 @@ interface ScanChunkEvent {
 const loadGroupModsStreaming = async (gameName: string, groupPath: string, refreshToken: number): Promise<boolean> => {
     const relativePath = (groupPath === 'Root' || groupPath === 'All') ? '' : groupPath;
     const installDir = await ModManager.getInstallDir(gameName);
+    if (refreshModsToken !== refreshToken || selectedGame.value !== gameName) return false;
 
     let streamedChunks = false;
     const viewToken = groupLoadToken;
     const isCurrent = () => refreshModsToken === refreshToken && selectedGame.value === gameName;
+    const scanId = `${gameName}:${refreshToken}:${Date.now()}`;
     const canApplyView = () => isCurrent() && groupLoadToken === viewToken && selectedGroup.value === 'Root';
     const progressive = canApplyView() && !hasVisibleContent();
     const accumulatedMods: ModInfo[] = [];
@@ -3044,7 +3111,7 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
 
     const unlistenChunk = await listen<ScanChunkEvent>('mod-library-scan-chunk', (event) => {
         const payload = event.payload;
-        if (!payload || !isCurrent()) return;
+        if (!payload || payload.scanId !== scanId || !isCurrent()) return;
         chunkReconcile = chunkReconcile.then(async () => {
             if (!isCurrent()) return;
             switch (payload.phase) {
@@ -3063,6 +3130,7 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
                             removeMissing: false,
                             refreshAnalysis: false,
                         });
+                        if (!isCurrent()) return;
                     }
                     if (payload.groups && payload.groups.length > 0) {
                         accumulatedGroups.push(...payload.groups);
@@ -3080,7 +3148,9 @@ const loadGroupModsStreaming = async (gameName: string, groupPath: string, refre
 
     try {
         // Fire the streaming scan (don't await — events arrive during invocation)
+        if (!isCurrent()) return streamedChunks;
         let result = await invoke<{ mods: ModInfo[]; groups: GroupInfo[] }>('mod_library_stream_scan', {
+            scanId,
             gameName,
             installDir,
             groupPath: relativePath || 'Root',
@@ -3183,7 +3253,6 @@ const onGroupExpand = async (data: GroupInfo, node?: ElTreeNode) => {
     if (!game) return;
     const id = String(node?.key ?? data?.id ?? '');
     if (!id || id === 'All') return;
-    void ensureGroupChildrenLoaded(id);
     const set = new Set(sanitizeExpanded(game));
     if (!set.has(id)) {
         set.add(id);
@@ -3192,7 +3261,6 @@ const onGroupExpand = async (data: GroupInfo, node?: ElTreeNode) => {
         debugLog('GroupExpanded', 'Expanded', id, '->', expandedKeys.value);
         persistExpandedState();
     }
-    await handleGroupClick(data, { ensureExpanded: false });
 };
 
 const onGroupCollapse = async (data: GroupInfo, node?: ElTreeNode) => {
@@ -3208,7 +3276,6 @@ const onGroupCollapse = async (data: GroupInfo, node?: ElTreeNode) => {
         debugLog('GroupExpanded', 'Collapsed', id, '->', expandedKeys.value);
         persistExpandedState();
     }
-    await handleGroupClick(data, { ensureExpanded: false });
 };
 
 const collapseSelectedGroup = async () => {
@@ -3849,11 +3916,15 @@ const {
             <div ref="groupListRef" class="group-list glass-scrollbar">
                 <el-tree
                     v-if="groupTreeReady"
-                    :key="groupTreeRenderKey"
+                    :key="`${selectedGame}:${groupTreeRenderKey}`"
                     ref="groupTreeRef"
                     :data="rootTreeNodes"
                     node-key="id"
                     :props="{ label: 'label', isLeaf: 'leaf' }"
+                    lazy
+                    :load="loadGroupTreeNode"
+                    :default-expanded-keys="expandedKeys"
+                    :auto-expand-parent="false"
                     :expand-on-click-node="false"
                     :current-node-key="sidebarSelectedGroup !== 'Root' && sidebarSelectedGroup !== 'All' ? sidebarSelectedGroup : undefined"
                     highlight-current
@@ -6749,16 +6820,12 @@ const {
     box-sizing: border-box;
 }
 :deep(.el-tree-node > .el-tree-node__children) {
-    display: block;
-    margin-left: 4px;
+    /* 空分类也可能保留展开状态，子容器不能额外占用纵向间距。 */
+    margin: 0 0 0 6px;
 }
 
 :deep(.el-tree-node.is-expanded > .el-tree-node__children) {
-    display: block;
-    max-height: none;
-    overflow: visible;
     padding-right: 0;
-    margin: 2px 0 6px 6px;
     border-left: 1px solid rgba(255, 255, 255, 0.06);
 }
 
@@ -6770,7 +6837,7 @@ const {
     height: 34px;
     border-radius: 8px;
     margin-bottom: 2px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 :deep(.el-tree-node__content:hover) {
     background-color: rgba(255, 255, 255, 0.06) !important;
@@ -6796,10 +6863,11 @@ const {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    width: 100%;
-    min-height: 30px;
+    flex: 1;
+    min-width: 0;
+    height: 30px;
     padding: 4px 9px;
-    margin: 2px 3px;
+    margin: 0 3px;
     box-sizing: border-box;
     border-radius: 7px;
     overflow: hidden;
@@ -6841,6 +6909,8 @@ const {
 .tree-icon {
     width: 20px;
     height: 20px;
+    box-sizing: border-box;
+    flex-shrink: 0;
     object-fit: cover;
     border-radius: 6px;
     border: 1px solid rgba(255,255,255,0.08);

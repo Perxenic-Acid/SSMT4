@@ -41,6 +41,7 @@ pub struct GroupInfo {
     pub path: String,
     pub enabled: bool,
     pub mod_count: u64,
+    pub has_child_groups: bool,
     pub is_directory_link: bool,
 }
 
@@ -72,6 +73,7 @@ fn upsert_group(groups: &mut Vec<GroupInfo>, group: GroupInfo) {
     } else {
         if group.enabled == existing.enabled {
             existing.mod_count = existing.mod_count.max(group.mod_count);
+            existing.has_child_groups |= group.has_child_groups;
         }
         existing.is_directory_link = is_directory_link;
         if existing.icon_path.is_none() {
@@ -508,6 +510,26 @@ fn count_group_entries(path: &Path) -> u64 {
     count
 }
 
+// 只检查直接子目录，并复用扫描器的分类规则；Mod 自身的内部目录不算子分类。
+fn has_child_groups(path: &Path) -> Result<bool, String> {
+    let entries = fs::read_dir(path).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let child = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if child.is_dir()
+            && !name.starts_with('.')
+            && !name.starts_with('$')
+            && !is_managed_backup_name(&name)
+            && !is_leaf_mod_dir_from_analysis(&analyze_directory(&child))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn scan_group_from_disk(install_dir: &str, group_path: &str) -> Result<ScanResult, String> {
     let t0 = Instant::now();
     let root = mods_root(install_dir);
@@ -652,6 +674,7 @@ fn scan_group_from_disk(install_dir: &str, group_path: &str) -> Result<ScanResul
                     path: entry_physical_path,
                     enabled,
                     mod_count: count_group_entries(&path),
+                    has_child_groups: has_child_groups(&path)?,
                     is_directory_link,
                 },
             );
@@ -804,7 +827,7 @@ fn group_is_indexed(conn: &Connection, game_name: &str, group_path: &str) -> Res
     Ok(!has_missing_timestamps)
 }
 
-fn query_group(conn: &Connection, game_name: &str, group_path: &str) -> Result<ScanResult, String> {
+fn query_group(conn: &Connection, game_name: &str, group_path: &str, install_dir: &str) -> Result<ScanResult, String> {
     let key = group_cache_key(group_path);
 
     let mut mods_stmt = conn
@@ -849,7 +872,7 @@ fn query_group(conn: &Connection, game_name: &str, group_path: &str) -> Result<S
             "#,
         )
         .map_err(|error| error.to_string())?;
-    let groups = groups_stmt
+    let mut groups = groups_stmt
         .query_map(params![game_name, key.as_str()], |row| {
             Ok(GroupInfo {
                 id: row.get(0)?,
@@ -858,6 +881,7 @@ fn query_group(conn: &Connection, game_name: &str, group_path: &str) -> Result<S
                 path: row.get(3)?,
                 enabled: row.get::<_, i64>(4)? != 0,
                 mod_count: row.get::<_, i64>(5)? as u64,
+                has_child_groups: false,
                 is_directory_link: row.get::<_, i64>(6)? != 0,
             })
         })
@@ -865,6 +889,9 @@ fn query_group(conn: &Connection, game_name: &str, group_path: &str) -> Result<S
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
 
+    for group in &mut groups {
+        group.has_child_groups = has_child_groups(&mods_root(install_dir).join(&group.path))?;
+    }
     Ok(ScanResult { mods, groups })
 }
 
@@ -904,6 +931,7 @@ pub async fn mod_library_stream_scan(
     game_name: String,
     install_dir: String,
     group_path: String,
+    scan_id: Option<String>,
 ) -> Result<ScanResult, String> {
     log_scan!(
         ">>> COMMAND mod_library_stream_scan  game={}  group={}",
@@ -915,7 +943,7 @@ pub async fn mod_library_stream_scan(
     let conn = open_db(&install_dir)?;
     if group_is_indexed(&conn, &game_name, &group_path)? {
         log_scan!("  CACHE HIT  querying SQLite...");
-        let result = query_group(&conn, &game_name, &group_path)?;
+        let result = query_group(&conn, &game_name, &group_path, &install_dir)?;
         log_scan!(
             "<<< COMMAND mod_library_stream_scan CACHED  {}ms  mods={}  groups={}",
             t0.elapsed().as_millis(),
@@ -927,6 +955,7 @@ pub async fn mod_library_stream_scan(
             "mod-library-scan-chunk",
             serde_json::json!({
                 "phase": "done",
+                "scanId": scan_id,
                 "totalMods": result.mods.len(),
                 "totalGroups": result.groups.len()
             }),
@@ -956,6 +985,7 @@ pub async fn mod_library_stream_scan(
             "mod-library-scan-chunk",
             serde_json::json!({
                 "phase": "done",
+                "scanId": scan_id,
                 "totalMods": 0,
                 "totalGroups": 0
             }),
@@ -979,6 +1009,7 @@ pub async fn mod_library_stream_scan(
         "mod-library-scan-chunk",
         serde_json::json!({
             "phase": "start",
+            "scanId": scan_id,
             "total": entries.len()
         }),
     );
@@ -1041,6 +1072,7 @@ pub async fn mod_library_stream_scan(
                         path: entry_physical_path,
                         enabled,
                         mod_count: count_group_entries(&path),
+                        has_child_groups: has_child_groups(&path)?,
                         is_directory_link,
                     },
                 );
@@ -1052,6 +1084,7 @@ pub async fn mod_library_stream_scan(
                 "mod-library-scan-chunk",
                 serde_json::json!({
                     "phase": "chunk",
+                    "scanId": scan_id,
                     "mods": chunk_mods,
                     "groups": chunk_groups,
                 }),
@@ -1104,6 +1137,7 @@ pub async fn mod_library_stream_scan(
         "mod-library-scan-chunk",
         serde_json::json!({
             "phase": "done",
+            "scanId": scan_id,
             "totalMods": all_mods.len(),
             "totalGroups": all_groups.len()
         }),
@@ -1145,7 +1179,7 @@ pub async fn mod_library_scan_group(
         log_scan!("  (indexed fresh)");
         r
     } else {
-        let r = query_group(&conn, &game_name, &group_path)?;
+        let r = query_group(&conn, &game_name, &group_path, &install_dir)?;
         log_scan!("  (from cache)");
         r
     };
@@ -1280,7 +1314,7 @@ pub async fn mod_library_all_mods(
             "#,
         )
         .map_err(|error| error.to_string())?;
-    let groups = group_stmt
+    let mut groups = group_stmt
         .query_map(params![game_name], |row| {
             Ok(GroupInfo {
                 id: row.get(0)?,
@@ -1289,6 +1323,7 @@ pub async fn mod_library_all_mods(
                 path: row.get(3)?,
                 enabled: row.get::<_, i64>(4)? != 0,
                 mod_count: row.get::<_, i64>(5)? as u64,
+                has_child_groups: false,
                 is_directory_link: row.get::<_, i64>(6)? != 0,
             })
         })
@@ -1296,6 +1331,9 @@ pub async fn mod_library_all_mods(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
 
+    for group in &mut groups {
+        group.has_child_groups = has_child_groups(&mods_root(&install_dir).join(&group.path))?;
+    }
     log_scan!(
         "<<< COMMAND mod_library_all_mods DONE  {}ms  mods={}  groups={}",
         t0.elapsed().as_millis(),
@@ -1482,7 +1520,7 @@ fn find_ini_recursive(dir: &Path, prefix: &str, results: &mut Vec<String>) -> st
 
 #[cfg(test)]
 mod group_dedupe_tests {
-    use super::{count_group_entries, upsert_group, GroupInfo};
+    use super::{count_group_entries, has_child_groups, index_group, open_db, query_group, upsert_group, GroupInfo};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1494,6 +1532,7 @@ mod group_dedupe_tests {
             path: path.to_string(),
             enabled,
             mod_count,
+            has_child_groups: false,
             is_directory_link: false,
         }
     }
@@ -1538,6 +1577,44 @@ mod group_dedupe_tests {
         assert_eq!(groups.len(), 1);
         assert!(groups[0].enabled);
         assert_eq!(groups[0].mod_count, 0);
+    }
+
+    #[test]
+    fn cached_groups_include_expandability_before_children_are_indexed() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("ssmt-group-arrows-{}-{}", std::process::id(), unique));
+        let root = base.join("Mods");
+        fs::create_dir_all(root.join("Parent").join("Child")).unwrap();
+        fs::create_dir_all(root.join("Leaf").join("Mod")).unwrap();
+        fs::write(root.join("Leaf").join("Mod").join("mod.ini"), "[TextureOverride_Test]").unwrap();
+        let install_dir = base.to_string_lossy();
+        let mut conn = open_db(&install_dir).unwrap();
+        let scanned = index_group(&mut conn, "Game", &install_dir, "Root").unwrap();
+        let cached = query_group(&conn, "Game", "Root", &install_dir).unwrap();
+        for result in [scanned, cached] {
+            assert!(result.groups.iter().find(|g| g.id == "Parent").unwrap().has_child_groups);
+            assert!(!result.groups.iter().find(|g| g.id == "Leaf").unwrap().has_child_groups);
+            assert_eq!(result.groups.len(), 2);
+        }
+        drop(conn);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn expand_arrow_only_counts_real_child_groups() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("ssmt-child-groups-{}-{}", std::process::id(), unique));
+        fs::create_dir_all(root.join("Mod").join("Textures")).unwrap();
+        fs::write(root.join("Mod").join("mod.ini"), "[TextureOverride_Test]").unwrap();
+        fs::create_dir_all(root.join(".hidden").join("Nested")).unwrap();
+        fs::create_dir_all(root.join("$cache").join("Nested")).unwrap();
+        assert!(!has_child_groups(&root).unwrap());
+        fs::create_dir_all(root.join("DISABLED_Category")).unwrap();
+        assert!(has_child_groups(&root).unwrap());
+        fs::remove_dir_all(root.join("DISABLED_Category")).unwrap();
+        assert!(!has_child_groups(&root).unwrap());
+        assert!(has_child_groups(&root.join("Missing")).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
