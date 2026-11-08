@@ -128,6 +128,7 @@ const launchMode = computed({
       if (!isEFMIPreset.value) {
         config.extraDll = '';
         config.extraDlls = [];
+        config.extraDllsEnabled = [];
       }
     } else {
       config.useShell = false;
@@ -817,6 +818,25 @@ const ensureExtraDlls = (): string[] => {
   return config.extraDlls;
 };
 
+const ensureExtraDllsEnabled = (): boolean[] => {
+  const dlls = ensureExtraDlls();
+  if (!Array.isArray(config.extraDllsEnabled)) {
+    config.extraDllsEnabled = [];
+  }
+  const enabled = config.extraDllsEnabled;
+  while (enabled.length < dlls.length) {
+    enabled.push(true);
+  }
+  if (enabled.length > dlls.length) {
+    enabled.splice(dlls.length);
+  }
+  return enabled;
+};
+
+const isExtraDllEnabled = (index: number): boolean => {
+  return config.extraDllsEnabled?.[index] !== false;
+};
+
 const syncPrimaryExtraDll = () => {
   const firstDll = ensureExtraDlls()
     .map(item => (item || '').trim())
@@ -825,7 +845,10 @@ const syncPrimaryExtraDll = () => {
 };
 
 const addExtraDll = (dllPath = '') => {
-  ensureExtraDlls().push(dllPath);
+  const dlls = ensureExtraDlls();
+  const enabled = ensureExtraDllsEnabled();
+  dlls.push(dllPath);
+  enabled.push(true);
   syncPrimaryExtraDll();
 };
 
@@ -841,8 +864,10 @@ const pickDllForIndex = async (index: number) => {
     });
     if (selected && typeof selected === 'string') {
       const dlls = ensureExtraDlls();
+      const enabled = ensureExtraDllsEnabled();
       while (dlls.length <= index) {
         dlls.push('');
+        enabled.push(true);
       }
       dlls[index] = selected;
       syncPrimaryExtraDll();
@@ -864,17 +889,24 @@ const setDefaultDll = async () => {
 };
 
 const removeExtraDll = (index: number) => {
-  ensureExtraDlls().splice(index, 1);
+  const dlls = ensureExtraDlls();
+  const enabled = ensureExtraDllsEnabled();
+  dlls.splice(index, 1);
+  enabled.splice(index, 1);
   syncPrimaryExtraDll();
 };
 
 const moveExtraDll = (index: number, direction: -1 | 1) => {
   const dlls = ensureExtraDlls();
+  const enabled = ensureExtraDllsEnabled();
   const nextIndex = index + direction;
   if (nextIndex < 0 || nextIndex >= dlls.length) return;
   const current = dlls[index];
   dlls[index] = dlls[nextIndex];
   dlls[nextIndex] = current;
+  const currentEnabled = enabled[index];
+  enabled[index] = enabled[nextIndex];
+  enabled[nextIndex] = currentEnabled;
   syncPrimaryExtraDll();
 };
 
@@ -1264,7 +1296,17 @@ defineExpose({
 
                 <div v-if="!config.useShell || isEFMIPreset">
                   <div class="settings-field-label" style="margin-bottom:6px">{{ t('gameSettingsModal.fields.extraInjectedDll') }}</div>
-                  <div v-for="(_dll, index) in config.extraDlls" :key="index" class="settings-path-row" style="margin-bottom:6px">
+                  <div v-for="(_dll, index) in config.extraDlls" :key="index" class="settings-path-row settings-dll-row" :class="{ 'is-disabled': !isExtraDllEnabled(index) }" style="margin-bottom:6px">
+                    <el-tooltip :content="t(isExtraDllEnabled(index) ? 'gameSettingsModal.actions.disableDll' : 'gameSettingsModal.actions.enableDll')" placement="top" :show-after="250">
+                      <el-switch
+                        v-model="config.extraDllsEnabled![index]"
+                        class="settings-dll-toggle"
+                        size="small"
+                        :active-value="true"
+                        :inactive-value="false"
+                        @change="saveConfig"
+                      />
+                    </el-tooltip>
                     <input v-model="config.extraDlls![index]" type="text" class="settings-path-input" :placeholder="t('gameSettingsModal.placeholders.selectOrLeaveEmpty')" @input="syncPrimaryExtraDll" />
                     <el-tooltip :content="t('gameSettingsModal.actions.selectFile')" placement="top" :show-after="250"><button class="settings-sm-btn" @click="pickDllForIndex(index)">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2975,6 +3017,24 @@ defineExpose({
 .settings-path-row {
   display: flex;
   gap: 6px;
+}
+
+.settings-dll-row {
+  align-items: center;
+}
+
+.settings-dll-toggle {
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+.settings-dll-row.is-disabled .settings-path-input {
+  color: rgba(255, 255, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.04);
+}
+
+.settings-dll-row.is-disabled .settings-sm-btn {
+  opacity: 0.55;
 }
 
 .settings-path-row .settings-path-input {

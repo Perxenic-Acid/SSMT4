@@ -240,6 +240,8 @@
       "moveDown": "下移",
       "remove": "移除",
       "addDll": "添加 DLL",
+      "enableDll": "启用此 DLL",
+      "disableDll": "停用此 DLL",
       "setCurrentD3d11Dll": "设为当前 d3d11.dll",
       "openPackageRepository": "打开 Package GitHub 仓库",
       "addProgram": "添加程序",

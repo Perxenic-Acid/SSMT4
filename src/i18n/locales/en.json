@@ -241,6 +241,8 @@
       "moveDown": "Move Down",
       "remove": "Remove",
       "addDll": "Add DLL",
+      "enableDll": "Enable this DLL",
+      "disableDll": "Disable this DLL",
       "setCurrentD3d11Dll": "Set as current d3d11.dll",
       "openPackageRepository": "Open Package GitHub Repository",
       "addProgram": "Add Program",
