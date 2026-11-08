@@ -32,6 +32,8 @@
 .el-select__popper.el-popper {
   width: auto;
   padding: 0;
+  /* 内层下拉框带有组件计算的内联宽度，不能让选项背景越过弹层边框。 */
+  overflow: hidden;
 }
 
 .el-select__popper.el-popper .el-popper__arrow::before,
@@ -95,6 +97,7 @@
   font-size: 13px;
   height: 32px;
   line-height: 32px;
+  min-width: 0;
   max-width: 100%;
   padding: 0 28px 0 12px;
   white-space: nowrap;
@@ -187,6 +190,15 @@
 
 .el-select-dropdown__list {
   padding: 0;
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 约束滚动区域，而非只裁切文字；避免内联 min-width 撑宽整行选项。 */
+.el-select__popper > .el-select-dropdown > .el-scrollbar {
+  max-width: min(100%, calc(100vw - 26px));
 }
 
 .el-select-dropdown .el-scrollbar__bar.is-horizontal {

@@ -32,6 +32,7 @@ export interface GroupInfo {
   path: string
   enabled: boolean
   modCount?: number
+  hasChildGroups?: boolean
   isDirectoryLink?: boolean
 }
 
