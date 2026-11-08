@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 2,
+  "id": "example.codex.page-sdk",
+  "name": "Example Plugin SDK",
+  "version": "1.0.1",
+  "author": "Example",
+  "compatibility": {
+    "ssmt": ">=4.2.2",
+    "pluginApi": ">=1.0.0 <2.0.0",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "EFMI"
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "kind": "declarative",
+        "id": "settings",
+        "title": "SDK 设置",
+        "description": "验证声明式页面和 CapabilityBroker 设置读写。",
+        "fields": [
+          {
+            "key": "enabled",
+            "label": "启用示例功能",
+            "kind": "boolean",
+            "defaultValue": true
+          },
+          {
+            "key": "mode",
+            "label": "运行模式",
+            "kind": "select",
+            "defaultValue": "safe",
+            "options": [
+              {
+                "value": "safe",
+                "label": "安全"
+              },
+              {
+                "value": "fast",
+                "label": "快速"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "local-service",
+        "id": "editor",
+        "title": "SDK 服务",
+        "path": "ui/index.html",
+        "service": {
+          "executable": "${external.python-runtime}/python.exe",
+          "arguments": [
+            "-u",
+            "${plugin.root}/server.py",
+            "--mods",
+            "${game.mods}",
+            "--data",
+            "${service.data}",
+            "--port",
+            "${service.port}",
+            "--instance-token",
+            "${service.token}",
+            "--parent-pid",
+            "${host.pid}"
+          ],
+          "workingDirectory": "${plugin.root}",
+          "dataDirectory": "SSMT_PluginSDKFixture",
+          "healthPath": "/api/health",
+          "tokenHeader": "X-Editor-Token",
+          "readyTimeoutMs": 30000
+        }
+      }
+    ]
+  },
+  "externalDependencies": [
+    {
+      "id": "python-runtime",
+      "type": "directory",
+      "requiredFiles": [
+        "python.exe"
+      ],
+      "requiredFor": [
+        "local-service"
+      ]
+    }
+  ],
+  "permissions": [
+    "process.spawn",
+    "filesystem.read",
+    "filesystem.write"
+  ]
+}

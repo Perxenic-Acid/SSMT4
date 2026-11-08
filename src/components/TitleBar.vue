@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, onMounted, onUnmounted, watch } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
@@ -12,13 +11,6 @@ import { calculateContextMenuPosition } from '../utils/ContextMenuPosition';
 import { orderedFavoriteGames } from '../common/GameSwitcher';
 import GameSwitcherPin from './GameSwitcherPin.vue';
 import Ssmt4Mark from './Ssmt4Mark.vue';
-import { PLUGIN_REGISTRY_CHANGED_EVENT } from '../plugin/pluginRegistryEvents';
-import {
-    LIQUID_GRAVITY_PROBE_NAME,
-    LIQUID_GRAVITY_PROBE_NAV_ID,
-    LIQUID_GRAVITY_PROBE_PLUGIN_ID,
-    LIQUID_GRAVITY_PROBE_ROUTE,
-} from '../plugin/liquidGravityProbe';
 
 const appWindow = getCurrentWindow();
 const route = useRoute();
@@ -35,29 +27,6 @@ const isLegacyUi = computed(() => appSettings.uiMode === 'classic');
 /* ═══════════════════════ Game quick-switcher ═══════════════════════ */
 
 const currentGame = computed(() => gamesList.find(g => g.name === appSettings.CurrentGameName));
-const liquidGravityProbeEnabled = ref(false);
-let pluginAvailabilityRequest = 0;
-
-const refreshLiquidGravityProbeAvailability = async () => {
-    const requestId = ++pluginAvailabilityRequest;
-    if (appSettings.CurrentGameName.toUpperCase() !== 'EFMI') {
-        liquidGravityProbeEnabled.value = false;
-        return;
-    }
-    try {
-        const plugins = await invoke<Array<{ manifest: { id: string }; enabled: boolean }>>(
-            'plugin_registry_snapshot_for_game',
-            { gameName: appSettings.CurrentGameName },
-        );
-        if (requestId === pluginAvailabilityRequest) {
-            liquidGravityProbeEnabled.value = plugins.some(plugin =>
-                plugin.manifest.id === LIQUID_GRAVITY_PROBE_PLUGIN_ID && plugin.enabled
-            );
-        }
-    } catch {
-        if (requestId === pluginAvailabilityRequest) liquidGravityProbeEnabled.value = false;
-    }
-};
 
 /** Favorite games (formerly the sidebar strip), honoring the user's manual order. */
 const favoriteGames = computed(() => orderedFavoriteGames(gamesList, appSettings.sidebarGameOrder));
@@ -144,7 +113,6 @@ const allNavItems: NavItem[] = [
     { id: 'nexusmods', path: '/nexusmods', labelKey: 'titlebar.nav.nexusMods' },
     { id: 'xianzun', path: '/xianzun', labelKey: 'titlebar.nav.xianzun' },
     { id: 'ui-builder', path: '/ui-builder', labelKey: 'titlebar.nav.uiBuilder' },
-    { id: LIQUID_GRAVITY_PROBE_NAV_ID, path: LIQUID_GRAVITY_PROBE_ROUTE, labelKey: '', label: LIQUID_GRAVITY_PROBE_NAME },
     { id: 'plugins', path: '/plugins', labelKey: 'titlebar.nav.plugins' },
 ];
 
@@ -215,7 +183,6 @@ const displayItems = computed<NavItem[]>(() => {
     });
 
     return result.filter(item => {
-        if (item.id === LIQUID_GRAVITY_PROBE_NAV_ID && !liquidGravityProbeEnabled.value) return false;
         const key = visibilityKeyByNavId[item.id];
         return !key || appSettings.pageVisibility[key];
     });
@@ -415,8 +382,6 @@ onMounted(async () => {
     checkMaximized();
     loadOrder();
     await syncNavMenuAria();
-    await refreshLiquidGravityProbeAvailability();
-    window.addEventListener(PLUGIN_REGISTRY_CHANGED_EVENT, refreshLiquidGravityProbeAvailability);
     document.addEventListener('pointerdown', handleCaptionPointerDown);
     // Listen to resize event to update maximized state icon
     unlistenResize = await appWindow.onResized(() => {
@@ -437,12 +402,7 @@ onMounted(async () => {
 watch([displayItems, () => navContextMenu.visible, () => navContextMenu.item?.id], () => {
     void syncNavMenuAria();
 });
-watch(() => appSettings.CurrentGameName, () => {
-    void refreshLiquidGravityProbeAvailability();
-});
-
 onUnmounted(() => {
-    window.removeEventListener(PLUGIN_REGISTRY_CHANGED_EVENT, refreshLiquidGravityProbeAvailability);
     document.removeEventListener('pointerdown', handleCaptionPointerDown);
     document.removeEventListener('mousemove', onNavMouseMove);
     document.removeEventListener('mouseup', onNavMouseUp);
@@ -634,7 +594,6 @@ const toggleSettingsPage = () => {
                             <svg v-else-if="item.id === 'nexusmods'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v16H6z"></path><path d="M9 8h6"></path><path d="M9 12h6"></path><path d="M9 16h4"></path></svg>
                             <svg v-else-if="item.id === 'xianzun'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path><path d="M8.5 11h7"></path><path d="M8.5 14.5h4"></path></svg>
                             <svg v-else-if="item.id === 'ui-builder'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M8 8h8v8H8z"></path><path d="M8 12h8M12 8v8"></path></svg>
-                            <svg v-else-if="item.id === LIQUID_GRAVITY_PROBE_NAV_ID" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5S6.5 9 6.5 14a5.5 5.5 0 0 0 11 0C17.5 9 12 2.5 12 2.5Z"></path><path d="M9.5 15.2a2.8 2.8 0 0 0 2.8 2.2"></path><circle cx="12" cy="18.8" r=".8"></circle></svg>
                             <svg v-else-if="item.id === 'plugins'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v3M15 3v3M7 6h10a2 2 0 0 1 2 2v3h-3a2 2 0 1 0 0 4h3v1a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-3h3a2 2 0 1 0 0-4H5V8a2 2 0 0 1 2-2Z"></path></svg>
                     </span>
                     <span class="caption-tab-label">{{ item.label }}</span>

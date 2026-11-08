@@ -13,7 +13,6 @@ import { ResourceManager } from './store/ResourceManager';
 import type { HuntingMode } from './store/GameConfig';
 import CacheFolderPicker from './components/CacheFolderPicker.vue';
 import { getGamePresetDisplayName } from './store/GamePreset';
-import { LIQUID_GRAVITY_PROBE_ROUTE } from './plugin/liquidGravityProbe';
 import StartupExperience from './components/StartupExperience.vue';
 
 const route = useRoute();
@@ -183,7 +182,6 @@ const shouldShowGlobalDimLayer = computed(() => (
   || route.path === '/mark-texture-full'
   || route.path === '/texture-mod-maker'
   || route.path === '/plugins'
-  || route.path === LIQUID_GRAVITY_PROBE_ROUTE
   || route.path === '/xianzun'
   || route.path === '/ui-builder'
   || route.path.startsWith('/gamebanana')
@@ -511,7 +509,10 @@ onUnmounted(() => {
       </section>
     </div>
 
-    <div class="app-ui-scale" :style="{ '--app-ui-scale': appUiScale }">
+    <div class="app-ui-scale" :style="{
+      '--app-ui-scale': appUiScale,
+      '--app-ui-scale-inverse': 1 / appUiScale,
+    }">
       <!-- WinUI3 shell: full-width caption bar on top, nav pane + content below -->
       <div class="app-shell" :class="{ 'is-classic-ui': isClassicUi }">
         <!-- Reserves the caption bar's layout space; the bar itself is

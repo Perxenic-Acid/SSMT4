@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugin::graphics_tasks::GraphicsProgress;
 use crate::plugin::resource_cache::download_verified_with_progress;
 use std::io::Write;
 use tauri::ipc::Channel;
@@ -32,7 +33,7 @@ struct Archive {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadProgress {
-    phase: &'static str,
+    phase: String,
     file: String,
     downloaded_bytes: u64,
     total_bytes: u64,
@@ -207,7 +208,7 @@ async fn download_at(
         );
         let mut notify = |downloaded_bytes| {
             progress(DownloadProgress {
-                phase: "downloading",
+                phase: "downloading".into(),
                 file: asset.path.clone(),
                 downloaded_bytes: completed + downloaded_bytes,
                 total_bytes,
@@ -233,7 +234,7 @@ async fn download_at(
         cache,
         |downloaded_bytes| {
             progress(DownloadProgress {
-                phase: "downloading",
+                phase: "downloading".into(),
                 file: "NR Runtime".into(),
                 downloaded_bytes: completed + downloaded_bytes,
                 total_bytes,
@@ -243,7 +244,7 @@ async fn download_at(
     .await
     .map_err(|error| format!("下载 NR Runtime 失败：{error}"))?;
     progress(DownloadProgress {
-        phase: "extracting",
+        phase: "extracting".into(),
         file: "NR Runtime".into(),
         downloaded_bytes: total_bytes,
         total_bytes,
@@ -258,7 +259,7 @@ async fn download_at(
     .await
     .map_err(|error| error.to_string())??;
     progress(DownloadProgress {
-        phase: "ready",
+        phase: "ready".into(),
         file: String::new(),
         downloaded_bytes: total_bytes,
         total_bytes,
@@ -272,6 +273,23 @@ pub async fn download_gimi_hot_runtime(
     game_executable: String,
     profile: String,
     on_progress: Channel<DownloadProgress>,
+) -> Result<HotRuntimeInstallation, String> {
+    download_gimi_hot_runtime_with_progress(game_name, game_executable, profile, move |progress| {
+        let _ = on_progress.send(DownloadProgress {
+            phase: progress.phase,
+            file: progress.file,
+            downloaded_bytes: progress.downloaded_bytes,
+            total_bytes: progress.total_bytes,
+        });
+    })
+    .await
+}
+
+pub(crate) async fn download_gimi_hot_runtime_with_progress(
+    game_name: String,
+    game_executable: String,
+    profile: String,
+    mut on_progress: impl FnMut(GraphicsProgress) + Send,
 ) -> Result<HotRuntimeInstallation, String> {
     let _lock = INSTALL_LOCK
         .try_lock()
@@ -299,7 +317,12 @@ pub async fn download_gimi_hot_runtime(
     let installation = download_at(&client, &cache, root, profile, manifest, |event| {
         // 用户切换页面不应让已授权下载变成失败；重返页面可读取最终状态。
         if event.phase != "downloading" || last_update.elapsed().as_millis() >= 150 {
-            let _ = on_progress.send(event);
+            on_progress(GraphicsProgress {
+                phase: event.phase.into(),
+                file: event.file,
+                downloaded_bytes: event.downloaded_bytes,
+                total_bytes: event.total_bytes,
+            });
             last_update = std::time::Instant::now();
         }
     })

@@ -5,6 +5,7 @@ use super::{
     registry::{InstalledPlugin, PluginRegistry},
 };
 use serde::Serialize;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +27,21 @@ pub struct GraphicsPreparation {
 
 /// 缺省声明只服务于已存在的旧包；新包应显式声明 provider 与配置。
 pub(super) fn extensions(plugin: &InstalledPlugin) -> Vec<HostExtensionContribution> {
+    if !plugin.manifest.contributions.graphics_profiles.is_empty() {
+        return plugin
+            .manifest
+            .contributions
+            .graphics_profiles
+            .iter()
+            .map(|profile| HostExtensionContribution {
+                id: profile.id.clone(),
+                provider: profile.strategy.as_str().to_string(),
+                priority: profile.priority,
+                config: profile.config.clone(),
+                settings_component: profile.settings_component.clone(),
+            })
+            .collect();
+    }
     if !plugin.manifest.contributions.host_extensions.is_empty() {
         return plugin.manifest.contributions.host_extensions.clone();
     }
@@ -49,30 +65,15 @@ pub(super) fn settings_extensions(plugin: &InstalledPlugin) -> Vec<HostExtension
     extensions(plugin)
         .into_iter()
         .map(|mut extension| {
-            // 组件键只能使用本体注册给该 provider 与所有者的实现。
             let supported = matches!(
                 (
-                    plugin.id(),
                     extension.provider.as_str(),
                     extension.settings_component.as_deref()
                 ),
-                (
-                    super::dlss5::DLSS5_PLUGIN_ID,
-                    "ssmt.graphics.dlss5",
-                    Some("ssmt.dlss5.settings")
-                ) | (
-                    super::hoyoshade::HOYOSHADE_PLUGIN_ID,
-                    "ssmt.graphics.reshade",
-                    Some("ssmt.reshade.settings")
-                ) | (
-                    "ssmt.player-tweaks",
-                    "ssmt.player-tweaks",
-                    Some("ssmt.player-tweaks.settings")
-                ) | (
-                    super::secondary_motion::SECONDARY_MOTION_PLUGIN_ID,
-                    "ssmt.secondary-motion",
-                    Some("ssmt.secondary-motion.settings")
-                )
+                ("dlss5-hot", Some("ssmt.dlss5.settings"))
+                    | ("ssmt.graphics.dlss5", Some("ssmt.dlss5.settings"))
+                    | ("reshade-hot", Some("ssmt.reshade.settings"))
+                    | ("ssmt.graphics.reshade", Some("ssmt.reshade.settings"))
             );
             if !supported {
                 extension.settings_component = None;
@@ -89,8 +90,14 @@ fn prepare(
     executable: &str,
 ) -> Result<Option<HotRuntimePlan>, String> {
     match extension.provider.as_str() {
+        "dlss5-hot" => {
+            super::dlss5_hot_runtime::prepare_dlss5_hot_runtime(game.into(), executable.into())
+        }
         "ssmt.graphics.dlss5" if plugin.id() == super::dlss5::DLSS5_PLUGIN_ID => {
             super::dlss5_hot_runtime::prepare_dlss5_hot_runtime(game.into(), executable.into())
+        }
+        "reshade-hot" => {
+            super::hoyoshade::prepare_hoyoshade_hot_runtime(game.into(), executable.into())
         }
         "ssmt.graphics.reshade" if plugin.id() == super::hoyoshade::HOYOSHADE_PLUGIN_ID => {
             super::hoyoshade::prepare_hoyoshade_hot_runtime(game.into(), executable.into())
@@ -105,11 +112,11 @@ pub(super) fn reshade_contributions(
     let mut result = Vec::new();
     for plugin in registry.selected_plugins().filter(|plugin| plugin.enabled) {
         for extension in extensions(plugin) {
-            if extension.provider != "ssmt.graphics.reshade" {
+            if !matches!(
+                extension.provider.as_str(),
+                "reshade-hot" | "ssmt.graphics.reshade"
+            ) {
                 continue;
-            }
-            if plugin.id() != super::hoyoshade::HOYOSHADE_PLUGIN_ID {
-                return Err("ReShade provider 尚未绑定此插件".into());
             }
             result.push(super::shade_policy::Policy::load(plugin)?.contribution(plugin)?);
         }
@@ -132,7 +139,10 @@ pub(super) fn collect(
         .flat_map(|plugin| {
             extensions(plugin)
                 .into_iter()
-                .filter(|extension| extension.provider.starts_with("ssmt.graphics."))
+                .filter(|extension| {
+                    extension.provider.starts_with("ssmt.graphics.")
+                        || matches!(extension.provider.as_str(), "reshade-hot" | "dlss5-hot")
+                })
                 .map(move |extension| (plugin, extension))
         })
         .collect();
@@ -143,8 +153,41 @@ pub(super) fn collect(
             .then_with(|| a.1.id.cmp(&b.1.id))
     });
     let mut result = GraphicsPreparation::default();
+    let mut resources = BTreeMap::<String, Vec<(String, i32)>>::new();
+    for (plugin, extension) in &candidates {
+        let candidate_id = format!("{}:{}", plugin.id(), extension.id);
+        for resource in resources_for(plugin, extension) {
+            resources
+                .entry(resource)
+                .or_default()
+                .push((candidate_id.clone(), extension.priority));
+        }
+    }
+    let mut conflicting = HashSet::new();
+    for (resource, claims) in resources {
+        let max = claims.iter().map(|(_, priority)| *priority).max();
+        let top: Vec<_> = claims
+            .iter()
+            .filter(|(_, priority)| Some(*priority) == max)
+            .collect();
+        if top.len() > 1 {
+            for (candidate, _) in top {
+                conflicting.insert(candidate.clone());
+            }
+            result.handled = true;
+            result.diagnostics.push(Diagnostic {
+                candidate_id: format!("resource:{resource}"),
+                plugin: "graphicsProfiles".to_string(),
+                error: "多个图形 Profile 以相同优先级占用同一资源".to_string(),
+            });
+        }
+    }
     for (plugin, extension) in candidates {
         let id = format!("{}:{}", plugin.id(), extension.id);
+        if conflicting.contains(&id) {
+            result.handled = true;
+            continue;
+        }
         if excluded.contains(&id) {
             result.handled = true;
             continue;
@@ -174,6 +217,26 @@ pub(super) fn collect(
         }
     }
     result
+}
+
+fn resources_for(plugin: &InstalledPlugin, extension: &HostExtensionContribution) -> Vec<String> {
+    if let Some(profile) = plugin
+        .manifest
+        .contributions
+        .graphics_profiles
+        .iter()
+        .find(|profile| profile.id == extension.id)
+    {
+        return profile.resources.clone();
+    }
+    match extension.provider.as_str() {
+        "reshade-hot" | "ssmt.graphics.reshade" => vec!["graphics.reshade.host".to_string()],
+        "dlss5-hot" | "ssmt.graphics.dlss5" => vec![
+            "graphics.dlss5.route".to_string(),
+            "graphics.reshade.host".to_string(),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 #[tauri::command]
@@ -213,7 +276,10 @@ fn prepare_plugin_graphics_plan_blocking(
         &excluded_providers,
         |extension, plugin| {
             if graphics_decision.as_deref() == Some("suppress_hoyoshade_this_launch")
-                && extension.provider == "ssmt.graphics.reshade"
+                && matches!(
+                    extension.provider.as_str(),
+                    "reshade-hot" | "ssmt.graphics.reshade"
+                )
             {
                 return Ok(None);
             }
@@ -249,12 +315,17 @@ fn configure_plugin_launch_contract_blocking(
                 continue;
             }
             return match extension.provider.as_str() {
+                "dlss5-hot" => super::dlss5_hot_runtime::configure_dlss5_launch_settings(
+                    game_name,
+                    game_executable,
+                ),
                 "ssmt.graphics.dlss5" if plugin.id() == super::dlss5::DLSS5_PLUGIN_ID => {
                     super::dlss5_hot_runtime::configure_dlss5_launch_settings(
                         game_name,
                         game_executable,
                     )
                 }
+                "reshade-hot" => Ok(()),
                 "ssmt.graphics.reshade" if plugin.id() == super::hoyoshade::HOYOSHADE_PLUGIN_ID => {
                     Ok(())
                 }
@@ -269,6 +340,128 @@ fn configure_plugin_launch_contract_blocking(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn schema_two_graphics_profiles_are_strategy_based() {
+        let profiles = [
+            (
+                "../native/official-plugin-packages/ssmt.hoyoshade.bridge/0.2.0/ssmt-plugin.json",
+                "reshade-hot",
+                "ssmt.reshade.settings",
+            ),
+            (
+                "../native/official-plugin-packages/ssmt.dlss5.integration/0.3.0/ssmt-plugin.json",
+                "dlss5-hot",
+                "ssmt.dlss5.settings",
+            ),
+        ];
+        let present = profiles
+            .iter()
+            .filter(|(path, _, _)| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(path)
+                    .is_file()
+            })
+            .count();
+        assert!(
+            present == 0 || present == profiles.len(),
+            "schema-two graphics fixture set is only partially present"
+        );
+        if present == 0 {
+            eprintln!("schema-two graphics fixtures are outside the minimal Native checkout");
+            return;
+        }
+        for (path, strategy, settings) in profiles {
+            let raw =
+                fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+                    .unwrap();
+            let manifest = super::super::PluginManifest::from_json_str(&raw).unwrap();
+            let plugin = InstalledPlugin {
+                manifest,
+                package_root: std::path::PathBuf::from("fixture"),
+                enabled: true,
+                external_dependencies: Default::default(),
+                official: false,
+            };
+            let extension = &extensions(&plugin)[0];
+            assert_eq!(extension.provider, strategy);
+            if strategy == "dlss5-hot" {
+                assert!(plugin
+                    .manifest
+                    .contributions
+                    .pages
+                    .iter()
+                    .any(|page| { page.id() == "settings" && page.kind() == "static" }));
+            }
+            assert_eq!(
+                settings_extensions(&plugin)[0]
+                    .settings_component
+                    .as_deref(),
+                Some(settings)
+            );
+        }
+    }
+
+    #[test]
+    fn equal_priority_graphics_resources_are_reported_as_conflicts() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-graphics-conflict-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let mut registry = PluginRegistry::new(root.join("plugins")).unwrap();
+        for id in ["example.graphics.a", "example.graphics.b"] {
+            let package = registry.plugins_root().join(id).join("1.0.0");
+            fs::create_dir_all(package.join("host")).unwrap();
+            fs::write(package.join("host/graphics.json"), "{}").unwrap();
+            fs::write(
+                package.join("ssmt-plugin.json"),
+                serde_json::json!({
+                    "schemaVersion": 2,
+                    "id": id,
+                    "name": id,
+                    "version": "1.0.0",
+                    "author": "Example",
+                    "compatibility": {
+                        "ssmt": ">=4.2.2",
+                        "pluginApi": ">=1.0.0 <2.0.0",
+                        "platforms": ["windows-x64"]
+                    },
+                    "contributions": {
+                        "graphicsProfiles": [{
+                            "id": "graphics",
+                            "strategy": "reshade-hot",
+                            "priority": 10,
+                            "config": "host/graphics.json",
+                            "resources": ["graphics.reshade.host"]
+                        }]
+                    },
+                    "permissions": [
+                        "native.inject",
+                        "filesystem.read",
+                        "filesystem.write"
+                    ]
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        registry.refresh().unwrap();
+        for id in ["example.graphics.a", "example.graphics.b"] {
+            registry.set_game_enabled("GIMI", id, true).unwrap();
+        }
+        let scoped = registry.for_game("GIMI");
+        let result = collect(&scoped, true, &[], |_, _| {
+            panic!("conflicting graphics profiles must not execute")
+        });
+        assert!(result.plan.is_none());
+        assert!(result.handled);
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.candidate_id.contains("graphics.reshade.host")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     #[ignore = "需先生成本地测试插件包，并设置 SSMT_HOST_PACKAGE_TEST_ROOT；不加载 DLL"]
     fn actual_packages_install_and_expose_declared_routes_settings_and_assets() {
@@ -283,7 +476,6 @@ mod tests {
         for (id, version) in [
             (super::super::dlss5::DLSS5_PLUGIN_ID, "0.2.2"),
             (super::super::hoyoshade::HOYOSHADE_PLUGIN_ID, "0.1.1"),
-            ("ssmt.player-tweaks", "0.1.0"),
         ] {
             let archive = packages.join(format!("{id}-{version}.ssmtpkg"));
             let inspection = super::super::package_installer::inspect_ssmtpkg(&archive).unwrap();
@@ -303,14 +495,6 @@ mod tests {
             ["-dx11"]
         );
         assert!(policy.assets(false).unwrap().contains("sha256"));
-        let player = registry.find("ssmt.player-tweaks").unwrap();
-        assert_eq!(
-            super::super::player_tweaks::features(player, "SRMI").unwrap(),
-            ["fps-120"]
-        );
-        let dll = player.package_root.join("runtime/SSMT-Player-Tweaks.dll");
-        let hash = fs::read_to_string(dll.with_extension("dll.sha256")).unwrap();
-        super::super::gimi_hot_runtime::verify(&dll, hash.trim()).unwrap();
         let shade = registry
             .find(super::super::hoyoshade::HOYOSHADE_PLUGIN_ID)
             .unwrap();

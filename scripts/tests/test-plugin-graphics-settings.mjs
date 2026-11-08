@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { setImmediate } from 'node:timers/promises';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -34,6 +34,7 @@ function component(t, relative, bindings, mocks, props = {}) {
   const unmount = [];
   scope.run(() => vm.runInNewContext(compiled, {
     exports, console, URL, defineProps: () => props,
+    navigator: { language: 'zh-CN' },
     setTimeout: () => 1, clearTimeout() {},
     require(name) {
       if (name === 'vue') return { ...vue, onMounted() {}, onUnmounted: fn => unmount.push(fn) };
@@ -52,26 +53,44 @@ function component(t, relative, bindings, mocks, props = {}) {
 const i18n = { useI18n: () => ({ t: key => key, locale: vue.ref('zh-CN') }) };
 
 function gameplaySettings(t, registryFps) {
-  const module = { exports: {} };
-  const normalized = ts.transpileModule(readFileSync(new URL('../../src/plugin/playerTweaksGameplay.ts', import.meta.url), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  vm.runInNewContext(normalized, { exports: module.exports });
+  const module = { exports: loadModule('../../native/player-tweaks-ui/src/playerTweaksGameplay.ts') };
   const saved = [];
-  const props = vue.reactive({ gameName: registryFps ? 'Custom Star Rail' : 'Custom Genshin', enabled: true, registryFps });
-  const s = component(t, '../../src/plugin/components/PlayerTweaksGameplaySettings.vue', ['gameplay', 'save'], {
-    'vue-i18n': i18n,
+  const props = vue.reactive({
+    gameName: registryFps ? 'Custom Star Rail' : 'Custom Genshin',
+    gamePreset: registryFps ? 'SRMI' : 'GIMI',
+    enabled: true,
+    registryFps,
+  });
+  const s = component(t, '../../native/player-tweaks-ui/src/PlayerTweaksGameplaySettings.vue', ['gameplay', 'save'], {
     'element-plus': { ElMessage: { success() {}, error(error) { throw new Error(error); } } },
-    '../playerTweaksGameplay': module.exports,
-    '../../store/ResourceManager': { ResourceManager: {
-      loadGameConfig: async () => ({ gamePreset: registryFps ? 'SRMI' : 'GIMI', unrelated: 'preserve' }),
-      saveGameConfig: async (game, config) => saved.push({ game, config }),
-    } },
+    './playerTweaksGameplay': module.exports,
+    './settings': {
+      loadSettings: async () => ({
+        camera: {},
+        gameplay: module.exports.defaultPlayerTweaksGameplay(),
+      }),
+      saveSettings: async (game, settings) => saved.push({ game, settings }),
+      publishGimiConfig: async () => {},
+      publishSrmiConfig: async () => {},
+    },
   }, props);
   return { s, saved };
 }
 
 test('崩铁 Player Tweaks 只保存 120 FPS，原神继续支持原有帧率和队伍页选项', async t => {
+  const playerTweaksFixtures = [
+    new URL('../../native/player-tweaks-ui/src/playerTweaksGameplay.ts', import.meta.url),
+    new URL('../../native/player-tweaks-ui/src/PlayerTweaksGameplaySettings.vue', import.meta.url),
+  ];
+  const presentFixtures = playerTweaksFixtures.filter(path => existsSync(path));
+  assert.ok(
+    presentFixtures.length === 0 || presentFixtures.length === playerTweaksFixtures.length,
+    'Player Tweaks source fixtures are only partially present',
+  );
+  if (presentFixtures.length === 0) {
+    t.skip('Player Tweaks UI is outside the minimal Native checkout');
+    return;
+  }
   for (const registry of [true, false]) {
     const { s, saved } = gameplaySettings(t, registry);
     await setImmediate();
@@ -80,15 +99,14 @@ test('崩铁 Player Tweaks 只保存 120 FPS，原神继续支持原有帧率和
     s.gameplay.fpsUnlock = false;
     await s.save();
     assert.equal(saved.length, 1);
-    assert.equal(saved[0].config.unrelated, 'preserve');
-    assert.equal(saved[0].config.playerTweaksGameplay.fpsUnlock, false);
-    assert.equal(saved[0].config.playerTweaksGameplay.targetFps, registry ? 120 : 165);
-    assert.equal(saved[0].config.playerTweaksGameplay.fastTeamPage, !registry);
+    assert.equal(saved[0].settings.gameplay.fpsUnlock, false);
+    assert.equal(saved[0].settings.gameplay.targetFps, registry ? 120 : 165);
+    assert.equal(saved[0].settings.gameplay.fastTeamPage, !registry);
   }
 });
 const dlssPlugin = enabled => ({
   manifest: { id: 'ssmt.dlss5.integration', name: 'DLSS5', author: 'SSMT', version: '0.1.0', externalDependencies: [], permissions: [], contributions: { hostExtensions: [{ id: 'graphics', settingsComponent: 'ssmt.dlss5.settings' }] } },
-  enabled, externalDependencies: {}, lifecycleStatus: 'installed', official: true,
+  enabled, enabledGames: [], externalDependencies: {}, lifecycleStatus: 'installed', official: true,
 });
 
 function marketplace(t, options = {}) {
@@ -98,6 +116,7 @@ function marketplace(t, options = {}) {
     'catalog', 'catalogError', 'allEntries', 'refreshAll', 'refreshing', 'loading', 'openPluginLog', 'clearSelectedPluginLog', 'logPlugin', 'pluginLog', 'togglePlugin', 'lifecycleFor',
     'selectedDependencies', 'dependencyActionsEnabled', 'openDependencyDownload', 'openDependencySettings', 'optionalDependency',
     'openDependencyDirectory', 'installOfficial', 'updateEntries', 'selectedPlugin', 'selectedInjectedDlls',
+    'selectedPages',
     'riskDialogOpen', 'riskAccepted', 'riskPlugin', 'togglePlugin', 'confirmRiskyEnable', 'uninstallPlugin',
   ], {
     '@tauri-apps/api/core': { invoke: options.invoke ?? (() => { throw new Error('Unexpected IPC'); }) },
@@ -111,7 +130,9 @@ function marketplace(t, options = {}) {
     'vue-router': { useRoute: () => ({ query: options.query ?? {} }) },
     './pluginMarketplaceModel': pluginMarketplaceModel,
     './PluginCompatibilityPanel.vue': {}, './PluginPermissionList.vue': {},
-    '../../plugin/logs': options.logs ?? {}, '../../store/GamePreset': {
+    '../../plugin/logs': options.logs ?? {},
+    '../../plugin/pluginRegistryEvents': { notifyPluginRegistryChanged() {} },
+    '../../store/GamePreset': {
       getGamePresetPriority: () => 0,
       getGamePresetDisplayName: game => game,
     },
@@ -255,14 +276,14 @@ test('marketplace exposes DLSS5 settings only for the selected enabled game and 
   assert.equal(s.graphicsConfigLoading.value, false);
 });
 
-test('marketplace opens Secondary Motion settings and exposes its launch injection path', async t => {
+test('marketplace opens migrated Secondary Motion page and exposes its launch injection path', async t => {
   const s = marketplace(t);
   const plugin = {
     manifest: {
-      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.2.0',
+      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.3.2',
       externalDependencies: [], permissions: ['native.inject'],
       contributions: {
-        hostExtensions: [{ id: 'settings', settingsComponent: 'ssmt.secondary-motion.settings' }],
+        pages: [{ id: 'settings', title: 'Secondary Motion', kind: 'static' }],
         injectedDlls: [{ path: 'plugin/sbm.dll' }],
       },
     },
@@ -273,11 +294,13 @@ test('marketplace opens Secondary Motion settings and exposes its launch injecti
   s.selectedId.value = 'ssmt.secondary-motion';
   await vue.nextTick();
   assert.deepEqual(Array.from(s.selectedInjectedDlls.value), [{ path: 'plugin/sbm.dll' }]);
+  assert.equal(s.selectedPages.value.length, 1);
+  assert.equal(s.selectedPages.value[0].kind, 'static');
   s.openPluginSettings();
   assert.equal(s.detailTab.value, 'features');
 });
 
-test('any installed plugin can be completely uninstalled after it is disabled', async t => {
+test('uninstall confirmation disables every game scope through the backend before deleting', async t => {
   const calls = [];
   let confirmation = '';
   const plugin = { ...dlssPlugin(false), manifest: { ...dlssPlugin(false).manifest, id: 'example.uninstallable' } };
@@ -302,21 +325,29 @@ test('any installed plugin can be completely uninstalled after it is disabled', 
   assert.equal(calls[0].args.gameName, 'GIMI');
   assert.deepEqual(Array.from(s.installed.value), []);
 
-  const enabled = { ...plugin, enabled: true, lifecycleStatus: 'enabled' };
-  s.installed.value = [enabled];
+  const crossGame = {
+    ...plugin,
+    enabled: false,
+    enabledGames: ['GIMI', 'SRMI'],
+    lifecycleStatus: 'incompatible',
+  };
+  s.installed.value = [crossGame];
+  s.appSettings.CurrentGameName = 'EFMI';
   await vue.nextTick();
   await s.uninstallPlugin();
-  assert.equal(calls.length, 1, '启用中的插件不得调用卸载 IPC');
+  assert.equal(calls.length, 2, '跨游戏启用状态必须由已确认的卸载流程解除');
+  assert.match(confirmation, /uninstallDisableGames/);
+  assert.equal(calls[1].command, 'uninstall_plugin');
 });
 
 test('native injection plugin requires explicit risk acknowledgement before enabling', async t => {
   const calls = [];
   const plugin = {
     manifest: {
-      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.2.0',
+      id: 'ssmt.secondary-motion', name: 'Secondary Motion', author: 'SSMT', version: '3.3.2',
       externalDependencies: [], permissions: ['native.inject'],
       contributions: {
-        hostExtensions: [{ id: 'settings', settingsComponent: 'ssmt.secondary-motion.settings' }],
+        pages: [{ id: 'settings', title: 'Secondary Motion', kind: 'static' }],
         injectedDlls: [{ path: 'plugin/sbm.dll' }],
       },
     },
@@ -338,7 +369,7 @@ test('native injection plugin requires explicit risk acknowledgement before enab
   assert.deepEqual(calls.map(call => call.command), ['set_plugin_setting', 'set_plugin_enabled_for_game']);
   assert.equal(calls[0].args.key, 'native_injection_risk_ack_v1');
   assert.equal(calls[0].args.value.accepted, true);
-  assert.equal(calls[0].args.value.pluginVersion, '3.2.0');
+  assert.equal(calls[0].args.value.pluginVersion, '3.3.2');
   assert.equal(s.riskDialogOpen.value, false);
 });
 
