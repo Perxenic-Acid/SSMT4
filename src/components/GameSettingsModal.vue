@@ -40,30 +40,9 @@ const loadedConfigSnapshot = ref<GameConfig | null>(null);
 let loadConfigRequestId = 0;
 let saveConfigQueue: Promise<void> = Promise.resolve();
 
-const Dlss5GraphicsSettings = defineAsyncComponent(
-  () => import('../plugin/components/Dlss5GraphicsSettings.vue'),
-);
 const GameMaintenanceSettings = defineAsyncComponent(
   () => import('../features/gameMaintenance/GameMaintenanceSettings.vue'),
 );
-const dlss5IntegrationEnabled = ref(false);
-let pluginAvailabilityRequestId = 0;
-
-const refreshOptionalPluginSections = async () => {
-  const requestId = ++pluginAvailabilityRequestId;
-  dlss5IntegrationEnabled.value = false;
-  try {
-    const plugins = await invoke<Array<{ manifest: { id: string }; enabled: boolean }>>('plugin_registry_snapshot_for_game', { gameName: props.gameName });
-    if (requestId === pluginAvailabilityRequestId && props.modelValue) {
-      dlss5IntegrationEnabled.value = plugins.some(
-        plugin => plugin.manifest.id === 'ssmt.dlss5.integration' && plugin.enabled,
-      );
-    }
-  } catch {
-    // An unavailable optional plugin registry must not block game settings.
-  }
-};
-
 
 const isLoading = ref(false);
 const isConfigReady = computed(() => {
@@ -903,13 +882,10 @@ const moveExtraDll = (index: number, direction: -1 | 1) => {
 watch(() => props.modelValue, (val) => {
   if (val) {
     activeTab.value = 'basic'; // Reset to first tab
-    void refreshOptionalPluginSections();
     resetDllReleaseListState();
     resetPackageReleaseListState();
     void loadConfig();
   } else {
-    ++pluginAvailabilityRequestId;
-    dlss5IntegrationEnabled.value = false;
     // When closing, save
     void saveConfig();
   }
@@ -1203,12 +1179,6 @@ defineExpose({
                     </button>
                   </el-tooltip>
                 </div>
-
-                <Dlss5GraphicsSettings
-                  v-if="dlss5IntegrationEnabled"
-                  :game-name="props.gameName"
-                  :target-exe-path="config.targetExePath || ''"
-                />
 
                 <div class="settings-field-label">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

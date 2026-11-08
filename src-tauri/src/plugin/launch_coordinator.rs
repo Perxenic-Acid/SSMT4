@@ -1,3 +1,7 @@
+use super::file_transaction::FileTransactionReport;
+use super::launch_plan::{
+    resolve_hook_plan, LaunchHookPlugin, LaunchResourceConflict, ResolvedHookPlan,
+};
 use super::registry::{
     ExternalDependencyStatus, InstalledPlugin, PluginHostConfig, PluginRegistry,
     PluginRegistryError,
@@ -61,6 +65,7 @@ pub struct LaunchPlan {
     pub injected_dlls: Vec<PathBuf>,
     pub plugin_host_config: Option<PluginHostConfig>,
     pub launcher_adapter_count: usize,
+    pub hook_plan: ResolvedHookPlan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +108,20 @@ impl LaunchSession {
         self.failure = Some(error.into());
         self.phase = LaunchPhase::Failed;
     }
+
+    pub fn apply_file_hooks(
+        &self,
+        game_root: &std::path::Path,
+    ) -> Result<FileTransactionReport, String> {
+        self.plan.hook_plan.apply_file_actions(game_root)
+    }
+
+    pub fn restore_file_hooks(
+        game_root: &std::path::Path,
+        transaction_id: &str,
+    ) -> Result<bool, String> {
+        ResolvedHookPlan::restore_file_actions(game_root, transaction_id)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +146,8 @@ pub enum LaunchCoordinatorError {
         from: LaunchPhase,
         to: LaunchPhase,
     },
+    HookPlan(String),
+    ResourceConflict(Vec<LaunchResourceConflict>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +188,16 @@ impl fmt::Display for LaunchCoordinatorError {
                     "invalid launch phase transition: {from:?} -> {to:?}"
                 )
             }
+            Self::HookPlan(error) => write!(formatter, "invalid plugin launch plan: {error}"),
+            Self::ResourceConflict(conflicts) => write!(
+                formatter,
+                "plugin launch resources conflict: {}",
+                conflicts
+                    .iter()
+                    .map(|conflict| conflict.resource_key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 }
@@ -190,6 +221,35 @@ impl<'a> LaunchCoordinator<'a> {
 
     pub fn prepare(&self, request: LaunchRequest) -> Result<LaunchSession, LaunchCoordinatorError> {
         validate_request(&request)?;
+        let hook_plugins = self
+            .registry
+            .selected_plugins()
+            .filter(|plugin| plugin.enabled)
+            .map(|plugin| {
+                validate_plugin_preflight(plugin)?;
+                Ok(LaunchHookPlugin::from_installed(plugin))
+            })
+            .collect::<Result<Vec<_>, LaunchCoordinatorError>>()?;
+        let hook_plan = if hook_plugins.iter().any(|plugin| !plugin.hooks.is_empty()) {
+            let game_root = request
+                .game_executable
+                .as_deref()
+                .and_then(std::path::Path::parent)
+                .or(request.game_working_directory.as_deref())
+                .ok_or_else(|| {
+                    LaunchCoordinatorError::HookPlan(
+                        "launch hooks require a game executable or working directory".to_string(),
+                    )
+                })?;
+            let plan = resolve_hook_plan(game_root, &hook_plugins)
+                .map_err(LaunchCoordinatorError::HookPlan)?;
+            if !plan.is_executable() {
+                return Err(LaunchCoordinatorError::ResourceConflict(plan.conflicts));
+            }
+            plan
+        } else {
+            ResolvedHookPlan::default()
+        };
 
         let mut session = LaunchSession {
             plan: LaunchPlan {
@@ -198,6 +258,7 @@ impl<'a> LaunchCoordinator<'a> {
                 injected_dlls: Vec::new(),
                 plugin_host_config: None,
                 launcher_adapter_count: 0,
+                hook_plan,
             },
             phase: LaunchPhase::Created,
             failure: None,
@@ -461,6 +522,61 @@ mod tests {
     }
 
     #[test]
+    fn prepares_manifest_launch_hooks_as_generic_plan() {
+        use sha2::{Digest, Sha256};
+        let root = temp_root("launch-hooks");
+        let package = root.join("Plugins/example.launch/1.0.0");
+        fs::create_dir_all(package.join("payload")).unwrap();
+        fs::write(package.join("payload/proxy.dll"), b"payload").unwrap();
+        let sha256 = format!("{:x}", Sha256::digest(b"payload"));
+        fs::write(
+            package.join("ssmt-plugin.json"),
+            format!(
+                r#"{{
+                  "schemaVersion": 2,
+                  "id": "example.launch",
+                  "name": "Launch",
+                  "version": "1.0.0",
+                  "author": "Example",
+                  "compatibility": {{
+                    "ssmt": ">=4.2.2",
+                    "pluginApi": ">=1.0.0 <2.0.0",
+                    "platforms": ["windows-x64"],
+                    "games": ["EFMI"]
+                  }},
+                  "contributions": {{
+                    "launchHooks": [{{
+                      "id": "proxy",
+                      "actions": [{{
+                        "type": "file-copy",
+                        "source": "payload/proxy.dll",
+                        "target": "dxgi.dll",
+                        "sha256": "{sha256}"
+                      }}]
+                    }}]
+                  }},
+                  "permissions": ["filesystem.read", "filesystem.write"]
+                }}"#
+            ),
+        )
+        .unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry
+            .set_game_enabled("EFMI", "example.launch", true)
+            .unwrap();
+        let scoped = registry.for_game("EFMI");
+        let session = LaunchCoordinator::new(&scoped)
+            .prepare(request(&root))
+            .unwrap();
+        assert_eq!(session.plan.hook_plan.file_actions.len(), 1);
+        assert_eq!(
+            session.plan.hook_plan.file_actions[0].target_relative,
+            "dxgi.dll"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn legacy_dlss5_tools_do_not_block_the_managed_hot_runtime() {
         let plugin = InstalledPlugin {
             manifest: PluginManifest {
@@ -469,9 +585,11 @@ mod tests {
                 name: "DLSS5 Integration".to_string(),
                 version: "0.2.1".to_string(),
                 author: "SSMT".to_string(),
+                plugin_api_version: 1,
                 compatibility: crate::plugin::PluginCompatibility {
                     ssmt: ">=4.0.0".to_string(),
                     platforms: vec!["windows-x64".to_string()],
+                    plugin_api: None,
                     games: Vec::new(),
                 },
                 contributions: crate::plugin::PluginContributions::default(),

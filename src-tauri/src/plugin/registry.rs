@@ -353,6 +353,7 @@ impl PluginRegistry {
                 .find(plugin.id())
                 .is_some_and(|current| current.version() == plugin.version());
             plugin.enabled = selected
+                && plugin.manifest.supports_current_plugin_api()
                 && if plugin.manifest.is_app_scoped() {
                     self.state
                         .plugins
@@ -369,11 +370,12 @@ impl PluginRegistry {
     pub fn game_enabled(&self, game_name: &str, id: &str) -> bool {
         self.configured_game_enabled(game_name, id)
             && self.find(id).is_some_and(|plugin| {
-                plugin.manifest.is_app_scoped()
-                    || plugin
-                        .manifest
-                        .compatibility
-                        .supports_game(&game_scope_preset(game_name))
+                plugin.manifest.supports_current_plugin_api()
+                    && (plugin.manifest.is_app_scoped()
+                        || plugin
+                            .manifest
+                            .compatibility
+                            .supports_game(&game_scope_preset(game_name)))
             })
     }
 
@@ -510,6 +512,12 @@ impl PluginRegistry {
                 plugin.manifest.name, game_name
             )));
         }
+        if enabled && !plugin.manifest.supports_current_plugin_api() {
+            return Err(PluginRegistryError::State(format!(
+                "plugin {} requires an incompatible Plugin API",
+                plugin.manifest.name
+            )));
+        }
         self.write_game_enabled(&game_name, id, enabled)
     }
 
@@ -532,6 +540,12 @@ impl PluginRegistry {
         let plugin = self
             .find(id)
             .ok_or_else(|| PluginRegistryError::PluginNotFound(id.to_string()))?;
+        if enabled && !plugin.manifest.supports_current_plugin_api() {
+            return Err(PluginRegistryError::State(format!(
+                "plugin {} requires an incompatible Plugin API",
+                plugin.manifest.name
+            )));
+        }
         let key = package_key(plugin.id(), plugin.version());
         self.state.plugins.entry(key).or_default().enabled = enabled;
         write_state(&self.state_path, &self.state)?;
@@ -819,6 +833,38 @@ mod tests {
         restarted.set_enabled("ssmt.fixture", false).unwrap();
         assert!(!restarted.find("ssmt.fixture").unwrap().enabled);
         drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn future_plugin_api_stays_visible_but_cannot_be_enabled() {
+        let root = temp_root("future-api");
+        let source = fixture_package(&root, "example.future-api", "1.0.0");
+        let manifest_path = source.join(MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["schemaVersion"] = 2.into();
+        manifest["compatibility"]["pluginApi"] = ">=2.0.0 <3.0.0".into();
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&source).unwrap();
+        assert!(registry.find("example.future-api").is_some());
+        assert!(registry
+            .set_game_enabled("GIMI", "example.future-api", true)
+            .is_err());
+        assert!(registry.set_enabled("example.future-api", true).is_err());
+
+        // A stale enabled flag from an older host cannot activate an incompatible package.
+        registry
+            .write_game_enabled("gimi", "example.future-api", true)
+            .unwrap();
+        let scoped = registry.for_game("GIMI");
+        assert!(!scoped.find("example.future-api").unwrap().enabled);
+        assert!(!registry.game_enabled("GIMI", "example.future-api"));
+        registry
+            .set_game_enabled("GIMI", "example.future-api", false)
+            .unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

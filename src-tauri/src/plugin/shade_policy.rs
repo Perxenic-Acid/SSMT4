@@ -31,11 +31,19 @@ impl Policy {
         let text = match plugin
             .manifest
             .contributions
-            .host_extensions
+            .graphics_profiles
             .iter()
-            .find(|item| item.provider == "ssmt.graphics.reshade")
+            .find(|item| item.strategy == super::GraphicsProfileStrategy::ReshadeHot)
             .and_then(|item| item.config.as_deref())
-        {
+            .or_else(|| {
+                plugin
+                    .manifest
+                    .contributions
+                    .host_extensions
+                    .iter()
+                    .find(|item| item.provider == "ssmt.graphics.reshade")
+                    .and_then(|item| item.config.as_deref())
+            }) {
             Some(path) => read_text(&checked_path(&root, path)?)?,
             None => include_str!("shade_legacy_policy.json").to_string(),
         };

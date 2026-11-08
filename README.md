@@ -28,6 +28,50 @@ EFMI 会等待实际游戏进程后直接注入；Shell 模式可打开配置的
 本地构建包不视为已验证的 Native Release 来源；裸 DLL 和宿主测试 DLL 不直接成为市场条目。
 前后端命令更新后，正在运行的 SSMT 开发进程需要重启才能使用新发现流程。
 
+## 插件页面运行层
+
+当前清单版本为 Schema 2，插件使用 `compatibility.pluginApi` 声明能力兼容范围，并通过
+`contributions.pages` 提供声明式设置、静态页面或本地服务页面。Schema 1 与
+`pluginApiVersion` 继续兼容读取。
+
+Plugin API 1 已冻结；`1.x` 只增加兼容能力，不删除、重命名或改变已有语义。机器可读契约、
+官方插件兼容矩阵和升级规则见 [Plugin API 1 冻结契约](docs/plugin-api-v1-contract.md)。
+可使用 `bun run check:plugin-api-contract` 检查全部官方包和页面桥协议。
+
+本地服务由 SSMT 分配随机端口和令牌，等待健康检查；页面仅持有 ServiceLease，最后一个
+Lease 释放后进入空闲宽限，插件禁用、更新、卸载或 SSMT 退出时回收进程树。本地服务页
+可通过版本化 iframe 桥请求 CapabilityBroker，调用身份由 Lease 解析，页面不能自报插件 ID。
+静态插件页同样使用租约独占的随机回环文件服务，只开放当前页面目录；页面不能通过全局
+asset protocol 读取其他插件或任意本地文件。所有页面 Lease 都带心跳和 TTL，WebView
+崩溃或强制重载后由宿主清理遗留服务。
+
+安装、清单格式和安全边界见 [插件页面运行层](docs/plugin-pages.md)。
+陌生插件开发、权限和错误规范见 [插件 SDK](docs/plugin-sdk.md)。
+
+需要参与启动流程的插件可通过 `contributions.launchHooks` 声明受控文件动作和启动参数。
+宿主负责资源冲突仲裁、SHA-256 验证、可恢复文件事务和游戏退出后的恢复；插件不能提交
+任意绝对路径或任意 Shell 命令。协议与模拟验证见 [插件启动计划](docs/plugin-launch-plan.md)。
+
+Liquid Gravity Probe 0.2.33 已迁移为 Schema 2 本地服务页面，使用通用 UIHost、
+ServiceLease 和 CapabilityBroker。主应用不再包含该插件的专用 Tauri 命令、独立导航入口
+或业务 Vue 页面；旧 `/plugins/liquid-gravity-probe` 地址只重定向到插件市场。迁移说明见
+[Liquid Gravity Probe 迁移](docs/plugin-migration-liquid-gravity.md)。
+
+Secondary Motion 3.3.4 已迁移为 Schema 2 静态页面。预设与角色参数存放在插件作用域
+持久数据目录，宿主在启动前把数据镜像到原生 DLL 期望的包内目录；静态页面通过
+PageLease 能力桥读写数据，不再依赖专用 Tauri 命令或本体 Vue 组件。迁移说明见
+[Secondary Motion 迁移](docs/plugin-migration-secondary-motion.md)。
+
+Player Tweaks 0.2.0 已把 GIMI 设置页、DLL/INI 运行配置和策略声明迁入插件包。GIMI 使用
+通用作用域数据、启动镜像和注入 DLL；SRMI 保留一个临时注册表设置适配层。旧
+`playerTweaksCamera` / `playerTweaksGameplay` 配置由声明式迁移能力按字段导入。迁移说明见
+[Player Tweaks 迁移](docs/plugin-migration-player-tweaks.md)。
+
+图形插件已开始迁移到通用 `graphicsProfiles`：插件声明策略、优先级、配置和资源键，
+宿主不再按 HoYoShade/DLSS5 插件 ID 选择 Provider。HoYoShade 0.2.0 已通过通用
+ReShade 热运行计划验收。DLSS5 后续迁移已跳过；0.3.0 只保留为不可发布开发快照。
+详见 [图形 Profile 迁移](docs/plugin-migration-graphics-profiles.md)。
+
 # 附加功能移除说明
 
 SSMT4开源版仅包含了基础的启动器、管理器、模型提取功能，基础功能方便社区共建
