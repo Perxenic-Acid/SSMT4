@@ -26,102 +26,16 @@
       ]
     },
     {
-      "id": "graphics.directory.select",
+      "id": "host.directory.select",
       "permissions": [
         "filesystem.read"
       ]
     },
     {
-      "id": "graphics.external.open",
+      "id": "host.url.open",
       "permissions": [
         "process.spawn"
       ]
-    },
-    {
-      "id": "graphics.route.install",
-      "permissions": [
-        "filesystem.read",
-        "filesystem.write",
-        "native.inject",
-        "process.spawn"
-      ]
-    },
-    {
-      "id": "graphics.route.restore",
-      "permissions": [
-        "filesystem.read",
-        "filesystem.write",
-        "native.inject",
-        "process.spawn"
-      ]
-    },
-    {
-      "id": "graphics.routes.read",
-      "permissions": [
-        "filesystem.read"
-      ]
-    },
-    {
-      "id": "graphics.runtime.download",
-      "permissions": [
-        "network",
-        "filesystem.read",
-        "filesystem.write"
-      ]
-    },
-    {
-      "id": "graphics.runtime.history",
-      "permissions": [
-        "filesystem.read"
-      ]
-    },
-    {
-      "id": "graphics.runtime.import",
-      "permissions": [
-        "filesystem.read",
-        "filesystem.write"
-      ]
-    },
-    {
-      "id": "graphics.runtime.remove",
-      "permissions": [
-        "filesystem.read",
-        "filesystem.write"
-      ]
-    },
-    {
-      "id": "graphics.runtime.select",
-      "permissions": [
-        "filesystem.read",
-        "filesystem.write"
-      ]
-    },
-    {
-      "id": "graphics.runtime.status",
-      "permissions": [
-        "filesystem.read"
-      ]
-    },
-    {
-      "id": "graphics.status.read",
-      "permissions": [
-        "filesystem.read"
-      ]
-    },
-    {
-      "id": "graphics.task.cancel",
-      "permissions": []
-    },
-    {
-      "id": "graphics.task.start",
-      "permissions": [
-        "filesystem.read",
-        "filesystem.write"
-      ]
-    },
-    {
-      "id": "graphics.task.status",
-      "permissions": []
     },
     {
       "id": "plugin.backend.request",
@@ -163,6 +77,12 @@
       "id": "plugin.data.write",
       "permissions": [
         "filesystem.write"
+      ]
+    },
+    {
+      "id": "plugin.external.open",
+      "permissions": [
+        "process.spawn"
       ]
     },
     {
@@ -214,16 +134,7 @@
     "external_manager_not_declared",
     "game_context_invalid",
     "game_context_unavailable",
-    "graphics_history_error",
-    "graphics_operation_failed",
-    "graphics_profile_not_declared",
-    "graphics_routes_error",
-    "graphics_runtime_error",
-    "graphics_status_error",
-    "graphics_task_conflict",
-    "graphics_task_error",
-    "graphics_task_failed",
-    "graphics_task_limit",
+    "host_action_failed",
     "invalid_payload",
     "lease_invalid",
     "lease_lookup_failed",
@@ -235,12 +146,7 @@
     "plugin_not_installed",
     "plugin_registry_unavailable",
     "storage_error",
-    "storage_unavailable",
-    "task_cancelled",
-    "task_not_cancellable",
-    "task_not_found",
-    "task_not_running",
-    "task_store_unavailable"
+    "storage_unavailable"
   ],
   "compatibilityRules": {
     "unknownManifestFields": "reject",

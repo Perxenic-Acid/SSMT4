@@ -165,8 +165,8 @@ mod tests {
         InstalledPlugin {
             manifest: PluginManifest {
                 schema_version: 1,
-                id: "ssmt.dlss5.integration".to_string(),
-                name: "DLSS 5 Swapper Integration".to_string(),
+                id: "example.integration".to_string(),
+                name: "Example Integration".to_string(),
                 version: "0.1.0".to_string(),
                 author: "SSMT".to_string(),
                 plugin_api_version: 1,
@@ -178,8 +178,8 @@ mod tests {
                 },
                 contributions: PluginContributions {
                     external_managers: vec![ExternalManagerContribution {
-                        id: "dlss5-swapper".to_string(),
-                        executable: "${plugin.root}/DLSS5-Swapper.exe".to_string(),
+                        id: "manager".to_string(),
+                        executable: "${plugin.root}/ExternalManager.exe".to_string(),
                         working_directory: Some("${plugin.root}".to_string()),
                     }],
                     ..Default::default()
@@ -201,19 +201,22 @@ mod tests {
         let package = root.join("package");
         fs::create_dir_all(&game).unwrap();
         fs::create_dir_all(&package).unwrap();
-        let executable = root.join("DLSS5-Swapper.exe");
+        let executable = root.join("ExternalManager.exe");
         fs::write(&executable, b"fixture").unwrap();
         let plugin = fixture(&root);
-        let integration =
-            ExternalManagerIntegration::from_installed(&plugin, "dlss5-swapper").unwrap();
+        let integration = ExternalManagerIntegration::from_installed(&plugin, "manager").unwrap();
         let missing = integration
-            .inspect_game_directory(&executable, &game, "dlss5/manifest.json")
+            .inspect_game_directory(&executable, &game, "integration/manifest.json")
             .unwrap();
         assert_eq!(missing.route, None);
-        fs::create_dir_all(game.join("dlss5")).unwrap();
-        fs::write(game.join("dlss5/manifest.json"), r#"{"route":"feeder"}"#).unwrap();
+        fs::create_dir_all(game.join("integration")).unwrap();
+        fs::write(
+            game.join("integration/manifest.json"),
+            r#"{"route":"feeder"}"#,
+        )
+        .unwrap();
         let ready = integration
-            .inspect_game_directory(&executable, &game, "dlss5/manifest.json")
+            .inspect_game_directory(&executable, &game, "integration/manifest.json")
             .unwrap();
         assert_eq!(ready.route.as_deref(), Some("feeder"));
         fs::remove_dir_all(root).unwrap();
@@ -225,8 +228,7 @@ mod tests {
             std::env::temp_dir().join(format!("ssmt-manager-missing-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let plugin = fixture(&root);
-        let integration =
-            ExternalManagerIntegration::from_installed(&plugin, "dlss5-swapper").unwrap();
+        let integration = ExternalManagerIntegration::from_installed(&plugin, "manager").unwrap();
         assert!(matches!(
             integration.inspect_game_directory(&root.join("missing.exe"), &root, "manifest.json"),
             Err(ExternalManagerError::InvalidExecutable(_))

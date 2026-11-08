@@ -1,5 +1,7 @@
 # 原神 DLSS5 热注入
 
+> 架构迁移：实现现位于 `native/crates/dlss5-backend`，设置页面由插件包提供；本体不再暴露旧 DLSS5 命令。新入口、构建和验证见 [插件自有后台](plugin-owned-backends.md)。下文保留组件与历史验收记录。
+
 ## 当前交付范围
 
 原神（`YuanShen.exe` / `GenshinImpact.exe`）使用单独的 `gimi-hot` 路线。仅在安装了 DLSS5 插件并为当前游戏启用后，SSMT 才读取它的组件配置、校验资源或准备注入。未安装、关闭插件、其他游戏和纯净直接启动均不准备这条链。
@@ -10,7 +12,7 @@
 
 1. 在插件页安装 DLSS5 **0.2.1 或更新版本**，并为原神启用。新插件包包含 SSMT 适配的 Bridge；旧包缺失该组件时横幅提醒并继续普通 Mod 启动。Shade Bridge 是可选项；DLSS5 单独启用也会准备自己的被动 ReShade Host。
 2. 关闭游戏。在**插件市场 → 选择原神 → DLSS5 → 功能设置**选择显卡 Profile（RTX 50 或 RTX 30/40；RTX 40 为实验支持），点击**自动下载并配置**。首次约下载 302 MiB，包含配套的 `nvngx_dlssnr.dll`，无需玩家另找组件；后续复用已校验的缓存。游戏设置中保留相同入口。
-3. 离线情况下点击“离线导入”，选择包含 `components` 的完整 GIMI 集成包根目录。组件来自 [CXP GIMI 集成项目的固定版本](https://github.com/CXP-2024/GIMI_reshade_dlss_integration/tree/cc4697187cb57bacc7c932b7f53f16be24af152a)，必须补齐所选 Profile 的 NR Runtime。SSMT 逐文件校验固定 SHA-256，不接受混用版本或另一 Profile 的 Runtime。具体路径与完整哈希以 `src-tauri/src/plugin/gimi_hot_runtime.rs` 和 `gimi_hot_assets.json` 为准。
+3. 离线情况下点击“离线导入”，选择包含 `components` 的完整 GIMI 集成包根目录。组件来自 [CXP GIMI 集成项目的固定版本](https://github.com/CXP-2024/GIMI_reshade_dlss_integration/tree/cc4697187cb57bacc7c932b7f53f16be24af152a)，必须补齐所选 Profile 的 NR Runtime。SSMT 逐文件校验固定 SHA-256，不接受混用版本或另一 Profile 的 Runtime。具体路径与完整哈希以 `native/crates/dlss5-backend/src/plugin/gimi_hot_runtime.rs` 和 `gimi_hot_assets.json` 为准。
 4. 若显示旧的 Swapper 托管安装，先用原有“恢复”操作恢复该安装，再使用热注入。遇到损坏清单先处理该错误，不手动猜测删除游戏文件；热注入不会临时恢复 Swapper 代理文件。
 5. 保持游戏设置中的“启动目标程序”开启。普通启动直接使用目标程序；“使用 Shell 启动”的启动路径与目标路径指向同一个游戏 EXE 时，也属于由 SSMT 直接启动。SSMT 会仅为本次热注入改由 Run.exe 创建挂起进程，保存的 Shell 设置不变。两条路径指向不同程序时，暂不支持通过另一启动程序创建游戏；不能对已经创建的目标补设环境。
 6. SSMT 在实际采用热注入计划后自动配置抗锯齿：FSR2 Bridge 启用 **FSR2**，Feeder 关闭游戏抗锯齿。Bridge 的渲染精度仍至少 **1.0**。进入世界观察 Mod、贴图及 NR 效果；仅弹出 ReShade 界面不表示 DLSS5 生效。

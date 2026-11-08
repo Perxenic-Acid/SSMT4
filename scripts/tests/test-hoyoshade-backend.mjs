@@ -46,6 +46,7 @@ test('HoYoShade standalone backend composes peers, preserves user settings and r
     const prepared = call('launch.prepare', { peers: [own, peer] })
     assert.equal(prepared.ok, true, prepared.error)
     assert.equal(prepared.value.dlls.length, 1)
+    assert.equal(call('launch.prepare', { peers: [own], launchContext: { existingDlls: ['C:/Other/dxgi.dll'] } }).ok, false)
     assert.equal(call('launch.prepare', { peers: [own, { ...peer, nativeInjectionAcknowledged: false }] }).ok, false)
     assert.equal(prepared.value.dlls[0].sha256, createHash('sha256').update(readFileSync(join(resources, 'ReShade64.dll'))).digest('hex'))
     const state = prepared.value.environment.RESHADE_BASE_PATH_OVERRIDE

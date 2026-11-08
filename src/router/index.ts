@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { defineAsyncComponent, type AsyncComponentLoader } from 'vue'
 import { ElMessage } from 'element-plus'
 import { exists } from '@tauri-apps/plugin-fs'
@@ -73,7 +73,7 @@ export const prefetchRouteComponents = () => {
   })
 }
 
-const routes = [
+const routes: RouteRecordRaw[] = [
   { path: '/', name: 'Home', component: Home, meta: { title: 'Home', requiresGame: false } },
   { path: '/mods', name: 'ModsManagement', component: ModsManagement, meta: { title: 'Mods Management', requiresGame: true } },
   { path: '/gamebanana', name: 'GameBanana', component: GameBanana, meta: { title: 'GameBanana', requiresGame: false } },
@@ -87,14 +87,8 @@ const routes = [
   { path: '/texture-mod-maker', name: 'TextureModMaker', component: TextureModMaker, meta: { title: 'Texture Mod Maker', requiresGame: true } },
   { path: '/plugins', name: 'PluginMarketplace', component: PluginMarketplace, meta: { title: 'Plugin Marketplace', requiresGame: false } },
   {
-    path: '/plugins/liquid-gravity-probe',
-    redirect: { name: 'PluginMarketplace', query: { plugin: 'ssmt.liquid-gravity-probe' } },
-  },
-  {
-    path: '/plugins/hoyoshade',
-    name: 'HoYoShadeSettings',
-    meta: { title: 'HoYoShade Bridge', requiresGame: false },
-    redirect: { name: 'PluginMarketplace', query: { plugin: 'ssmt.hoyoshade.bridge', tab: 'dependencies' } },
+    path: '/plugins/:pluginId',
+    redirect: to => ({ name: 'PluginMarketplace', query: { plugin: String(to.params.pluginId) } }),
   },
 ]
 

@@ -9,18 +9,9 @@ pub mod backend_launch;
 pub mod capability_broker;
 pub mod commands;
 pub mod data_store;
-pub mod dlss5;
-pub mod dlss5_hot_runtime;
-mod dlss5_policy;
 pub mod external_manager;
 pub mod file_transaction;
-pub mod gimi_hot_runtime;
-pub mod graphics_stack;
-pub mod graphics_tasks;
 pub mod host_extensions;
-pub mod host_graphics;
-mod hot_reshade;
-pub mod hoyoshade;
 pub mod injected_dlls;
 pub mod launch_barrier;
 pub mod launch_coordinator;
@@ -28,10 +19,6 @@ pub mod launch_event_bus;
 pub mod launch_plan;
 pub mod local_packages;
 pub mod logging;
-pub mod managed_cold_files;
-pub mod managed_reshade;
-pub mod managed_reshade_journal;
-pub mod managed_stack;
 pub mod marketplace;
 pub mod official_release;
 pub mod package_installer;
@@ -40,7 +27,6 @@ pub mod process_forwarder;
 pub mod registry;
 pub mod resource_cache;
 pub mod settings;
-mod shade_policy;
 
 pub const MIN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 2;
@@ -144,8 +130,6 @@ pub struct PluginContributions {
     pub data_directories: Vec<PluginDataDirectoryContribution>,
     #[serde(default)]
     pub migrations: Vec<PluginMigrationContribution>,
-    #[serde(default)]
-    pub graphics_profiles: Vec<GraphicsProfileContribution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,37 +298,6 @@ pub struct PluginMigrationContribution {
 #[serde(rename_all = "kebab-case")]
 pub enum PluginMigrationSource {
     GameConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GraphicsProfileContribution {
-    pub id: String,
-    pub strategy: GraphicsProfileStrategy,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default)]
-    pub config: Option<String>,
-    #[serde(default)]
-    pub settings_component: Option<String>,
-    #[serde(default)]
-    pub resources: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum GraphicsProfileStrategy {
-    ReshadeHot,
-    Dlss5Hot,
-}
-
-impl GraphicsProfileStrategy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReshadeHot => "reshade-hot",
-            Self::Dlss5Hot => "dlss5-hot",
-        }
-    }
 }
 
 fn default_true() -> bool {
@@ -577,7 +530,6 @@ impl PluginManifest {
             && self.contributions.launch_hooks.is_empty()
             && self.contributions.data_directories.is_empty()
             && self.contributions.migrations.is_empty()
-            && self.contributions.graphics_profiles.is_empty()
     }
 
     pub fn supports_current_plugin_api(&self) -> bool {
@@ -621,11 +573,6 @@ impl PluginManifest {
         if self.schema_version < 2 && !self.contributions.migrations.is_empty() {
             return Err(PluginManifestError::InvalidContribution(
                 "migrations require schemaVersion 2".to_string(),
-            ));
-        }
-        if self.schema_version < 2 && !self.contributions.graphics_profiles.is_empty() {
-            return Err(PluginManifestError::InvalidContribution(
-                "graphicsProfiles require schemaVersion 2".to_string(),
             ));
         }
         if let Some(requirement) = self.compatibility.plugin_api.as_deref() {
@@ -699,18 +646,6 @@ impl PluginManifest {
         {
             return Err(PluginManifestError::InvalidContribution(
                 "migrations require filesystem.read".to_string(),
-            ));
-        }
-        if !self.contributions.graphics_profiles.is_empty()
-            && (!self.permissions.contains(&PluginPermission::NativeInject)
-                || !self.permissions.contains(&PluginPermission::FilesystemRead)
-                || !self
-                    .permissions
-                    .contains(&PluginPermission::FilesystemWrite))
-        {
-            return Err(PluginManifestError::InvalidContribution(
-                "graphicsProfiles require native.inject, filesystem.read and filesystem.write"
-                    .to_string(),
             ));
         }
         if self
@@ -973,47 +908,6 @@ fn validate_contributions(
                 return Err(PluginManifestError::InvalidContribution(format!(
                     "invalid migration key: {key}"
                 )));
-            }
-        }
-    }
-    let mut graphics_ids = HashSet::new();
-    if contributions.graphics_profiles.len() > 8 {
-        return Err(PluginManifestError::InvalidContribution(
-            "a plugin may declare at most 8 graphics profiles".to_string(),
-        ));
-    }
-    for profile in &contributions.graphics_profiles {
-        validate_plugin_id(&profile.id)?;
-        if !graphics_ids.insert(profile.id.as_str()) {
-            return Err(PluginManifestError::DuplicateValue {
-                field: "graphics profile id",
-                value: profile.id.clone(),
-            });
-        }
-        if !(-10_000..=10_000).contains(&profile.priority) {
-            return Err(PluginManifestError::InvalidContribution(
-                "graphics profile priority must be between -10000 and 10000".to_string(),
-            ));
-        }
-        if let Some(config) = &profile.config {
-            validate_package_path("graphics profile config", config)?;
-        }
-        if let Some(settings) = &profile.settings_component {
-            validate_plugin_id(settings)?;
-        }
-        if profile.resources.is_empty() {
-            return Err(PluginManifestError::InvalidContribution(
-                "graphics profile must declare at least one resource".to_string(),
-            ));
-        }
-        let mut resources = HashSet::new();
-        for resource in &profile.resources {
-            validate_resource_key(resource)?;
-            if !resources.insert(resource) {
-                return Err(PluginManifestError::DuplicateValue {
-                    field: "graphics resource",
-                    value: resource.clone(),
-                });
             }
         }
     }
@@ -1612,8 +1506,8 @@ mod tests {
             r#"
             {
               "schemaVersion": 1,
-              "id": "ssmt.hoyoshade.bridge",
-              "name": "HoYoShade Bridge",
+              "id": "example.overlay",
+              "name": "Example Overlay",
               "version": "0.1.0",
               "author": "SSMT",
               "compatibility": {"ssmt": ">=4.x", "platforms": ["windows-x64"]},
@@ -1621,16 +1515,16 @@ mod tests {
                 "runtimePlugins": [{"path": "native/example.dll"}],
                 "launcherAdapters": [{
                   "type": "process-forwarder",
-                  "executable": "${external.hoyoshade}/inject.exe",
+                  "executable": "${external.overlay}/inject.exe",
                   "arguments": ["${game.processName}"],
-                  "workingDirectory": "${external.hoyoshade}"
+                  "workingDirectory": "${external.overlay}"
                 }],
-                "uiPages": [{"id": "hoyoshade", "route": "/plugins/hoyoshade", "path": "ui/index.html"}]
+                "uiPages": [{"id": "overlay", "route": "/plugins/overlay", "path": "ui/index.html"}]
               },
               "externalDependencies": [{
-                "id": "hoyoshade",
+                "id": "overlay",
                 "type": "directory",
-                "requiredFiles": ["inject.exe", "ReShade64.dll", "ReShade.ini"]
+                "requiredFiles": ["inject.exe", "EffectHost.dll", "EffectHost.ini"]
               }],
               "permissions": ["process.spawn", "process.observe"]
             }
@@ -1661,7 +1555,7 @@ mod tests {
         let manifest = PluginManifest::from_json_str(
             r#"{
               "schemaVersion": 1,
-              "id": "ssmt.secondary-motion",
+              "id": "example.motion",
               "name": "Secondary Motion",
               "version": "3.2.0",
               "author": "SSMT",
@@ -1763,7 +1657,7 @@ mod tests {
         assert_eq!(
             validate_unique_plugin_ids([&first, &second]),
             Err(PluginManifestError::DuplicatePluginId(
-                "ssmt.hoyoshade.bridge".to_string()
+                "example.overlay".to_string()
             ))
         );
     }

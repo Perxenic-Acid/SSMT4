@@ -158,7 +158,7 @@ impl SSMTFileUtils {
     // pub fn copy_boot_files(app: &AppHandle, target_dir: &Path) {
     //     let resource_dir = PathManager::ssmt_resources_folder();
 
-    //     let files = ["d3d11.dll", "d3dcompiler_47.dll", "Run.exe", "SSMT-Player-Tweaks.dll"];
+    //     let files = ["d3d11.dll", "d3dcompiler_47.dll", "Run.exe"];
 
     //     for filename in files {
     //         let dest_path = target_dir.join(filename);

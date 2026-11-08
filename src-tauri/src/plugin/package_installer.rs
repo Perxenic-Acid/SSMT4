@@ -185,11 +185,6 @@ pub fn inspect_ssmtpkg(archive_path: &Path) -> Result<PackageInspection, Package
             )));
         }
     }
-    for profile in &manifest.contributions.graphics_profiles {
-        if let Some(config) = &profile.config {
-            require_package_file(temporary.path(), config)?;
-        }
-    }
     let mut file_count = 0usize;
     let mut unpacked_size = 0u64;
     for entry in walk_package_files(temporary.path())? {
@@ -679,28 +674,35 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "设置 SSMT_SECONDARY_MOTION_PACKAGE 后验证实际 SBM 插件包"]
-    fn installs_real_secondary_motion_package_in_isolated_registry() {
-        let package = std::env::var("SSMT_SECONDARY_MOTION_PACKAGE").unwrap();
-        let inspection = inspect_ssmtpkg(Path::new(&package)).unwrap();
-        assert_eq!(inspection.manifest.id, "ssmt.secondary-motion");
-        assert_eq!(inspection.manifest.version, "3.2.0");
-        assert_eq!(
-            inspection.manifest.contributions.injected_dlls[0].path,
-            "plugin/sbm.dll"
-        );
-        let root = root("real-secondary-motion");
+    #[ignore = "设置 SSMT_PLUGIN_PACKAGE 后验证实际插件包，多个路径使用平台路径分隔符"]
+    fn installs_real_packages_in_isolated_registry() {
+        let packages = std::env::var_os("SSMT_PLUGIN_PACKAGE").unwrap();
+        let root = root("real-packages");
         fs::create_dir_all(&root).unwrap();
         let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
-        let installed =
-            install_verified_ssmtpkg(&mut registry, Path::new(&package), &inspection.sha256)
-                .unwrap();
-        assert!(!installed.enabled);
-        assert!(installed.package_root.join("plugin/sbm.dll").is_file());
-        assert!(installed
-            .package_root
-            .join("SecondaryMotion/runtime/config.json")
-            .is_file());
+        for package in std::env::split_paths(&packages) {
+            let inspection = inspect_ssmtpkg(&package).unwrap();
+            assert!(inspection.file_count > 0);
+            let installed =
+                install_verified_ssmtpkg(&mut registry, &package, &inspection.sha256).unwrap();
+            assert!(!installed.enabled);
+            assert_eq!(installed.manifest.id, inspection.manifest.id);
+            assert_eq!(installed.manifest.version, inspection.manifest.version);
+            for dll in &installed.manifest.contributions.injected_dlls {
+                dll.verify_file(&installed.package_root).unwrap();
+            }
+            for runtime in &installed.manifest.contributions.runtime_plugins {
+                assert!(installed.package_root.join(&runtime.path).is_file());
+            }
+            for page in &installed.manifest.contributions.pages {
+                if let Some(path) = page.path() {
+                    assert!(installed.package_root.join(path).is_file());
+                }
+            }
+            if let Some(backend) = &installed.manifest.contributions.backend {
+                assert!(installed.package_root.join(&backend.executable).is_file());
+            }
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

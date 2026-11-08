@@ -34,7 +34,9 @@ EFMI 会等待实际游戏进程后直接注入；Shell 模式可打开配置的
 `contributions.pages` 提供声明式设置、静态页面或本地服务页面。Schema 1 与
 `pluginApiVersion` 继续兼容读取。
 
-Plugin API 1 已冻结；`1.x` 只增加兼容能力，不删除、重命名或改变已有语义。机器可读契约、
+本轮 PR 将宿主契约整理为 Plugin API 1.1，插件业务通过包内后台执行。原 PR 的
+`graphics.*` 与 `graphicsProfiles` 已移出本体，依赖这些旧入口的包需要升级；迁移边界见
+[插件自有后台](docs/plugin-owned-backends.md)。整理后的机器可读契约、
 官方插件兼容矩阵和升级规则见 [Plugin API 1 冻结契约](docs/plugin-api-v1-contract.md)。
 可使用 `bun run check:plugin-api-contract` 检查全部官方包和页面桥协议。
 
@@ -54,7 +56,7 @@ asset protocol 读取其他插件或任意本地文件。所有页面 Lease 都�
 
 Liquid Gravity Probe 0.2.33 已迁移为 Schema 2 本地服务页面，使用通用 UIHost、
 ServiceLease 和 CapabilityBroker。主应用不再包含该插件的专用 Tauri 命令、独立导航入口
-或业务 Vue 页面；旧 `/plugins/liquid-gravity-probe` 地址只重定向到插件市场。迁移说明见
+或业务 Vue 页面；插件可通过通用 `/plugins/<插件 ID>` 地址定位插件市场。迁移说明见
 [Liquid Gravity Probe 迁移](docs/plugin-migration-liquid-gravity.md)。
 
 Secondary Motion 3.3.4 已迁移为 Schema 2 静态页面。预设与角色参数存放在插件作用域

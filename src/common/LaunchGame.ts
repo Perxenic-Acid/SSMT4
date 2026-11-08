@@ -32,14 +32,6 @@ interface DiscoveredGamePaths {
     launcherExePath: string;
 }
 
-interface PluginLaunchProgram {
-    path: string;
-    args: string;
-    workDir: string;
-    runAsAdministrator: boolean;
-    postLaunchDelayMs: number;
-}
-
 interface PluginInjectedDll {
     pluginId: string;
     pluginName: string;
@@ -51,154 +43,17 @@ interface PluginInjectedDllsResult {
     warnings: string[];
 }
 
-interface HotRuntimePlan {
-    dlls: string[];
+interface BackendRuntimePlan {
+    dlls: Array<{ path: string; sha256: string }>;
     environment: Record<string, string | null>;
-    runtimeDirectory: string;
     requiredLaunchArgs?: string[];
     excludedLaunchArgs?: string[];
     logSources?: Array<{ name: string; path: string }>;
 }
 
-type GraphicsLaunchDecision =
-    | "continue_this_launch"
-    | "prepare_managed_stack"
-    | "suppress_hoyoshade_this_launch";
-
-type GraphicsCompatibilityLevel =
-    | "compatible"
-    | "warning"
-    | "requires_managed_stack"
-    | "conflict";
-
-interface GraphicsLaunchInspection {
-    hoyoshadeRequested: boolean;
-    dlss5Requested: boolean;
-    hostRequested: boolean;
-    resolution: {
-        level: GraphicsCompatibilityLevel;
-        issues: Array<{ code: string; message: string }>;
-    };
-}
-
-interface ManagedStackStatus {
-    route: string;
-    availableRoutes: string[];
-    swapperOwner: string;
-}
-
 type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
 
 export class LaunchGame {
-    private static async preflightGraphicsLaunch(
-        gameName: string,
-        targetExe: string,
-    ): Promise<GraphicsLaunchDecision | null> {
-        const inspection = await invoke<GraphicsLaunchInspection>(
-            "inspect_graphics_launch",
-            { gameName, gameExecutable: targetExe },
-        );
-        const { level, issues } = inspection.resolution;
-        if (!inspection.hostRequested || level === "compatible") {
-            return "continue_this_launch";
-        }
-
-        const message = issues[0]?.message || t("launchGame.messages.graphicsConflict");
-        if (level === "requires_managed_stack") {
-            let status: ManagedStackStatus;
-            try {
-                status = await invoke<ManagedStackStatus>("inspect_managed_graphics_stack", {
-                    gameName,
-                    gameExecutable: targetExe,
-                });
-            } catch (error) {
-                if (inspection.dlss5Requested) {
-                    ElMessage.error(`${message}\n${String(error)}`);
-                    return null;
-                }
-                try {
-                    await ElMessageBox.confirm(
-                        `${message}\n\n${String(error)}`,
-                        t("launchGame.messages.graphicsStackTitle"),
-                        {
-                            confirmButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
-                            cancelButtonText: t("launchGame.common.cancel"),
-                            type: "warning",
-                        },
-                    );
-                    return "suppress_hoyoshade_this_launch";
-                } catch {
-                    return null;
-                }
-            }
-            if (inspection.dlss5Requested) {
-                try {
-                    await ElMessageBox.confirm(
-                        t("launchGame.messages.graphicsManagedReady", {
-                            route: status.route,
-                            routes: status.availableRoutes.join(", "),
-                            owner: status.swapperOwner,
-                        }),
-                        t("launchGame.messages.graphicsStackTitle"),
-                        {
-                            confirmButtonText: t("launchGame.messages.graphicsPrepareManaged"),
-                            cancelButtonText: t("launchGame.common.cancel"),
-                            type: "warning",
-                        },
-                    );
-                    return "prepare_managed_stack";
-                } catch {
-                    return null;
-                }
-            }
-            try {
-                await ElMessageBox.confirm(
-                    t("launchGame.messages.graphicsManagedReady", {
-                        route: status.route,
-                        routes: status.availableRoutes.join(", "),
-                        owner: status.swapperOwner,
-                    }),
-                    t("launchGame.messages.graphicsStackTitle"),
-                    {
-                        confirmButtonText: t("launchGame.messages.graphicsPrepareManaged"),
-                        cancelButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
-                        distinguishCancelAndClose: true,
-                        showClose: true,
-                        type: "warning",
-                    },
-                );
-                return "prepare_managed_stack";
-            } catch (action) {
-                return action === "cancel" ? "suppress_hoyoshade_this_launch" : null;
-            }
-        }
-        if (level === "warning") {
-            try {
-                await ElMessageBox.confirm(message, t("launchGame.messages.graphicsStackTitle"), {
-                    confirmButtonText: t("launchGame.messages.graphicsContinue"),
-                    cancelButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
-                    distinguishCancelAndClose: true,
-                    showClose: true,
-                    type: "warning",
-                });
-                return "continue_this_launch";
-            } catch (action) {
-                return action === "cancel" ? "suppress_hoyoshade_this_launch" : null;
-            }
-        }
-
-        try {
-            await ElMessageBox.confirm(message, t("launchGame.messages.graphicsStackTitle"), {
-                confirmButtonText: t("launchGame.messages.graphicsSuppressHoYoShade"),
-                cancelButtonText: t("launchGame.common.cancel"),
-                type: "warning",
-            });
-            return "suppress_hoyoshade_this_launch";
-        } catch {
-            return null;
-        }
-    }
-
     private static formatProgramSummary(program: ProgramToLaunch): string {
         return [
             `path=${program.path || "<wait-only>"}`,
@@ -246,7 +101,7 @@ export class LaunchGame {
             });
     }
 
-    private static applyRequiredLaunchArgs(raw: string, plan: HotRuntimePlan): string {
+    private static applyRequiredLaunchArgs(raw: string, plan: BackendRuntimePlan): string {
         const required = plan.requiredLaunchArgs || [];
         const excluded = plan.excludedLaunchArgs || [];
         if (!required.length && !excluded.length) return raw;
@@ -380,12 +235,10 @@ export class LaunchGame {
         pureMode: boolean,
         onNeedsConfigureProcessPath?: () => void,
         onNeedsPackageUpdate?: () => Promise<boolean | void> | boolean | void,
-        onGraphicsPreflight?: (targetExe: string) => Promise<GraphicsLaunchDecision | null>,
     ): Promise<{
         migotoDir: string;
         config: GameConfig;
         targetExe: string;
-        graphicsDecision: GraphicsLaunchDecision;
     } | null> {
         const config = await ResourceManager.loadGameConfig(gameName);
         const migotoCfg = config ?? ({} as GameConfig);
@@ -468,11 +321,6 @@ export class LaunchGame {
         }
 
         const pureDirectLaunch = pureMode && launchTargetProgram;
-        const graphicsDecision = !pureDirectLaunch && launchTargetProgram && onGraphicsPreflight
-            ? await onGraphicsPreflight(targetExe)
-            : "continue_this_launch";
-        if (!graphicsDecision) return null;
-
         if (configChanged) {
             await ResourceManager.saveGameConfig(gameName, migotoCfg);
         }
@@ -480,7 +328,7 @@ export class LaunchGame {
         // A pure launch must not depend on, prepare, or mutate the 3DMigoto
         // runtime. It is intentionally just the configured game executable.
         if (pureDirectLaunch) {
-            return { migotoDir: "", config: migotoCfg, targetExe, graphicsDecision };
+            return { migotoDir: "", config: migotoCfg, targetExe };
         }
 
         let configuredMigotoDir = (migotoCfg.installDir || "").trim();
@@ -563,7 +411,7 @@ export class LaunchGame {
             }
         }
 
-        return { migotoDir, config: migotoCfg, targetExe, graphicsDecision };
+        return { migotoDir, config: migotoCfg, targetExe };
     }
 
     static async launch(
@@ -573,10 +421,10 @@ export class LaunchGame {
         onNeedsConfigureProcessPath?: () => void,
         ctrlPressed = false,
     ): Promise<'native' | 'direct' | false> {
-        let managedStagedTarget: string | null = null;
         let launchSubmitted = false;
         let pluginBackendsStarted = false;
         let runtimeDirectory: string | undefined;
+        let launchExecutable: string | undefined;
         try {
             const pureMode =
                 appSettings.gameLaunchMode === "always-pure" ||
@@ -587,12 +435,12 @@ export class LaunchGame {
                 pureMode,
                 onNeedsConfigureProcessPath,
                 onNeedsUpdate,
-                (targetExe) => this.preflightGraphicsLaunch(gameName, targetExe),
             );
             if (!preflight) return false;
 
-            const { migotoDir, config, targetExe, graphicsDecision } = preflight;
+            const { migotoDir, config, targetExe } = preflight;
             runtimeDirectory = migotoDir;
+            launchExecutable = targetExe;
             const launchTargetProgram = config.launchTargetProgram !== false;
             const pureDirectTarget = pureMode && launchTargetProgram;
             if (!pureDirectTarget) {
@@ -731,92 +579,46 @@ export class LaunchGame {
             // Construct programs list
             const programs: ProgramToLaunch[] = [...preLaunchPrograms];
 
-            let hotRuntime: HotRuntimePlan | null = null;
-            let graphicsHotHandled = false;
-            let skipDlss5 = false;
-            let hotRuntimeDlls: string[] = [];
-            let hotLaunchArgs = config.launchArgs || "";
-            const contributionWarnings = new Map<string, Set<string>>();
-            const warnContribution = (plugin: string, error: unknown) => {
-                const reason = String(error).trim();
-                const plugins = contributionWarnings.get(reason) ?? new Set<string>();
-                plugins.add(plugin);
-                contributionWarnings.set(reason, plugins);
-            };
-            const collectHotRuntimeDlls = (plan: HotRuntimePlan): string[] => {
-                const owned = plan.dlls.map(path => this.getProcessNameFromPath(path).toLowerCase());
-                for (const dll of launchExtraDlls) {
-                    if ([...owned, "d3d11.dll", "dxgi.dll"].includes(this.getProcessNameFromPath(dll).toLowerCase())) {
-                        throw new Error(`热注入组件与额外 DLL 重复或所有权冲突：${dll}`);
-                    }
-                }
-                return this.dedupeDllPaths([...plan.dlls, ...launchExtraDlls]);
-            };
+            let backendPlan: BackendRuntimePlan | null = null;
+            let backendDlls: string[] = [];
+            let backendLaunchArgs = config.launchArgs || "";
             if (!pureDirectTarget && useRunInjector && targetExe) {
                 const comparablePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").toLowerCase();
-                const canCreateTarget = launchTargetProgram && !useEfmiDirectWait &&
+                const allowPreload = launchTargetProgram && !useEfmiDirectWait &&
                     (!useShell || comparablePath(await join(launcherExePath)) === comparablePath(await join(targetExe)));
-                const excludedProviders: string[] = [];
                 try {
-                    while (true) {
-                        const prepared = await invoke<{
-                            candidateId: string | null; plugin: string | null; plan: HotRuntimePlan | null;
-                            handled: boolean; diagnostics: Array<{ candidateId: string; plugin: string; error: string }>;
-                        }>("prepare_plugin_graphics_plan", { gameName, gameExecutable: targetExe, allowHotRuntime: canCreateTarget, excludedProviders, graphicsDecision });
-                        graphicsHotHandled ||= prepared.handled;
-                        for (const diagnostic of prepared.diagnostics) {
-                            skipDlss5 = true;
-                            warnContribution(diagnostic.plugin, diagnostic.error);
-                            if (diagnostic.candidateId && !excludedProviders.includes(diagnostic.candidateId)) {
-                                excludedProviders.push(diagnostic.candidateId);
-                            }
+                    const prepared = await invoke<{
+                        plans: Array<{ pluginId: string; pluginName: string; plan: BackendRuntimePlan }>;
+                        diagnostics: Array<{ pluginId: string; pluginName: string; error: string }>;
+                    }>("prepare_plugin_backend_launch", { gameName, gameExecutable: targetExe, allowPreload, existingDlls: launchExtraDlls });
+                    for (const diagnostic of prepared.diagnostics) {
+                        ElMessage.warning({ message: t("launchGame.messages.pluginBackendPrepareFailed", {
+                            error: `${diagnostic.pluginName}: ${diagnostic.error}`,
+                        }), grouping: true, showClose: true, duration: 12000 });
+                    }
+                    if (prepared.plans.length) {
+                        const plan: BackendRuntimePlan = { dlls: [], environment: {}, requiredLaunchArgs: [], excludedLaunchArgs: [], logSources: [] };
+                        for (const entry of prepared.plans) {
+                            plan.dlls.push(...entry.plan.dlls);
+                            Object.assign(plan.environment, entry.plan.environment);
+                            plan.requiredLaunchArgs!.push(...entry.plan.requiredLaunchArgs || []);
+                            plan.excludedLaunchArgs!.push(...entry.plan.excludedLaunchArgs || []);
+                            plan.logSources!.push(...entry.plan.logSources || []);
                         }
-                        if (!prepared.plan) break;
-                        const candidateId = prepared.candidateId;
-                        if (!candidateId || excludedProviders.includes(candidateId)) throw new Error("插件返回了重复或无效的启动候选");
-                        try {
-                            const dlls = collectHotRuntimeDlls(prepared.plan);
-                            const args = this.applyRequiredLaunchArgs(config.launchArgs || "", prepared.plan);
-                            await invoke("configure_plugin_launch_contract", { gameName, gameExecutable: targetExe, candidateId });
-                            hotRuntime = prepared.plan;
-                            hotRuntimeDlls = dlls;
-                            hotLaunchArgs = args;
-                            useShell = false;
-                            break;
-                        } catch (error) {
-                            excludedProviders.push(candidateId);
-                            skipDlss5 = true;
-                            warnContribution(prepared.plugin || "Plugin", error);
+                        const owned = new Set(plan.dlls.map(dll => this.getProcessNameFromPath(dll.path).toLowerCase()));
+                        for (const dll of launchExtraDlls) {
+                            if (owned.has(this.getProcessNameFromPath(dll).toLowerCase())) throw new Error(`插件启动计划与额外 DLL 冲突：${dll}`);
                         }
+                        backendDlls = this.dedupeDllPaths([...plan.dlls.map(dll => dll.path), ...launchExtraDlls]);
+                        backendLaunchArgs = this.applyRequiredLaunchArgs(config.launchArgs || "", plan);
+                        backendPlan = plan;
+                        useShell = false;
                     }
                 } catch (error) {
-                    graphicsHotHandled = true;
-                    skipDlss5 = true;
-                    warnContribution("Plugin", error);
+                    // 已提交的后台可能修改了自己的状态，撤回后继续普通启动。
+                    await invoke("plugin_backend_lifecycle", { gameName, event: "launch.cancel", launchContext: { gameExecutable: targetExe } });
+                    ElMessage.warning({ message: t("launchGame.messages.pluginBackendPrepareFailed", { error: String(error) }), showClose: true, duration: 12000 });
                 }
-            }
-            let hoyoshade: PluginLaunchProgram | null = null;
-            if (!hotRuntime && !graphicsHotHandled && !pureDirectTarget && launchTargetProgram && targetExe) {
-                try {
-                    hoyoshade = await invoke<PluginLaunchProgram | null>("prepare_hoyoshade_launch", {
-                      gameName,
-                      gameExecutable: targetExe,
-                      graphicsDecision,
-                      skipDlss5,
-                    });
-                } catch (error) {
-                    if (!skipDlss5) throw error;
-                    console.warn("Shade Bridge 准备失败，继续普通启动：", error);
-                    warnContribution("Shade Bridge", error);
-                }
-            }
-            for (const [error, plugins] of contributionWarnings) {
-                ElMessage.warning({
-                    message: t("launchGame.messages.graphicsPluginUnavailableContinue", { plugin: [...plugins].join("、"), error }),
-                    grouping: true,
-                    showClose: true,
-                    duration: 12000,
-                });
             }
             // Runtime plugins are injected by Run.exe, including configured-target mode.
             const effectivePluginHostConfig = useRunInjector
@@ -828,26 +630,10 @@ export class LaunchGame {
             if (effectivePluginHostConfig) {
                 await this.ensureSSMTPluginHostFile(migotoDir);
             }
-            if (hoyoshade && graphicsDecision === "prepare_managed_stack") {
-                managedStagedTarget = targetExe;
-            }
-
-            if (hoyoshade) {
-                // HoYoShade's injector waits for the target process itself, so it
-                // must be started before Run.exe/the game launcher.
-                programs.push({
-                    path: hoyoshade.path,
-                    args: hoyoshade.args,
-                    workDir: hoyoshade.workDir,
-                    runAsAdministrator: hoyoshade.runAsAdministrator,
-                    postLaunchDelayMs: hoyoshade.postLaunchDelayMs,
-                });
-            }
-
-            if (hotRuntime) {
+            if (backendPlan) {
                 await MigotoManager.patchD3dxForLaunch(gameName, {
-                    extraDlls: hotRuntimeDlls,
-                    launchArgs: hotLaunchArgs,
+                    extraDlls: backendDlls,
+                    launchArgs: backendLaunchArgs,
                     useShell: false,
                     overlayLanguage: appSettings.runtimeOverlayLanguage ?? 'auto',
                 });
@@ -855,9 +641,9 @@ export class LaunchGame {
 
             if (useRunInjector) {
                 const injectorArgs: string[] = ['--machine-readable'];
-                if (hotRuntime) {
+                if (backendPlan) {
                     injectorArgs.push("--preload-runtime");
-                    for (const [name, value] of Object.entries(hotRuntime.environment)) {
+                    for (const [name, value] of Object.entries(backendPlan.environment)) {
                         injectorArgs.push(value === null ? `--unset-env ${name}` : `--set-env "${name}=${value}"`);
                     }
                 }
@@ -874,12 +660,12 @@ export class LaunchGame {
                 // 1. Default flow launches Run.exe first.
                 programs.push({
                     path: await join(migotoDir, "Run.exe"),
-                    logSources: hotRuntime?.logSources,
+                    logSources: backendPlan?.logSources,
                     workDir: migotoDir,
                     args: injectorArgs.join(" ") || undefined,
                     // Run.exe 带有 requireAdministrator manifest。SSMT 未提权时，
                     // Start-Process 必须显式使用 RunAs，否则 Windows 会返回
-                    // ERROR_ELEVATION_REQUIRED，HoYoShade 也会一直等待不存在的进程。
+                    // ERROR_ELEVATION_REQUIRED。
                     runAsAdministrator: true,
                     waitForProcessName: useShell ? "Run.exe" : undefined,
                     waitTimeoutSecs: useShell ? 30 : undefined,
@@ -953,22 +739,14 @@ export class LaunchGame {
             throw e;
         } finally {
             if (!launchSubmitted && pluginBackendsStarted) {
-                await invoke<string[]>("plugin_backend_lifecycle", { gameName, event: "cancel" }).catch(error =>
+                await invoke<string[]>("plugin_backend_lifecycle", { gameName, event: "cancel", launchContext: { gameExecutable: launchExecutable } }).catch(error =>
                     console.warn("插件后台取消失败：", error));
             }
             if (!launchSubmitted && runtimeDirectory) {
                 await invoke('cancel_runtime_deployment', { directory: runtimeDirectory }).catch(error =>
                     console.warn('撤回未提交的 Runtime 部署失败：', error));
             }
-            if (managedStagedTarget && !launchSubmitted) {
-                try {
-                    await invoke("restore_managed_graphics_stack", {
-                        gameExecutable: managedStagedTarget,
-                    });
-                } catch (error) {
-                    ElMessage.error(t("launchGame.messages.graphicsRestoreFailed", { error: String(error) }));
-                }
-            }
+
         }
     }
 

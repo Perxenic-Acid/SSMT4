@@ -38,9 +38,6 @@ import {
   versionRequirementState,
 } from './pluginMarketplaceModel'
 
-const Dlss5GraphicsSettings = defineAsyncComponent(
-  () => import('../../plugin/components/Dlss5GraphicsSettings.vue'),
-)
 const PluginPageHost = defineAsyncComponent(
   () => import('../../plugin/components/PluginPageHost.vue'),
 )
@@ -212,7 +209,6 @@ const installedById = computed(() => {
   return byId
 })
 const selectedPlugin = computed(() => selectedEntry.value ? installedById.value.get(selectedEntry.value.id) : undefined)
-const selectedSettings = computed(() => selectedPlugin.value?.manifest.contributions?.hostExtensions?.map(extension => extension.settingsComponent) ?? [])
 const selectedPages = computed(() => selectedPlugin.value?.manifest.contributions?.pages ?? [])
 const selectedLaunchHooks = computed(() => selectedPlugin.value?.manifest.contributions?.launchHooks ?? [])
 const selectedInjectedDlls = computed(() => selectedPlugin.value?.manifest.contributions?.injectedDlls ?? [])
@@ -255,9 +251,7 @@ const openDependencyDownload = async (dependencyId: string) => {
   try { await openUrl(url.href) }
   catch (error) { ElMessage.error(t('pluginMarketplace.dependencyAcquisition.openFailed', { error: String(error) })) }
 }
-const openDependencySettings = () => {
-  if (dependencyActionsEnabled.value) openPluginSettings()
-}
+
 const openDependencyDirectory = async (dependencyId: string) => {
   if (!dependencyActionsEnabled.value) return
   const dependency = selectedPlugin.value?.externalDependencies[dependencyId]
@@ -265,10 +259,7 @@ const openDependencyDirectory = async (dependencyId: string) => {
   try { await openPath(dependency.path) }
   catch (error) { ElMessage.error(t('pluginMarketplace.dependencyAcquisition.openFolderFailed', { error: String(error) })) }
 }
-const graphicsTargetExe = ref('')
-const graphicsConfigLoading = ref(false)
-const graphicsConfigError = ref('')
-let graphicsConfigRequestId = 0
+
 const availableCatalog = computed(() => {
   const byId = new Map<string, CatalogEntry>()
   for (const entry of [...catalog.value, ...localCatalog.value]) {
@@ -524,7 +515,7 @@ const selectedCompatibilityItems = computed<PluginCompatibilityItem[]>(() => {
     {
       id: 'settings',
       label: t('pluginMarketplace.compatibility.rows.settings'),
-      value: selectedSettings.value.some(Boolean) || selectedPages.value.length > 0
+      value: selectedPages.value.length > 0
         ? t('pluginMarketplace.compatibility.values.settingsAvailable')
         : t('pluginMarketplace.compatibility.values.settingsUnavailable'),
       state: 'supported',
@@ -929,8 +920,7 @@ const clearSelectedPluginLog = async () => {
 }
 
 const openPluginSettings = async () => {
-  if (selectedSettings.value.includes('ssmt.dlss5.settings')
-    || selectedPages.value.length > 0) {
+  if (selectedPages.value.length > 0) {
     detailTab.value = 'features'
     settingsAttention.value = false
     await nextTick()
@@ -941,39 +931,12 @@ const openPluginSettings = async () => {
     }, 1200)
     return
   }
-  if (selectedSettings.value.includes('ssmt.reshade.settings')) {
-    detailTab.value = 'dependencies'
-  }
 }
 
 const dependencyStatusLabel = (status: DependencyStatus) => t(`pluginMarketplace.dependencyStatus.${status}`)
 const dependencyStatusClass = (status: DependencyStatus) => `is-${status}`
 
 let initialized = false
-// 目录和快照会替换对象；按实际身份与状态监听，避免相同内容触发设置组件卸载和重扫。
-watch([
-  selectedGameName, installedGameName,
-  () => selectedPlugin.value?.manifest.id,
-  () => selectedPlugin.value?.manifest.version,
-  () => selectedPlugin.value?.enabled,
-  () => selectedSettings.value.includes('ssmt.dlss5.settings'),
-], async () => {
-  const requestId = ++graphicsConfigRequestId
-  const gameName = selectedGameName.value
-  graphicsTargetExe.value = ''
-  graphicsConfigError.value = ''
-  graphicsConfigLoading.value = false
-  if (!gameName || installedGameName.value !== gameName || !selectedSettings.value.includes('ssmt.dlss5.settings') || !selectedPlugin.value?.enabled) return
-  graphicsConfigLoading.value = true
-  try {
-    const config = await ResourceManager.loadGameConfig(gameName)
-    if (requestId === graphicsConfigRequestId) graphicsTargetExe.value = config.targetExePath?.trim() || ''
-  } catch (error) {
-    if (requestId === graphicsConfigRequestId) graphicsConfigError.value = String(error)
-  } finally {
-    if (requestId === graphicsConfigRequestId) graphicsConfigLoading.value = false
-  }
-}, { immediate: true })
 watch(selectedGameName, async () => {
   if (!initialized) return
   if (await refreshInstalled()) markCompatibilityChecked()
@@ -1154,7 +1117,7 @@ onMounted(async () => {
                 ? t('pluginMarketplace.actions.disable')
                 : selectedCanEnable ? t('pluginMarketplace.actions.enable') : t('pluginMarketplace.actions.cannotEnable') }}
             </el-button>
-            <el-button v-if="selectedSettings.some(Boolean)" size="small" :icon="Setting"
+            <el-button v-if="selectedPages.length > 0" size="small" :icon="Setting"
               @click="openPluginSettings">{{ t('pluginMarketplace.actions.openSettings') }}</el-button>
             <el-button size="small" :icon="Document" :loading="logLoading" @click="openPluginLog">
               {{ t('pluginMarketplace.actions.viewLog') }}
@@ -1234,16 +1197,6 @@ onMounted(async () => {
                 :game-name="selectedGameName"
                 :enabled="selectedPlugin.enabled && selectedPlugin.lifecycleStatus !== 'incompatible'"
               />
-              <template v-else-if="selectedSettings.includes('ssmt.dlss5.settings') && selectedPlugin">
-                <p class="section-hint">{{ t('pluginMarketplace.dlss5SettingsHint') }}</p>
-                <div v-if="!selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5SelectGame') }}</div>
-                <div v-else-if="graphicsConfigLoading || installedGameName !== selectedGameName" class="muted-copy">{{ t('pluginMarketplace.dlss5LoadingGame') }}</div>
-                <div v-else-if="!selectedPlugin.enabled" class="muted-copy">{{ t('pluginMarketplace.dlss5EnableFirst') }}</div>
-                <div v-else-if="graphicsConfigError" class="muted-copy">{{ graphicsConfigError }}</div>
-                <Dlss5GraphicsSettings v-else-if="graphicsTargetExe"
-                  :game-name="selectedGameName" :target-exe-path="graphicsTargetExe" />
-                <div v-else class="muted-copy">{{ t('pluginMarketplace.dlss5ConfigureTarget') }}</div>
-              </template>
               <template v-else>
                 <div class="muted-copy">{{ t('pluginMarketplace.noFeatures') }}</div>
               </template>
@@ -1251,17 +1204,10 @@ onMounted(async () => {
             <section v-else-if="detailTab === 'dependencies'" class="detail-section">
               <h3>{{ t('pluginMarketplace.sections.externalDependencies') }}</h3>
               <p class="section-hint">{{ t('pluginMarketplace.dependencyHint') }}</p>
-              <div v-if="selectedSettings.includes('ssmt.dlss5.settings')" class="dependency-row dependency-managed">
-                <strong>{{ t('pluginMarketplace.dependencyAcquisition.hotComponents') }}</strong>
-                <p class="section-hint">{{ t('pluginMarketplace.dependencyAcquisition.hotHint') }}</p>
-                <el-button type="primary" size="small" :disabled="!dependencyActionsEnabled" @click="openDependencySettings">
-                  {{ t('pluginMarketplace.dependencyAcquisition.configureDownload') }}
-                </el-button>
-              </div>
-              <p v-if="!dependencyActionsEnabled && (selectedDependencies.length || selectedSettings.includes('ssmt.dlss5.settings'))" class="section-hint">
+              <p v-if="!dependencyActionsEnabled && selectedDependencies.length" class="section-hint">
                 {{ t('pluginMarketplace.dependencyAcquisition.enableFirst') }}
               </p>
-              <div v-if="selectedDependencies.length === 0 && !selectedSettings.includes('ssmt.dlss5.settings')" class="muted-copy">
+              <div v-if="selectedDependencies.length === 0" class="muted-copy">
                 {{ t('pluginMarketplace.none') }}
               </div>
               <div v-for="dependency in selectedDependencies" :key="dependency.id" class="dependency-row">

@@ -379,6 +379,7 @@ pub async fn prepare_plugin_backend_launch(
     game_name: String,
     game_executable: String,
     allow_preload: bool,
+    existing_dlls: Option<Vec<PathBuf>>,
 ) -> Result<BackendLaunchPreparation, String> {
     let Some(registry) = super::commands::installed_plugin_registry()? else {
         return Ok(BackendLaunchPreparation::default());
@@ -388,6 +389,7 @@ pub async fn prepare_plugin_backend_launch(
         &game_name,
         &game_executable,
         allow_preload,
+        existing_dlls.as_deref().unwrap_or_default(),
     )
     .await
 }
@@ -397,6 +399,7 @@ async fn prepare_for_registry(
     game: &str,
     executable: &str,
     allow_preload: bool,
+    existing_dlls: &[PathBuf],
 ) -> Result<BackendLaunchPreparation, String> {
     let plugins: Vec<_> = registry
         .selected_plugins()
@@ -407,6 +410,7 @@ async fn prepare_for_registry(
         game,
         executable,
         allow_preload,
+        existing_dlls,
         |plugin, game, method, payload| {
             Box::pin(backend::request(plugin, game, method, payload, true))
         },
@@ -422,14 +426,29 @@ async fn prepare_plugins<F>(
     game: &str,
     executable: &str,
     allow_preload: bool,
+    existing_dlls: &[PathBuf],
     request: F,
 ) -> Result<BackendLaunchPreparation, String>
 where
     F: for<'a> Fn(&'a InstalledPlugin, &'a str, &'a str, Value) -> BackendFuture<'a>,
 {
     let mut result = BackendLaunchPreparation::default();
+    let baseline = OwnedLaunchPlan {
+        plugin_id: "host.launch-configuration".into(),
+        plugin_name: "Launch configuration".into(),
+        plan: RuntimeLaunchPlan {
+            dlls: existing_dlls
+                .iter()
+                .map(|path| LaunchDll {
+                    path: path.clone(),
+                    sha256: String::new(),
+                })
+                .collect(),
+            ..Default::default()
+        },
+    };
     let mut descriptions = BTreeMap::new();
-    let context = json!({"gameExecutable":executable, "allowPreload":allow_preload});
+    let context = json!({"gameExecutable":executable, "allowPreload":allow_preload,"existingDlls":existing_dlls});
     let diagnostic = |plugin: &InstalledPlugin, error: String| LaunchDiagnostic {
         plugin_id: plugin.id().into(),
         plugin_name: plugin.manifest.name.clone(),
@@ -517,6 +536,7 @@ where
                 let plan: RuntimeLaunchPlan =
                     serde_json::from_value(value).map_err(|error| error.to_string())?;
                 validate_plan(plugin, &plan)?;
+                check_plan_conflicts(std::slice::from_ref(&baseline), &plan)?;
                 check_plan_conflicts(&result.plans, &plan)?;
                 if declares(plugin, "launch.commit") {
                     request(plugin, game, "launch.commit", payload).await?;
@@ -535,20 +555,41 @@ where
                 }
                 Err(error) => {
                     excluded.insert(id);
+                    let mut rollback_failed = false;
                     result.diagnostics.push(diagnostic(plugin, error));
-                    if let Err(error) = request(plugin, game, "launch.cancel", Value::Null).await {
+                    if let Err(error) = request(
+                        plugin,
+                        game,
+                        "launch.cancel",
+                        json!({"launchContext":context}),
+                    )
+                    .await
+                    {
+                        rollback_failed = true;
                         result.diagnostics.push(diagnostic(plugin, error));
                     }
                     // 已准备的其他插件可能消费过失败插件的共享数据，全部回滚后重新准备。
                     for prepared in result.plans.drain(..) {
                         let owner = descriptions[&prepared.plugin_id].0;
-                        if let Err(error) = request(owner, game, "launch.cancel", Value::Null).await
+                        if let Err(error) = request(
+                            owner,
+                            game,
+                            "launch.cancel",
+                            json!({"launchContext":context}),
+                        )
+                        .await
                         {
+                            rollback_failed = true;
                             excluded.insert(prepared.plugin_id);
                             result.diagnostics.push(diagnostic(owner, error));
                         }
                     }
                     completed.clear();
+                    if rollback_failed {
+                        return Err(
+                            "plugin launch rollback failed; no fallback plan was applied".into(),
+                        );
+                    }
                     retry = true;
                     break;
                 }
@@ -636,7 +677,7 @@ mod tests {
         ];
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = calls.clone();
-        let result = prepare_plugins(&plugins.iter().collect::<Vec<_>>(), "game", "game.exe", true,
+        let result = prepare_plugins(&plugins.iter().collect::<Vec<_>>(), "game", "game.exe", true, &[],
             move |plugin, _, method, payload| {
                 let peers: Vec<_> = payload["peers"].as_array().into_iter().flatten().map(|peer|peer["pluginId"].as_str().unwrap().to_owned()).collect();
                 recorded.lock().unwrap().push((plugin.id().to_owned(),method.to_owned(),peers));
@@ -733,6 +774,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_failure_does_not_apply_a_fallback_to_unreleased_resources() {
+        let plugin = |id: &str| {
+            InstalledPlugin {
+            manifest: super::super::PluginManifest::from_json_str(&json!({
+                "schemaVersion":2,"id":id,"name":id,"version":"1.0.0","author":"Example",
+                "compatibility":{"ssmt":">=4.2.2","pluginApi":">=1.1.0 <2.0.0","platforms":["windows-x64"]},
+                "contributions":{"backend":{"executable":"backend.exe","sha256":"a".repeat(64),
+                    "events":["launch.describe","launch.prepare","launch.cancel"]}},
+                "permissions":["process.spawn","game.launch"]
+            }).to_string()).unwrap(),
+            package_root:"fixture".into(),enabled:true,external_dependencies:BTreeMap::new(),official:false,
+        }
+        };
+        let plugins = [plugin("example.primary"), plugin("example.fallback")];
+        let result=prepare_plugins(&plugins.iter().collect::<Vec<_>>(),"game","game.exe",true,&[],|plugin,_,method,_| {
+            let response=match method {
+                "launch.describe"=>Ok(json!({"exports":{},"launch":{"priority":if plugin.id()=="example.primary" {100}else{10},"resources":["example.shared"]}})),
+                "launch.prepare"=> {assert_eq!(plugin.id(),"example.primary");Err("prepare failed".into())},
+                "launch.cancel"=>Err("rollback failed".into()),
+                _=>unreachable!(),
+            };
+            Box::pin(std::future::ready(response))
+        }).await;
+        assert!(result.unwrap_err().contains("rollback failed"));
+    }
+
+    #[tokio::test]
     async fn empty_registry_needs_no_game_files_or_backend_data() {
         let root = std::env::temp_dir().join(format!(
             "ssmt-empty-launch-{}",
@@ -742,7 +810,7 @@ mod tests {
                 .as_nanos()
         ));
         let registry = PluginRegistry::new(&root).unwrap();
-        let result = prepare_for_registry(&registry, "missing-game", "missing.exe", true)
+        let result = prepare_for_registry(&registry, "missing-game", "missing.exe", true, &[])
             .await
             .unwrap();
         assert!(result.plans.is_empty() && result.diagnostics.is_empty());

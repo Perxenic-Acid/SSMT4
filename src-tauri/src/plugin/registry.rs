@@ -1198,7 +1198,7 @@ mod tests {
     #[test]
     fn game_restricted_plugin_rejects_enablement_and_ignores_legacy_choices() {
         let root = temp_root("restricted-game");
-        let id = "dev.ssmt.poser.genshin-probe";
+        let id = "dev.example.probe";
         let source = fixture_package(&root, id, "1.0.0");
         let manifest_path = source.join(MANIFEST_FILE_NAME);
         let mut manifest: serde_json::Value =
@@ -1265,10 +1265,10 @@ mod tests {
             .unwrap();
         // 旧版遗留的启用标记不能让未安装插件重新获得执行资格。
         registry
-            .write_game_enabled("gimi", "ssmt.player-tweaks", true)
+            .write_game_enabled("gimi", "example.optional", true)
             .unwrap();
         assert!(registry
-            .set_game_enabled("GIMI", "ssmt.player-tweaks", true)
+            .set_game_enabled("GIMI", "example.optional", true)
             .is_err());
         for mask in 0..(1 << ids.len()) {
             for (index, id) in ids.iter().enumerate() {
@@ -1311,8 +1311,8 @@ mod tests {
             config_for("SRMI"),
             vec!["ssmt.beta/1.0.0/native/example.dll"]
         );
-        assert!(!registry.game_enabled("GIMI", "ssmt.player-tweaks"));
-        assert!(!registry.game_enabled("SRMI", "ssmt.player-tweaks"));
+        assert!(!registry.game_enabled("GIMI", "example.optional"));
+        assert!(!registry.game_enabled("SRMI", "example.optional"));
         assert!(config_for("WWMI").is_empty());
         assert!(config_for("").is_empty());
         fs::remove_dir_all(root).unwrap();
@@ -1321,7 +1321,7 @@ mod tests {
     #[test]
     fn first_real_install_ignores_orphan_enablement_but_upgrade_preserves_installed_selection() {
         let root = temp_root("orphan-selection");
-        let id = "ssmt.player-tweaks";
+        let id = "example.optional";
         let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
         let other = fixture_package(&root.join("other"), "thirdparty.other", "1.0.0");
         registry.install_directory_package(&other).unwrap();
@@ -1360,25 +1360,25 @@ mod tests {
         let executable = root.join("game/GenshinImpact.exe");
         let mut registry = PluginRegistry::new(&plugins_root).unwrap();
         registry
-            .set_managed_game_executable("GIMI", "ssmt.dlss5.integration", Some(&executable))
+            .set_managed_game_executable("GIMI", "example.integration", Some(&executable))
             .unwrap();
         drop(registry);
 
         let mut restarted = PluginRegistry::new(&plugins_root).unwrap();
         assert_eq!(
-            restarted.managed_game_executable("GIMI", "ssmt.dlss5.integration"),
+            restarted.managed_game_executable("GIMI", "example.integration"),
             Some(executable.as_path())
         );
         assert!(restarted
-            .managed_game_executable("SRMI", "ssmt.dlss5.integration")
+            .managed_game_executable("SRMI", "example.integration")
             .is_none());
         restarted
-            .set_managed_game_executable("GIMI", "ssmt.dlss5.integration", None)
+            .set_managed_game_executable("GIMI", "example.integration", None)
             .unwrap();
         drop(restarted);
         assert!(PluginRegistry::new(&plugins_root)
             .unwrap()
-            .managed_game_executable("GIMI", "ssmt.dlss5.integration")
+            .managed_game_executable("GIMI", "example.integration")
             .is_none());
         fs::remove_dir_all(root).unwrap();
     }

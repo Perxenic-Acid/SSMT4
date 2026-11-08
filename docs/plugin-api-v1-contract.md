@@ -1,5 +1,9 @@
 # Plugin API 1 冻结契约
 
+本轮 PR 的隔离整理以 Plugin API 1.1 为基准。原 PR 中的 `graphics.*` 能力和
+`graphicsProfiles` 已移到插件自己的后台方法，依赖这些旧入口的页面必须升级；这里不宣称
+对这些已移除接口保持兼容。以下兼容演进约束适用于整理后的 1.1 契约。
+
 Plugin API 1 从 P5 起进入维护期。宿主可以增加向后兼容的能力，但插件和宿主都不得依赖
 内部 Tauri Command、Vue 组件、文件布局或插件 ID 特判。
 

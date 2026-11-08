@@ -168,6 +168,7 @@ pub async fn request(
             "gameExecutable": config.get("targetExePath"), "packageRoot": root,
             "dataRoot": data,
             "assetRoot": PathManager::ssmt_global_config_folder().join("PluginAssets").join(plugin.id()),
+            "hostProcessId": std::process::id(),
             "externalDependencies": plugin.external_dependencies,
             "legacySettings": settings.namespace(plugin.id()), "migrations": migrations }
     });
@@ -226,7 +227,10 @@ pub async fn plugin_backend_lifecycle(
     event: String,
     launch_context: Option<Value>,
 ) -> Result<Vec<String>, String> {
-    if !matches!(event.as_str(), "prepare" | "cancel" | "recover") {
+    if !matches!(
+        event.as_str(),
+        "prepare" | "cancel" | "recover" | "launch.cancel"
+    ) {
         return Err("invalid lifecycle event".into());
     }
     let Some(registry) =
@@ -248,7 +252,7 @@ async fn lifecycle_for_registry(
         if !plugin.enabled {
             continue;
         }
-        if matches!(event, "cancel" | "recover")
+        if matches!(event, "cancel" | "recover" | "launch.cancel")
             && plugin
                 .manifest
                 .contributions
@@ -261,10 +265,20 @@ async fn lifecycle_for_registry(
                         .any(|candidate| candidate == "launch.cancel")
                 })
         {
-            if let Err(error) = request(plugin, game_name, "launch.cancel", Value::Null, true).await
+            if let Err(error) = request(
+                plugin,
+                game_name,
+                "launch.cancel",
+                json!({"launchContext":launch_context}),
+                true,
+            )
+            .await
             {
                 warnings.push(format!("{}: {error}", plugin.manifest.name));
             }
+        }
+        if event == "launch.cancel" {
+            continue;
         }
         if !plugin
             .manifest

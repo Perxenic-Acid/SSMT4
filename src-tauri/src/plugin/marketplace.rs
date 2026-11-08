@@ -212,12 +212,12 @@ mod tests {
 
     fn entry() -> MarketplaceEntry {
         MarketplaceEntry {
-            id: "ssmt.hoyoshade.bridge".to_string(),
-            name: "HoYoShade Bridge".to_string(),
+            id: "example.overlay".to_string(),
+            name: "Example Overlay".to_string(),
             description: "External launcher integration".to_string(),
             author: "SSMT".to_string(),
             version: "0.1.0".to_string(),
-            download_url: "https://example.com/ssmt.hoyoshade.bridge.ssmtpkg".to_string(),
+            download_url: "https://example.com/example.overlay.ssmtpkg".to_string(),
             sha256: "a".repeat(64),
             minimum_ssmt_version: ">=4.x".to_string(),
             maximum_ssmt_version: None,
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn allows_disclosed_third_party_payloads() {
         let mut value = entry();
-        value.bundled_third_party_payloads = vec!["ReShade64.dll".to_string()];
+        value.bundled_third_party_payloads = vec!["EffectHost.dll".to_string()];
         assert!(MarketplaceCatalog {
             schema_version: 1,
             entries: vec![value]

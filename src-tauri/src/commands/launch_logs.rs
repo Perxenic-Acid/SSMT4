@@ -51,7 +51,7 @@ impl LogTail {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            // ReShade 可重写、轮转和删除日志；观察者不能锁住它。
+            // 插件进程可重写、轮转和删除日志；观察者不能锁住它。
             options.share_mode(1 | 2 | 4);
         }
         options.open(&self.source.path)
@@ -218,7 +218,7 @@ mod tests {
     use std::io::Write;
     fn source() -> LaunchLogSource {
         LaunchLogSource {
-            name: "ReShade".into(),
+            name: "Example runtime".into(),
             path: std::env::temp_dir().join(format!("ssmt-log-tail-{}.log", nonce())),
         }
     }

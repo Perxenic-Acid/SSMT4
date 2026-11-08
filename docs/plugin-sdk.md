@@ -80,13 +80,10 @@ Plugin API 1 当前能力：
 | `plugin.data.publish` | `filesystem.write` | 把持久数据镜像到包内运行目录 |
 | `game.process.read` | `process.observe` | 判断配置的游戏进程是否运行 |
 | `plugin.migration.read` | `filesystem.read` | 只读取清单声明的旧 GameConfig 顶层字段 |
-| `graphics.status.read/routes.read` | `filesystem.read` | 读取图形状态、上次运行证据和可选路线 |
-| `graphics.runtime.status/history` | `filesystem.read` | 读取已校验运行时和实例自有历史 |
-| `graphics.task.start/status/cancel` | 按操作声明 | 启动、轮询或取消宿主图形任务 |
-| `graphics.runtime.download/import/select/remove` | 文件读写；下载另需 `network` | 通过任务代理管理图形运行时 |
-| `graphics.route.install/restore` | 文件读写、`native.inject`、`process.spawn` | 通过任务代理安装或恢复图形路线 |
-| `graphics.directory.select` | `filesystem.read` | 仅允许为 `runtime.import` 打开宿主目录选择器 |
-| `graphics.external.open` | `process.spawn` | 只打开 Manifest 已声明的外部管理器 |
+| `plugin.backend.request` | `process.spawn`，有效页面租约 | 调用本插件清单声明的后台方法 |
+| `host.directory.select` | `filesystem.read` | 打开目录选择器，返回 `{path}` |
+| `host.url.open` | `process.spawn` | 打开不含凭据的 HTTPS URL |
+| `plugin.external.open` | `process.spawn` | 打开本插件清单声明的外部管理器 |
 
 插件不能通过能力 ID 执行任意 Shell、写任意绝对路径、注入任意进程或调用任意 Tauri
 Command。新增高危能力必须单独定义 Schema、权限、错误码、超时和负向测试。
@@ -244,3 +241,5 @@ node scripts/dev/verify-plugin-sdk-fixture.mjs
 - 页面 Lease 需要持续续期；WebView 崩溃或强制重载后，后端会在 TTL 到期时清理遗留的
   静态页服务和本地服务进程。
 - Windows Job Object 负责进程树生命周期，不负责文件系统和账户隔离。
+
+插件专有的下载、配置与长任务应在自身后台实现，通过 `plugin.backend.request` 调用。旧 `graphics.*` 与 `graphicsProfiles` 不再由宿主提供；迁移、协议与验证见 [插件自有后台](plugin-owned-backends.md)。

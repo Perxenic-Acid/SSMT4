@@ -394,7 +394,6 @@ fn is_valid_transition(from: LaunchPhase, to: LaunchPhase) -> bool {
 mod tests {
     use super::*;
     use crate::plugin::registry::PluginRegistry;
-    use crate::plugin::PluginManifest;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -493,14 +492,14 @@ mod tests {
     #[test]
     fn prepares_direct_injected_dll_contribution() {
         let root = temp_root("injected-dll");
-        let package = root.join("Plugins/ssmt.secondary-motion/3.2.0");
+        let package = root.join("Plugins/example.motion/3.2.0");
         fs::create_dir_all(package.join("plugin")).unwrap();
         fs::write(package.join("plugin/sbm.dll"), b"plugin").unwrap();
         fs::write(
             package.join("ssmt-plugin.json"),
             r#"{
               "schemaVersion": 1,
-              "id": "ssmt.secondary-motion",
+              "id": "example.motion",
               "name": "Secondary Motion",
               "version": "3.2.0",
               "author": "SSMT",
@@ -512,7 +511,7 @@ mod tests {
         .unwrap();
         let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
         registry
-            .set_game_enabled("EFMI", "ssmt.secondary-motion", true)
+            .set_game_enabled("EFMI", "example.motion", true)
             .unwrap();
         let scoped = registry.for_game("EFMI");
         let session = LaunchCoordinator::new(&scoped)
@@ -578,47 +577,6 @@ mod tests {
             "dxgi.dll"
         );
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn legacy_dlss5_tools_do_not_block_the_managed_hot_runtime() {
-        let plugin = InstalledPlugin {
-            manifest: PluginManifest {
-                schema_version: 1,
-                id: super::super::dlss5::DLSS5_PLUGIN_ID.to_string(),
-                name: "DLSS5 Integration".to_string(),
-                version: "0.2.1".to_string(),
-                author: "SSMT".to_string(),
-                plugin_api_version: 1,
-                compatibility: crate::plugin::PluginCompatibility {
-                    ssmt: ">=4.0.0".to_string(),
-                    platforms: vec!["windows-x64".to_string()],
-                    plugin_api: None,
-                    games: Vec::new(),
-                },
-                contributions: crate::plugin::PluginContributions::default(),
-                external_dependencies: Vec::new(),
-                permissions: Vec::new(),
-            },
-            package_root: PathBuf::from("fixture"),
-            enabled: true,
-            external_dependencies: std::collections::BTreeMap::from([(
-                "dlss5-adapter".to_string(),
-                crate::plugin::registry::ExternalDependencyState {
-                    status: ExternalDependencyStatus::Missing,
-                    path: None,
-                    reason: Some("not configured".to_string()),
-                },
-            )]),
-            official: true,
-        };
-        assert!(validate_plugin_preflight(&plugin).is_ok());
-        let mut legacy = plugin;
-        legacy.manifest.version = "0.2.0".to_string();
-        assert!(matches!(
-            validate_plugin_preflight(&legacy),
-            Err(LaunchCoordinatorError::MissingExternalDependency { .. })
-        ));
     }
 
     #[test]

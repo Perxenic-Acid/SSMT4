@@ -1,5 +1,7 @@
 # 图形插件 Profile 迁移
 
+> 历史方案：宿主注册专属 provider / graphicsProfiles 的设计已移除。当前插件通过包内后台与页面扩展应用，见 [插件自有后台](plugin-owned-backends.md)。本文仅保留迁移背景，不作为当前接口指南。
+
 P4-D 第一部分把图形 Provider 从“插件 ID 分派”改为“策略 + 优先级 + 资源键”模型。
 HoYoShade 已迁移，DLSS5 新版本清单已切换；高风险图形路线的执行行为保持不变。
 

@@ -1,224 +1,95 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
-import { setImmediate } from 'node:timers/promises'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
-import { parse } from '@vue/compiler-sfc'
 
 const plain = value => JSON.parse(JSON.stringify(value))
-
-function page(t, handler, initialStorage = {}) {
-  const source = parse(readFileSync(
-    new URL('../../native/dlss5-integration-ui/src/Dlss5Page.vue', import.meta.url),
-    'utf8',
-  )).descriptor.scriptSetup.content
-  const compiled = ts.transpileModule(`${source}
-Object.assign(exports, {
-  activeTask, error, gameExecutable, history, installedRuntime, lastRun,
-  manageHistory, refresh, routes, runtimeStatus, selectedProfile,
-  selectedRoute, startTask, installSelected
-})`, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const mounted = []
-  const unmounted = []
-  const storage = new Map(Object.entries(initialStorage))
-  const windowMock = {
-    setTimeout(callback) {
-      queueMicrotask(callback)
-      return 1
-    },
-    clearTimeout() {},
-    addEventListener() {},
-    removeEventListener() {},
-    parent: { postMessage() {} },
-  }
-  const scope = vue.effectScope()
-  const exports = {}
-  scope.run(() => vm.runInNewContext(compiled, {
-    exports,
-    console,
-    Date,
-    Math,
-    Promise,
-    Set,
-    URLSearchParams,
-    window: windowMock,
-    localStorage: {
-      getItem: key => storage.get(key) ?? null,
-      setItem: (key, value) => storage.set(key, String(value)),
-      removeItem: key => storage.delete(key),
-    },
-    require(name) {
-      if (name === 'vue') {
-        return {
-          ...vue,
-          onMounted: callback => mounted.push(callback),
-          onBeforeUnmount: callback => unmounted.push(callback),
-        }
-      }
-      if (name === './bridge') return { requestCapability: handler }
-      if (name === 'element-plus') {
-        return {
-          ElMessage: { success() {}, warning() {}, error() {} },
-          ElMessageBox: { confirm: async () => undefined },
-        }
-      }
-      throw new Error(`Unexpected import: ${name}`)
-    },
-  }))
-  exports.dispose = () => {
-    scope.stop()
-    unmounted.splice(0).forEach(callback => callback())
-  }
-  t.after(exports.dispose)
-  return { ...exports, mounted, storage }
-}
-
-function baseHandler(overrides = {}) {
+function bridge(handler) {
+  const source = readFileSync(new URL('../../native/dlss5-integration-ui/src/bridge.ts', import.meta.url), 'utf8')
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const calls = []
-  const handler = async (capability, payload = {}) => {
-    calls.push({ capability, payload })
-    if (capability in overrides) return overrides[capability](payload, calls)
-    if (capability === 'game.context.read') {
-      return { gameName: 'GIMI', targetExePath: 'C:/Game/YuanShen.exe' }
-    }
-    if (capability === 'graphics.routes.read') {
-      return {
-        routes: ['gimi-hot', 'ssmt-feeder'],
-        installedRoute: 'gimi-hot',
-        antiCheatWarning: false,
-      }
-    }
-    if (capability === 'graphics.status.read') {
-      return {
-        gameState: { state: 'not_managed', route: null, managedHost: null, owner: null, reason: null },
-        lastRun: { verdict: 'unknown', reason: 'no_log', observedAtMs: null, warning: null },
-      }
-    }
-    if (capability === 'graphics.runtime.status') {
-      return { gimi: null, dlss5: null }
-    }
-    if (capability === 'graphics.runtime.history') return []
-    throw new Error(`Unexpected capability: ${capability}`)
+  let listener
+  const parent = {
+    postMessage(request) {
+      calls.push(plain(request))
+      queueMicrotask(async () => {
+        const response = { type: 'ssmt:capability-response', protocolVersion: 1, requestId: request.requestId }
+        try {
+          const value = await handler(request.capability, plain(request.payload))
+          listener({ source: {}, data: { ...response, ok: true, value: 'foreign-response' } })
+          listener({ source: parent, data: { ...response, ok: true, value } })
+        } catch (error) {
+          listener({ source: parent, data: { ...response, ok: false, errorMessage: error.message } })
+        }
+      })
+    },
   }
-  return { handler, calls }
+  const exports = {}
+  vm.runInNewContext(compiled, {
+    exports, require: name => { assert.equal(name, 'vue'); return vue },
+    window: { addEventListener: (name, callback) => { assert.equal(name, 'message'); listener = callback } },
+    parent, Date,
+    setTimeout: (callback, milliseconds) => milliseconds <= 500 ? setTimeout(callback, 0) : setTimeout(callback, milliseconds),
+    clearTimeout,
+  })
+  return { ...exports, calls }
 }
 
-test('DLSS5 plugin page reads state only through the PageLease capability bridge', async t => {
-  const pagePath = new URL('../../native/dlss5-integration-ui/src/Dlss5Page.vue', import.meta.url)
-  if (!existsSync(pagePath)) {
-    t.skip('DLSS5 UI is outside the minimal Native checkout')
-    return
-  }
-  const { handler, calls } = baseHandler()
-  const s = page(t, handler)
-  await s.refresh()
-  assert.equal(s.gameExecutable.value, 'C:/Game/YuanShen.exe')
-  assert.deepEqual(Array.from(s.routes.value), ['gimi-hot', 'ssmt-feeder'])
-  assert.equal(s.selectedRoute.value, 'gimi-hot')
-  assert.ok(calls.every(call => !('pluginId' in call.payload) && !('gameName' in call.payload)))
-  assert.deepEqual(calls.map(call => call.capability), [
-    'game.context.read',
-    'graphics.routes.read',
-    'graphics.status.read',
-    'graphics.runtime.status',
-    'graphics.runtime.history',
-  ])
-})
-
-test('DLSS5 download uses a host task, reports progress and resumes after remount', async t => {
-  const pagePath = new URL('../../native/dlss5-integration-ui/src/Dlss5Page.vue', import.meta.url)
-  if (!existsSync(pagePath)) {
-    t.skip('DLSS5 UI is outside the minimal Native checkout')
-    return
-  }
-  let taskReads = 0
-  const { handler, calls } = baseHandler({
-    'graphics.task.start': () => ({
-      taskId: 'graphics-1',
-      operation: 'runtime.download',
-      status: 'queued',
-      phase: 'queued',
-      message: 'queued',
-      downloadedBytes: 0,
-      totalBytes: 200,
-      cancellable: true,
-    }),
-    'graphics.task.status': () => ++taskReads < 3
-      ? {
-          taskId: 'graphics-1',
-          operation: 'runtime.download',
-          status: 'running',
-          phase: 'downloading',
-          message: 'downloading',
-          downloadedBytes: taskReads * 50,
-          totalBytes: 200,
-          cancellable: true,
-        }
-      : {
-          taskId: 'graphics-1',
-          operation: 'runtime.download',
-          status: 'succeeded',
-          phase: 'completed',
-          message: 'completed',
-          downloadedBytes: 200,
-          totalBytes: 200,
-          cancellable: false,
-        },
+test('DLSS5 页面通过通用后台桥轮询任务并保留进度及失败', async () => {
+  let fail = false
+  let reads = 0
+  const s = bridge((capability, { method, payload }) => {
+    assert.equal(capability, 'plugin.backend.request')
+    if (method === 'task.start') {
+      assert.equal(payload.operation, 'runtime.download')
+      assert.equal(payload.runtime, 'gimi')
+      assert.equal(payload.onProgress, undefined)
+      return { taskId: 'task-a', status: 'queued', cancellable: true }
+    }
+    assert.equal(method, 'task.read')
+    assert.equal(payload.taskId, 'task-a')
+    return ++reads % 2 ? { taskId: 'task-a', status: 'running', progress: { downloadedBytes: 50 } }
+      : { taskId: 'task-a', status: fail ? 'failed' : 'succeeded', error: 'download failed', result: { installed: true } }
   })
-  const s = page(t, handler)
-  await s.refresh()
-  s.selectedProfile.value = 'rtx30'
-  await s.installSelected(false)
-  assert.deepEqual(
-    plain(calls.find(call => call.capability === 'graphics.task.start')?.payload),
-    { operation: 'runtime.download', runtime: 'gimi', route: 'gimi-hot', profile: 'rtx30' },
-  )
-  await setImmediate()
-  await setImmediate()
-  await setImmediate()
-  assert.equal(s.storage.get('ssmt.dlss5.task.gimi'), undefined)
+  const progress = new s.Channel()
+  const updates = []
+  progress.onmessage = update => updates.push(plain(update))
+  assert.deepEqual(plain(await s.invoke('download_gimi_hot_runtime', { gameName: 'game', onProgress: progress })), { installed: true })
+  assert.deepEqual(updates, [{ downloadedBytes: 50 }])
   assert.equal(s.activeTask.value, null)
-
-  const resumed = page(t, handler, { 'ssmt.dlss5.task.gimi': 'graphics-restored' })
-  await resumed.refresh()
-  await setImmediate()
-  assert.ok(calls.some(call =>
-    call.capability === 'graphics.task.status' && call.payload.taskId === 'graphics-restored'))
+  fail = true
+  await assert.rejects(s.invoke('download_gimi_hot_runtime', {}), /download failed/)
+  assert.equal(s.activeTask.value, null)
 })
 
-test('DLSS5 offline import uses the host directory picker before creating an import task', async t => {
-  const pagePath = new URL('../../native/dlss5-integration-ui/src/Dlss5Page.vue', import.meta.url)
-  if (!existsSync(pagePath)) {
-    t.skip('DLSS5 UI is outside the minimal Native checkout')
-    return
-  }
-  const { handler, calls } = baseHandler({
-    'graphics.directory.select': () => ({ path: 'D:/Offline/GIMI' }),
-    'graphics.task.start': payload => ({
-      taskId: 'graphics-import',
-      operation: payload.operation,
-      status: 'succeeded',
-      phase: 'completed',
-      message: 'completed',
-      downloadedBytes: 0,
-      totalBytes: 0,
-      cancellable: false,
-    }),
+test('DLSS5 页面重开后恢复活动任务并向同一任务发送取消', async () => {
+  let cancelled = false
+  const s = bridge((_capability, { method, payload }) => {
+    if (method === 'task.active') return [{ taskId: 'restored', status: 'running', cancellable: true }]
+    assert.equal(payload.taskId, 'restored')
+    if (method === 'task.cancel') { cancelled = true; return null }
+    assert.equal(method, 'task.read')
+    return { taskId: 'restored', status: 'cancelled', cancellable: false }
   })
-  const s = page(t, handler)
-  await s.refresh()
-  await s.installSelected(true)
-  assert.deepEqual(plain(calls.find(call => call.capability === 'graphics.directory.select')?.payload), {
-    purpose: 'runtime.import',
+  const restoring = s.restoreActiveTask()
+  while (!s.activeTask.value) await new Promise(resolve => setImmediate(resolve))
+  await assert.rejects(s.invoke('download_gimi_hot_runtime', {}), /已有组件任务/)
+  await s.cancelActiveTask()
+  await restoring
+  assert.equal(cancelled, true)
+  assert.equal(s.activeTask.value, null)
+})
+
+test('DLSS5 页面解包通用目录选择结果并拒收其他窗口响应', async () => {
+  const s = bridge((capability, payload) => {
+    if (capability === 'host.directory.select') return { path: 'D:/Offline/GIMI' }
+    assert.equal(capability, 'host.url.open')
+    assert.deepEqual(payload, { url: 'https://example.com/download' })
+    return null
   })
-  assert.deepEqual(plain(calls.find(call => call.capability === 'graphics.task.start')?.payload), {
-    operation: 'runtime.import',
-    sourceDirectory: 'D:/Offline/GIMI',
-    profile: 'rtx50',
-  })
-  assert.ok(!calls.some(call => call.payload.operation === 'runtime.download'))
+  assert.equal(await s.open({ directory: true }), 'D:/Offline/GIMI')
+  await s.openUrl('https://example.com/download')
+  assert.ok(s.calls.every(call => call.protocolVersion === 1))
 })

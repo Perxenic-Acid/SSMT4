@@ -128,6 +128,10 @@ foreach ($Name in $Artifacts) {
 }
 
 # 开发包放在构建目录，不能被应用资源通配符带入正式安装器。
+$BackendArguments = @{ ArtifactDirectory = $DistDir }
+if ($Configuration -eq 'Release') { $BackendArguments.Release = $true }
+& (Join-Path $NativeDir 'tools\build-plugin-backends.ps1') @BackendArguments
+if (-not $?) { throw '插件后台及页面构建失败' }
 & (Join-Path $NativeDir 'tools\stage-local-plugins.ps1') `
     -NativeArtifactDirectory $DistDir `
     -OutputDirectory (Join-Path $RepoRoot 'build/plugin-packages') `

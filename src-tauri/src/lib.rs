@@ -116,15 +116,11 @@ pub fn run() {
             reveal_main_window(app);
         }))
         .setup(|app| {
-            if let Err(error) = plugin::managed_stack::recover_stale_sessions() {
-                eprintln!("[GraphicsStack] Startup recovery failed: {error}");
-            }
             // 初始化 ModWatcher 状态
             app.manage(commands::mod_manager::ModWatcher(Mutex::new(None)));
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
             app.manage(commands::launch_shortcut::LaunchConsoleShortcut::default());
             app.manage(plugin::page_runtime::PluginPageRuntime::default());
-            app.manage(plugin::graphics_tasks::GraphicsTaskBroker::default());
 
             if show_window_shortcut_enabled_on_launch(app) {
                 if let Err(error) = register_show_window_shortcut(app.handle()) {
@@ -169,32 +165,8 @@ pub fn run() {
             plugin::launch_plan::plugin_launch_plan_preview,
             plugin::commands::set_plugin_enabled_for_game,
             plugin::commands::set_plugin_external_dependency_path,
-            plugin::commands::prepare_hoyoshade_launch,
-            plugin::hoyoshade::prepare_hoyoshade_hot_runtime,
-            plugin::gimi_hot_runtime::prepare_gimi_hot_runtime,
-            plugin::gimi_hot_runtime::import_gimi_hot_runtime,
-            plugin::gimi_hot_runtime::download::download_gimi_hot_runtime,
-            plugin::gimi_hot_runtime::gimi_hot_runtime_status,
-            plugin::dlss5_hot_runtime::prepare_dlss5_hot_runtime,
-            plugin::host_graphics::prepare_plugin_graphics_plan,
-            plugin::host_graphics::configure_plugin_launch_contract,
-            plugin::dlss5_hot_runtime::configure_dlss5_launch_settings,
-            plugin::dlss5_hot_runtime::download_dlss5_hot_runtime,
-            plugin::dlss5_hot_runtime::dlss5_hot_runtime_status,
-            plugin::dlss5_hot_runtime::catalog::dlss5_hot_runtime_history,
-            plugin::dlss5_hot_runtime::catalog::select_dlss5_hot_runtime,
-            plugin::dlss5_hot_runtime::catalog::remove_dlss5_hot_runtime,
             plugin::commands::prepare_plugin_host_config,
             plugin::injected_dlls::plugin_launch_injected_dlls,
-            plugin::commands::inspect_graphics_launch,
-            plugin::commands::inspect_dlss5_game_state,
-            plugin::commands::inspect_dlss5_last_run,
-            plugin::commands::inspect_managed_graphics_stack,
-            plugin::commands::restore_managed_graphics_stack,
-            plugin::commands::inspect_dlss5_route_options,
-            plugin::commands::install_managed_dlss5_route,
-            plugin::commands::restore_dlss5_install,
-            plugin::commands::open_dlss5_swapper,
             plugin::commands::install_plugin_package,
             plugin::commands::inspect_plugin_package,
             plugin::commands::uninstall_plugin,

@@ -4,7 +4,6 @@
 //! 必须把调用方绑定到 Lease/ServiceInstance 身份，不能让插件自行提交 `pluginId`。
 
 use super::data_store::ScopedDataStore;
-use super::graphics_tasks::{GraphicsTaskBroker, GraphicsTaskError, GraphicsTaskOwner};
 use super::page_runtime::{PageLeaseIdentity, PluginPageRuntime};
 use super::registry::PluginRegistry;
 use super::settings::PluginSettingsStore;
@@ -16,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 pub const CAPABILITY_API_VERSION: u32 = 1;
 
@@ -31,16 +31,7 @@ pub const CAPABILITY_ERROR_CODES: &[&str] = &[
     "external_manager_not_declared",
     "game_context_invalid",
     "game_context_unavailable",
-    "graphics_history_error",
-    "graphics_operation_failed",
-    "graphics_profile_not_declared",
-    "graphics_routes_error",
-    "graphics_runtime_error",
-    "graphics_status_error",
-    "graphics_task_conflict",
-    "graphics_task_error",
-    "graphics_task_failed",
-    "graphics_task_limit",
+    "host_action_failed",
     "invalid_payload",
     "lease_invalid",
     "lease_lookup_failed",
@@ -53,11 +44,6 @@ pub const CAPABILITY_ERROR_CODES: &[&str] = &[
     "plugin_registry_unavailable",
     "storage_error",
     "storage_unavailable",
-    "task_cancelled",
-    "task_not_cancellable",
-    "task_not_found",
-    "task_not_running",
-    "task_store_unavailable",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,25 +110,13 @@ pub fn plugin_capability_catalog() -> CapabilityCatalog {
 #[tauri::command]
 pub async fn plugin_capability_request(
     app: AppHandle,
-    tasks: State<'_, GraphicsTaskBroker>,
     plugin_id: String,
     game_name: String,
     capability: String,
     payload: Value,
     request_id: Option<String>,
 ) -> Result<CapabilityResponse, String> {
-    let task_broker = tasks.inner().clone();
-    match execute_capability(
-        &plugin_id,
-        &game_name,
-        &capability,
-        payload,
-        None,
-        &app,
-        &task_broker,
-    )
-    .await
-    {
+    match execute_capability(&plugin_id, &game_name, &capability, payload, None, &app).await {
         Ok(value) => Ok(success(request_id, capability, value)),
         Err((code, message)) => Ok(failure(request_id, capability, code, message)),
     }
@@ -153,7 +127,6 @@ pub async fn plugin_capability_request(
 #[tauri::command]
 pub async fn plugin_capability_request_for_lease(
     app: AppHandle,
-    tasks: State<'_, GraphicsTaskBroker>,
     lease_id: String,
     capability: String,
     payload: Value,
@@ -179,7 +152,6 @@ pub async fn plugin_capability_request_for_lease(
             ));
         }
     };
-    let task_broker = tasks.inner().clone();
     match execute_capability(
         &identity.plugin_id,
         &identity.game_name,
@@ -187,7 +159,6 @@ pub async fn plugin_capability_request_for_lease(
         payload,
         Some(&identity),
         &app,
-        &task_broker,
     )
     .await
     {
@@ -203,7 +174,6 @@ async fn execute_capability(
     payload: Value,
     lease_identity: Option<&PageLeaseIdentity>,
     app: &AppHandle,
-    tasks: &GraphicsTaskBroker,
 ) -> Result<Value, (&'static str, String)> {
     let registry = PluginRegistry::from_default_location()
         .map_err(|error| ("plugin_registry_unavailable", error.to_string()))?;
@@ -229,6 +199,7 @@ async fn execute_capability(
 
     match capability {
         "plugin.backend.request" => {
+            require_lease_identity(lease_identity)?;
             require_permission(plugin, PluginPermission::ProcessSpawn)?;
             let method = payload_string(&payload, "method")?;
             super::backend::request(
@@ -454,122 +425,28 @@ async fn execute_capability(
                 }
             }
         }
-        "graphics.status.read" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            require_permission(plugin, PluginPermission::FilesystemRead)?;
-            let executable = configured_game_executable(game_name)?;
-            let game_state = super::commands::inspect_dlss5_game_state(executable.clone())
-                .await
-                .map_err(|error| ("graphics_status_error", error))?;
-            let last_run =
-                super::commands::inspect_dlss5_last_run(executable, Some(game_name.to_string()))
-                    .await
-                    .map_err(|error| ("graphics_status_error", error))?;
-            Ok(json!({ "gameState": game_state, "lastRun": last_run }))
-        }
-        "graphics.routes.read" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            require_permission(plugin, PluginPermission::FilesystemRead)?;
-            let api_override = payload
-                .get("apiOverride")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or("auto");
-            let scan = super::commands::inspect_dlss5_route_options(
-                game_name.to_string(),
-                configured_game_executable(game_name)?,
-                api_override.to_string(),
-            )
-            .await
-            .map_err(|error| ("graphics_routes_error", error))?;
-            serde_json::to_value(scan).map_err(|error| {
-                (
-                    "graphics_routes_error",
-                    format!("cannot serialize graphics routes: {error}"),
-                )
-            })
-        }
-        "graphics.runtime.status" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            require_permission(plugin, PluginPermission::FilesystemRead)?;
-            let game = game_name.to_string();
-            let (gimi, dlss5) = tokio::try_join!(
-                super::gimi_hot_runtime::gimi_hot_runtime_status(game.clone()),
-                super::dlss5_hot_runtime::dlss5_hot_runtime_status(game),
-            )
-            .map_err(|error| ("graphics_runtime_error", error))?;
-            Ok(json!({ "gimi": gimi, "dlss5": dlss5 }))
-        }
-        "graphics.runtime.history" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            require_permission(plugin, PluginPermission::FilesystemRead)?;
-            let history =
-                super::dlss5_hot_runtime::catalog::dlss5_hot_runtime_history(game_name.to_string())
-                    .await
-                    .map_err(|error| ("graphics_history_error", error))?;
-            serde_json::to_value(history).map_err(|error| {
-                (
-                    "graphics_history_error",
-                    format!("cannot serialize graphics history: {error}"),
-                )
-            })
-        }
-        "graphics.task.start" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            let identity = require_lease_identity(lease_identity)?;
-            require_task_permissions(plugin, payload_string(&payload, "operation")?)?;
-            start_task(tasks, identity, payload)
-        }
-        "graphics.runtime.download"
-        | "graphics.runtime.import"
-        | "graphics.runtime.select"
-        | "graphics.runtime.remove"
-        | "graphics.route.install"
-        | "graphics.route.restore" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            let identity = require_lease_identity(lease_identity)?;
-            let operation = capability.trim_start_matches("graphics.");
-            require_task_permissions(plugin, operation)?;
-            let mut request = payload;
-            request["operation"] = Value::String(operation.to_string());
-            start_task(tasks, identity, request)
-        }
-        "graphics.task.status" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            let identity = require_lease_identity(lease_identity)?;
-            let owner = GraphicsTaskOwner::from(identity);
-            let task = tasks
-                .status(&owner, payload_string(&payload, "taskId")?)
-                .map_err(task_error)?;
-            serde_json::to_value(task).map_err(|error| {
-                (
-                    "graphics_task_error",
-                    format!("cannot serialize graphics task: {error}"),
-                )
-            })
-        }
-        "graphics.task.cancel" => {
-            require_graphics_profile(plugin, "dlss5-hot")?;
-            let identity = require_lease_identity(lease_identity)?;
-            let owner = GraphicsTaskOwner::from(identity);
-            let task = tasks
-                .cancel(&owner, payload_string(&payload, "taskId")?)
-                .map_err(task_error)?;
-            serde_json::to_value(task).map_err(|error| {
-                (
-                    "graphics_task_error",
-                    format!("cannot serialize graphics task: {error}"),
-                )
-            })
-        }
-        "graphics.directory.select" => {
-            require_permission(plugin, PluginPermission::FilesystemRead)?;
-            if payload_string(&payload, "purpose")? != "runtime.import" {
+        "host.url.open" => {
+            require_permission(plugin, PluginPermission::ProcessSpawn)?;
+            let url = payload_string(&payload, "url")?;
+            let parsed =
+                reqwest::Url::parse(url).map_err(|error| ("invalid_payload", error.to_string()))?;
+            if parsed.scheme() != "https"
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
                 return Err((
-                    "capability_denied",
-                    "directory picker purpose is not allowed".to_string(),
+                    "invalid_payload",
+                    "only HTTPS URLs without credentials are allowed".into(),
                 ));
             }
+            app.opener()
+                .open_url(url, None::<&str>)
+                .map_err(|error| ("host_action_failed", error.to_string()))?;
+            Ok(Value::Null)
+        }
+        "host.directory.select" => {
+            require_permission(plugin, PluginPermission::FilesystemRead)?;
             let app = app.clone();
             let selected = tauri::async_runtime::spawn_blocking(move || {
                 app.dialog().file().blocking_pick_folder()
@@ -595,7 +472,7 @@ async fn execute_capability(
                 .transpose()?;
             Ok(json!({ "path": path }))
         }
-        "graphics.external.open" => {
+        "plugin.external.open" => {
             require_permission(plugin, PluginPermission::ProcessSpawn)?;
             open_external_manager(plugin, payload_string(&payload, "externalManagerId")?)
         }
@@ -649,115 +526,13 @@ fn require_permission(
     }
 }
 
-fn require_graphics_profile(
-    plugin: &super::registry::InstalledPlugin,
-    strategy: &str,
-) -> Result<(), (&'static str, String)> {
-    let declared = plugin
-        .manifest
-        .contributions
-        .graphics_profiles
-        .iter()
-        .any(|profile| profile.strategy.as_str() == strategy)
-        || plugin
-            .manifest
-            .contributions
-            .host_extensions
-            .iter()
-            .any(|extension| extension.provider == strategy);
-    if declared {
-        Ok(())
-    } else {
-        Err((
-            "graphics_profile_not_declared",
-            format!("plugin does not declare a {strategy} graphics profile"),
-        ))
-    }
-}
-
 fn require_lease_identity(
     identity: Option<&PageLeaseIdentity>,
 ) -> Result<&PageLeaseIdentity, (&'static str, String)> {
     identity.ok_or((
         "lease_required",
-        "graphics task capabilities require an active plugin page lease".to_string(),
+        "backend requests require an active plugin page lease".into(),
     ))
-}
-
-fn require_task_permissions(
-    plugin: &super::registry::InstalledPlugin,
-    operation: &str,
-) -> Result<(), (&'static str, String)> {
-    let permissions: &[PluginPermission] = match operation {
-        "runtime.download" => &[
-            PluginPermission::Network,
-            PluginPermission::FilesystemRead,
-            PluginPermission::FilesystemWrite,
-        ],
-        "runtime.import" | "runtime.select" | "runtime.remove" => &[
-            PluginPermission::FilesystemRead,
-            PluginPermission::FilesystemWrite,
-        ],
-        "route.install" | "route.restore" => &[
-            PluginPermission::FilesystemRead,
-            PluginPermission::FilesystemWrite,
-            PluginPermission::NativeInject,
-            PluginPermission::ProcessSpawn,
-        ],
-        _ => {
-            return Err((
-                "invalid_payload",
-                format!("unknown graphics task operation: {operation}"),
-            ))
-        }
-    };
-    for permission in permissions {
-        require_permission(plugin, permission.clone())?;
-    }
-    Ok(())
-}
-
-fn start_task(
-    tasks: &GraphicsTaskBroker,
-    identity: &PageLeaseIdentity,
-    payload: Value,
-) -> Result<Value, (&'static str, String)> {
-    let task = tasks
-        .start(GraphicsTaskOwner::from(identity), payload)
-        .map_err(task_error)?;
-    serde_json::to_value(task).map_err(|error| {
-        (
-            "graphics_task_error",
-            format!("cannot serialize graphics task: {error}"),
-        )
-    })
-}
-
-fn task_error(error: GraphicsTaskError) -> (&'static str, String) {
-    (error.code, error.message)
-}
-
-fn configured_game_executable(game_name: &str) -> Result<String, (&'static str, String)> {
-    let path = PathManager::global_config_games_game_folder(game_name).join("Config.json");
-    let raw = std::fs::read_to_string(&path).map_err(|error| {
-        (
-            "game_context_unavailable",
-            format!("cannot read {}: {error}", path.display()),
-        )
-    })?;
-    let config = serde_json::from_str::<Value>(&raw)
-        .map_err(|error| ("game_context_invalid", error.to_string()))?;
-    config
-        .get("targetExePath")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            (
-                "game_context_unavailable",
-                "game configuration is missing targetExePath".to_string(),
-            )
-        })
 }
 
 fn open_external_manager(
@@ -888,6 +663,20 @@ fn failure(
 fn descriptors() -> Vec<CapabilityDescriptor> {
     vec![
         descriptor(
+            "host.directory.select",
+            "Open a user-controlled directory picker.",
+            &["filesystem.read"],
+            json!({"type":"object"}),
+            json!({"type":"object","properties":{"path":{"type":["string","null"]}}}),
+        ),
+        descriptor(
+            "host.url.open",
+            "Open an HTTPS URL in the user's browser.",
+            &["process.spawn"],
+            json!({"type":"object","required":["url"],"properties":{"url":{"type":"string"}}}),
+            json!({}),
+        ),
+        descriptor(
             "plugin.backend.request",
             "Call a method declared by the plugin-owned backend",
             &["process.spawn"],
@@ -1000,115 +789,7 @@ fn descriptors() -> Vec<CapabilityDescriptor> {
             json!({"type":"object","properties":{"values":{"type":"object"}}}),
         ),
         descriptor(
-            "graphics.status.read",
-            "Read the managed graphics state and the last verified runtime verdict.",
-            &["filesystem.read"],
-            json!({"type":"object","additionalProperties":false}),
-            json!({"type":"object","properties":{"gameState":{"type":"object"},"lastRun":{"type":"object"}}}),
-        ),
-        descriptor(
-            "graphics.routes.read",
-            "Read graphics routes supported by the current game and executable.",
-            &["filesystem.read"],
-            json!({"type":"object","properties":{"apiOverride":{"type":"string"}}}),
-            json!({"type":"object"}),
-        ),
-        descriptor(
-            "graphics.runtime.status",
-            "Read verified graphics runtime installations for the current game.",
-            &["filesystem.read"],
-            json!({"type":"object","additionalProperties":false}),
-            json!({"type":"object","properties":{"gimi":{},"dlss5":{}}}),
-        ),
-        descriptor(
-            "graphics.runtime.history",
-            "Read graphics runtime installations owned by the current game.",
-            &["filesystem.read"],
-            json!({"type":"object","additionalProperties":false}),
-            json!({"type":"array"}),
-        ),
-        descriptor(
-            "graphics.task.start",
-            "Start a host-owned graphics operation and return a task handle.",
-            &["filesystem.read", "filesystem.write"],
-            json!({"type":"object","required":["operation"],"properties":{"operation":{"type":"string"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.task.status",
-            "Read progress and the final result of a graphics operation.",
-            &[],
-            json!({"type":"object","required":["taskId"],"properties":{"taskId":{"type":"string"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"},"phase":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.task.cancel",
-            "Request cancellation of a cancellable graphics operation.",
-            &[],
-            json!({"type":"object","required":["taskId"],"properties":{"taskId":{"type":"string"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.runtime.download",
-            "Download and verify a graphics runtime through the task broker.",
-            &["network", "filesystem.read", "filesystem.write"],
-            json!({"type":"object","required":["runtime","profile"],"properties":{"runtime":{"type":"string"},"route":{"type":"string"},"profile":{"type":"string"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.runtime.import",
-            "Import a user-selected graphics runtime through the task broker.",
-            &["filesystem.read", "filesystem.write"],
-            json!({"type":"object","required":["sourceDirectory","profile"],"properties":{"sourceDirectory":{"type":"string"},"profile":{"type":"string"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.runtime.select",
-            "Select a verified graphics runtime from the current game's history.",
-            &["filesystem.read", "filesystem.write"],
-            json!({"type":"object","required":["root"],"properties":{"root":{"type":"string"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.runtime.remove",
-            "Remove an owned graphics runtime from the current game's history.",
-            &["filesystem.read", "filesystem.write"],
-            json!({"type":"object","required":["root"],"properties":{"root":{"type":"string"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.route.install",
-            "Install a declared managed graphics route through the task broker.",
-            &[
-                "filesystem.read",
-                "filesystem.write",
-                "native.inject",
-                "process.spawn",
-            ],
-            json!({"type":"object","required":["route"],"properties":{"route":{"type":"string"},"apiOverride":{"type":"string"},"antiCheatAcknowledged":{"type":"boolean"}}}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.route.restore",
-            "Restore an existing managed graphics route through the task broker.",
-            &[
-                "filesystem.read",
-                "filesystem.write",
-                "native.inject",
-                "process.spawn",
-            ],
-            json!({"type":"object","additionalProperties":false}),
-            json!({"type":"object","properties":{"taskId":{"type":"string"},"status":{"type":"string"}}}),
-        ),
-        descriptor(
-            "graphics.directory.select",
-            "Open the host-controlled directory picker for an allowed graphics operation.",
-            &["filesystem.read"],
-            json!({"type":"object","required":["purpose"],"properties":{"purpose":{"type":"string"}}}),
-            json!({"type":"object","properties":{"path":{"type":["string","null"]}}}),
-        ),
-        descriptor(
-            "graphics.external.open",
+            "plugin.external.open",
             "Open an external manager explicitly declared by the plugin.",
             &["process.spawn"],
             json!({"type":"object","required":["externalManagerId"],"properties":{"externalManagerId":{"type":"string"}}}),
@@ -1159,11 +840,11 @@ mod tests {
         assert!(catalog
             .capabilities
             .iter()
-            .any(|capability| capability.id == "graphics.task.start"));
+            .any(|capability| capability.id == "plugin.backend.request"));
         assert!(catalog
             .capabilities
             .iter()
-            .any(|capability| capability.id == "graphics.runtime.history"));
+            .any(|capability| capability.id == "plugin.data.list"));
     }
 
     #[test]
@@ -1319,60 +1000,5 @@ mod tests {
         };
         let error = require_permission(&plugin, PluginPermission::FilesystemWrite).unwrap_err();
         assert_eq!(error.0, "capability_denied");
-    }
-
-    #[test]
-    fn graphics_task_permissions_are_checked_by_operation() {
-        let manifest = super::super::PluginManifest::from_json_str(
-            r#"{
-              "schemaVersion": 2,
-              "id": "example.graphics",
-              "name": "Graphics Fixture",
-              "version": "1.0.0",
-              "author": "Example",
-              "compatibility": {
-                "ssmt": ">=4.2.2",
-                "pluginApi": ">=1.0.0 <2.0.0",
-                "platforms": ["windows-x64"],
-                "games": ["GIMI"]
-              },
-              "contributions": {
-                "graphicsProfiles": [{
-                  "id": "graphics",
-                  "strategy": "dlss5-hot",
-                  "resources": ["graphics.dlss5.route"]
-                }]
-              },
-              "permissions": ["filesystem.read", "filesystem.write", "native.inject"]
-            }"#,
-        )
-        .unwrap();
-        let plugin = InstalledPlugin {
-            manifest,
-            package_root: PathBuf::from("fixture"),
-            enabled: true,
-            external_dependencies: BTreeMap::new(),
-            official: false,
-        };
-        require_graphics_profile(&plugin, "dlss5-hot").unwrap();
-        require_task_permissions(&plugin, "runtime.import").unwrap();
-        assert_eq!(
-            require_task_permissions(&plugin, "runtime.download")
-                .unwrap_err()
-                .0,
-            "capability_denied"
-        );
-        assert_eq!(
-            require_task_permissions(&plugin, "route.restore")
-                .unwrap_err()
-                .0,
-            "capability_denied"
-        );
-        assert_eq!(
-            require_graphics_profile(&plugin, "reshade-hot")
-                .unwrap_err()
-                .0,
-            "graphics_profile_not_declared"
-        );
     }
 }

@@ -1,5 +1,7 @@
 # 本体侧插件贡献契约
 
+> 历史方案：宿主注册专属 provider / graphicsProfiles 的设计已移除。当前插件通过包内后台与页面扩展应用，见 [插件自有后台](plugin-owned-backends.md)。本文仅保留迁移背景，不作为当前接口指南。
+
 此契约扩展 JSON 插件清单，不修改 Native Plugin ABI。字段默认缺省，旧包继续通过兼容适配运行。
 
 ## 声明
