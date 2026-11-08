@@ -253,6 +253,7 @@ pub struct PluginPageCatalogEntry {
     pub description: String,
     pub page_path: Option<String>,
     pub fields: Vec<DeclarativePageField>,
+    pub backend_config: Option<super::BackendConfigBinding>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -543,10 +544,54 @@ pub fn plugin_page_catalog(game_name: String) -> Result<Vec<PluginPageCatalogEnt
                 description,
                 page_path: absolute_path,
                 fields,
+                backend_config: match page {
+                    PluginPageContribution::Declarative { backend_config, .. } => {
+                        backend_config.clone()
+                    }
+                    _ => None,
+                },
             });
         }
     }
     Ok(entries)
+}
+
+/// 仅供宿主声明式表单调用；动作只能映射到清单明确绑定的方法。
+#[tauri::command]
+pub async fn plugin_config_form_request(
+    plugin_id: String,
+    page_id: String,
+    game_name: String,
+    action: String,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let registry = PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    let scoped = registry.for_game(&game_name);
+    let plugin = scoped
+        .find(&plugin_id)
+        .filter(|plugin| plugin.enabled)
+        .ok_or("plugin is not enabled")?;
+    let binding = plugin
+        .manifest
+        .contributions
+        .pages
+        .iter()
+        .find_map(|page| match page {
+            PluginPageContribution::Declarative {
+                id,
+                backend_config: Some(binding),
+                ..
+            } if id == &page_id => Some(binding),
+            _ => None,
+        })
+        .ok_or("page does not declare backendConfig")?;
+    let method = match action.as_str() {
+        "schema" => &binding.schema_method,
+        "read" => &binding.read_method,
+        "save" => &binding.save_method,
+        _ => return Err("unsupported form action".into()),
+    };
+    super::backend::request(plugin, &game_name, method, payload, false).await
 }
 
 #[tauri::command]

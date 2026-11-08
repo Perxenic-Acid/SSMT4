@@ -9,6 +9,7 @@ import {
   ref,
   watch,
 } from 'vue'
+import BackendConfigForm from './BackendConfigForm.vue'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { onBeforeRouteLeave } from 'vue-router'
@@ -357,7 +358,7 @@ async function mountSelectedPage() {
   const page = selectedPage.value
   if (!page) return
   if (page.kind === 'declarative') {
-    await loadDeclarativeValues(page)
+    if (!page.backendConfig) await loadDeclarativeValues(page)
     return
   }
   if (page.kind === 'local-service') {
@@ -468,7 +469,8 @@ onBeforeUnmount(() => {
         <span>{{ pageError }}</span>
       </div>
 
-      <section v-if="selectedPage?.kind === 'declarative'" class="declarative-page">
+      <BackendConfigForm v-if="selectedPage?.kind === 'declarative' && selectedPage.backendConfig" :key="`${pluginId}:${gameName}:${selectedPage.pageId}`" :plugin-id="pluginId" :page-id="selectedPage.pageId" :game-name="gameName" :enabled="enabled" />
+      <section v-else-if="selectedPage?.kind === 'declarative'" class="declarative-page">
         <header>
           <strong>{{ selectedPage.title }}</strong>
           <p v-if="selectedPage.description">{{ selectedPage.description }}</p>

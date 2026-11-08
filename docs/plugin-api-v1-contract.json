@@ -1,6 +1,15 @@
 {
   "contractVersion": "1.0.0",
-  "pluginApiVersion": "1.1.0",
+  "pluginApiVersion": "1.2.0",
+  "configForm": {
+    "encoding": "ssmt-config/1",
+    "minimumPluginApi": "1.2.0",
+    "fieldKinds": ["boolean", "number"],
+    "maxGroups": 16,
+    "maxFields": 128,
+    "maxPathDepth": 8,
+    "backendActions": ["schema", "read", "save"]
+  },
   "capabilityApiVersion": 1,
   "manifestSchemaVersion": 2,
   "minimumManifestSchemaVersion": 1,

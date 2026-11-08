@@ -30,7 +30,7 @@ pub mod settings;
 
 pub const MIN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 2;
-pub const PLUGIN_API_VERSION: &str = "1.1.0";
+pub const PLUGIN_API_VERSION: &str = "1.2.0";
 pub const SUPPORTED_PLUGIN_API_VERSION: u32 = 1;
 pub const SUPPORTED_PLATFORM: &str = "windows-x64";
 
@@ -142,6 +142,12 @@ pub enum PluginPageContribution {
         description: String,
         #[serde(default)]
         fields: Vec<DeclarativePageField>,
+        #[serde(
+            default,
+            rename = "backendConfig",
+            skip_serializing_if = "Option::is_none"
+        )]
+        backend_config: Option<BackendConfigBinding>,
     },
     Static {
         id: String,
@@ -187,6 +193,14 @@ impl PluginPageContribution {
             Self::Static { path, .. } | Self::LocalService { path, .. } => Some(path),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendConfigBinding {
+    pub schema_method: String,
+    pub read_method: String,
+    pub save_method: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -785,8 +799,35 @@ fn validate_contributions(
             });
         }
         match page {
-            PluginPageContribution::Declarative { fields, .. } => {
+            PluginPageContribution::Declarative {
+                fields,
+                backend_config,
+                ..
+            } => {
                 validate_declarative_fields(fields)?;
+                if let Some(binding) = backend_config {
+                    let backend = contributions.backend.as_ref().ok_or_else(|| {
+                        PluginManifestError::InvalidContribution(
+                            "backendConfig requires a backend".into(),
+                        )
+                    })?;
+                    for method in [
+                        &binding.schema_method,
+                        &binding.read_method,
+                        &binding.save_method,
+                    ] {
+                        if !backend.methods.contains(method) {
+                            return Err(PluginManifestError::InvalidContribution(
+                                "backendConfig method is not declared".into(),
+                            ));
+                        }
+                    }
+                    if !fields.is_empty() {
+                        return Err(PluginManifestError::InvalidContribution(
+                            "backendConfig cannot be mixed with inline fields".into(),
+                        ));
+                    }
+                }
             }
             PluginPageContribution::Static { path, .. } => {
                 validate_package_path("static page", path)?;
@@ -1738,6 +1779,38 @@ mod tests {
             manifest.validate(),
             Err(PluginManifestError::InvalidExternalDependency(_))
         ));
+    }
+
+    #[test]
+    fn backend_config_binds_only_declared_methods_and_does_not_mix_storage() {
+        let mut value = serde_json::json!({
+            "schemaVersion":2,"id":"example.form","name":"Form","version":"1.0.0","author":"Example",
+            "compatibility":{"ssmt":">=4.2.2","pluginApi":">=1.2.0 <2.0.0","platforms":["windows-x64"]},
+            "contributions":{
+                "backend":{"executable":"backend.exe","sha256":"a".repeat(64),"methods":["form.schema","form.read","form.save"]},
+                "pages":[{"kind":"declarative","id":"settings","title":"Settings","backendConfig":{"schemaMethod":"form.schema","readMethod":"form.read","saveMethod":"form.save"}}]
+            },"permissions":["process.spawn"]
+        });
+        let parsed = PluginManifest::from_json_str(&value.to_string()).unwrap();
+        let encoded = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            encoded["contributions"]["pages"][0]["backendConfig"]["schemaMethod"],
+            "form.schema"
+        );
+        value["contributions"]["pages"][0]["backendConfig"]["saveMethod"] =
+            serde_json::json!("not.declared");
+        assert!(PluginManifest::from_json_str(&value.to_string()).is_err());
+        value["contributions"]["pages"][0]["backendConfig"]["saveMethod"] =
+            serde_json::json!("form.save");
+        value["contributions"]["pages"][0]["fields"] =
+            serde_json::json!([{"key":"enabled","label":"Enabled","kind":"boolean"}]);
+        assert!(PluginManifest::from_json_str(&value.to_string()).is_err());
+        value["contributions"]["pages"][0]["fields"] = serde_json::json!([]);
+        value["contributions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("backend");
+        assert!(PluginManifest::from_json_str(&value.to_string()).is_err());
     }
 
     #[test]

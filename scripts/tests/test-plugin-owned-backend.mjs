@@ -26,6 +26,11 @@ test('Player Tweaks packaged backend preserves settings, prepares INI and report
       assert.equal(child.status, 0, child.stderr)
       return JSON.parse(child.stdout)
     }
+    const schema = call('settings.schema')
+    assert.equal(schema.ok, true)
+    assert.equal(schema.value.encoding, 'ssmt-config/1')
+    assert.deepEqual(schema.value.groups.map(group => group.id), ['camera', 'gameplay'])
+    assert.equal(schema.value.groups[0].fields.find(field => field.path[1] === 'fov').step, 0.1)
     const initial = call('settings.read')
     assert.equal(initial.ok, true)
     assert.equal(initial.value.camera.fov, 75)
@@ -42,6 +47,9 @@ test('Player Tweaks packaged backend preserves settings, prepares INI and report
     assert.equal(call('settings.read').value.gameplay.targetFps, 120)
     assert.equal(call('not-a-method').ok, false)
     context.gamePreset = 'SRMI'
+    const railSchema = call('settings.schema').value
+    assert.deepEqual(railSchema.groups.map(group => group.id), ['gameplay'])
+    assert.deepEqual(railSchema.groups[0].fields.map(field => field.path), [['gameplay', 'fpsUnlock']])
     const disabled = call('settings.read').value
     disabled.gameplay.fpsUnlock = false
     assert.equal(call('settings.save', disabled).ok, true)

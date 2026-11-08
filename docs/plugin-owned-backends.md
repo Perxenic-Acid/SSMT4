@@ -8,7 +8,7 @@
 
 | 插件 | 新包 | 实现 |
 |---|---|---|
-| Player Tweaks | `ssmt.player-tweaks/0.2.0` | `native/crates/player-tweaks-backend`，包内静态设置页 |
+| Player Tweaks | `ssmt.player-tweaks/0.2.1` | `native/crates/player-tweaks-backend`，宿主统一配置表单 |
 | HoYoShade | `ssmt.hoyoshade.bridge/0.2.0` | `native/crates/hoyoshade-backend`，包内策略与静态状态页 |
 | DLSS5 | `ssmt.dlss5.integration/0.3.0` | `native/crates/dlss5-backend`、`native/dlss5-integration-ui` |
 | Poser | `ssmt.poser.genshin-probe/0.1.1` | 已通过通用 `runtimePlugins` 接入，无本体业务分支 |
@@ -131,3 +131,27 @@ node scripts/dev/verify-plugin-isolation.mjs
 - 本体及 DLSS5 页面类型检查、构建通过；19 个官方包通过契约检查，本体全部 337 个源码文件通过插件隔离检查。
 
 开发包使用新构建的后台和页面，以及本机已有的固定 DLL 组件；这不等同于重新编译这些 DLL，也不替代实机验收。未执行发行包构建，未推送提交。
+
+## 宿主统一配置表单
+
+Plugin API 1.2 在既有 `declarative` 页面上增加可选 `backendConfig`。三个动作只能映射到本插件后台已声明的方法，不接受页面指定任意命令；每次调用重新检查插件安装、启用、游戏作用域与后台文件哈希。原有内联 `fields` 继续使用旧设置存储，两种绑定不能混用。
+
+```json
+{"kind":"declarative","id":"settings","title":"设置","backendConfig":{"schemaMethod":"settings.schema","readMethod":"settings.read","saveMethod":"settings.save"}}
+```
+
+插件返回私有配置描述编码 `ssmt-config/1`，当前是带格式标识的 JSON，不是加密或代码沙箱。宿主只解码固定控件，不执行 HTML、CSS、脚本或表达式。插件描述业务字段、分组及各游戏差异；宿主提供 Element Plus 控件、主题、加载和保存反馈。
+
+```json
+{"encoding":"ssmt-config/1","title":"设置","groups":[{"id":"general","title":"通用","fields":[{"path":["options","enabled"],"kind":"boolean","label":"启用"},{"path":["options","amount"],"kind":"number","label":"数值","min":0,"max":10,"step":0.1}]}]}
+```
+
+`read` 返回配置对象；宿主仅修改声明的绑定路径，再将完整对象交给 `save`，保留其他游戏或隐藏选项。保存返回规范化后的配置对象。业务约束仍由插件后台校验。解码器拒绝未知编码、未知控件、原型路径、重复或祖先路径冲突、非有限数值及无效范围；最多 16 组、128 字段、8 层路径。
+
+Player Tweaks 0.2.1 使用此接口，0.2.0 保留为历史开发包。已安装旧版本时，从插件市场的本地开发包安装 0.2.1；构建与发现不会自动替换已安装插件。
+
+### Debug 构建的固定组件
+
+`build_native.ps1` 默认 Debug 构建过去只生成 DLSS5 后台、页面和 Bridge，缺少 OptiScaler 时跳过新版插件包。现在 Native 构建入口通过 `stage-optiscaler.ps1` 校验固定 Release 组件的来源、提交、大小和 DLL 哈希，再供 Debug 或其他产物目录复用。没有组件时明确提示先执行 `native/tools/build-optiscaler.ps1 -SourceDirectory <固定提交源码目录>`，不再把后台构建成功等同于完整包就绪。跳过其他未构建包时会列出缺少的文件。
+
+本次已运行默认 `build_native.ps1` 与 `bun tauri dev`，生成 DLSS5 0.3.0 和 Player Tweaks 0.2.1 开发包，并完成临时注册表安装校验。配置解码、保存失败重试、停用后禁止保存，以及插件按游戏返回描述均有回归；浏览器预览使用假后台数据检查布局，不代表真实游戏验收。

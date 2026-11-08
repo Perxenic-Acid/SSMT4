@@ -32,6 +32,7 @@ export interface PluginPageCatalogEntry {
   kind: PluginPageKind
   description?: string
   pagePath?: string | null
+  backendConfig?: { schemaMethod: string; readMethod: string; saveMethod: string } | null
   fields?: DeclarativePageField[]
 }
 
@@ -172,3 +173,5 @@ export const requestPluginCapabilityForLease = async (
     payload,
     requestId,
   })
+
+export const requestPluginConfigForm = (pluginId: string, pageId: string, gameName: string, action: 'schema' | 'read' | 'save', payload: unknown = null): Promise<unknown> => invoke('plugin_config_form_request', { pluginId, pageId, gameName, action, payload })

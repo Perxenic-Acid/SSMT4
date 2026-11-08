@@ -22,3 +22,7 @@ Player Tweaks 的事务代码及相关内存回归在 `native/crates/player-twea
 合并计划失败时只撤回 `launch.cancel`，不能清除其他已经成功的 `prepare` 状态后继续注入其 DLL。整条启动未提交时才执行完整 `cancel`。取消请求携带原启动上下文，避免配置切换后恢复错误的游戏目标。
 
 执行 `node scripts/dev/verify-plugin-isolation.mjs` 防止插件专用路由、组件、策略枚举或依赖回流。本体只提供通用目录选择、HTTPS 打开和后台代理；包内页面不得调用旧专有 Tauri 命令。
+
+简单配置页面优先使用 Plugin API 1.2 的 `declarative.backendConfig`，由插件返回 `ssmt-config/1`，宿主统一解码与渲染。不要在宿主按字段名或插件 ID 特判；不要将 HTML、脚本、表达式作为配置编码。新字段先检查解码器版本、绑定路径安全、隐藏配置保留与后台方法白名单。
+
+验证默认 Debug 构建时必须检查最终 `.ssmtpkg`，不能只看后台 EXE。固定 Release 组件通过 Native 的 `stage-optiscaler.ps1` 校验后复用；缺少组件需给出明确构建入口，不能拿旧版本包掩盖失败。

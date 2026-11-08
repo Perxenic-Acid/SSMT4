@@ -120,7 +120,7 @@ const expectedLatest = new Map([
   ['ssmt.dlss5.integration', { version: '0.3.0', schemaVersion: 2, pageKind: 'static', draft: true, optionalInSubset: true }],
   ['ssmt.hoyoshade.bridge', { version: '0.2.0', schemaVersion: 2, pageKind: 'static', draft: true, optionalInSubset: true }],
   ['ssmt.liquid-gravity-probe', { version: '0.2.33', schemaVersion: 2, pageKind: 'local-service' }],
-  ['ssmt.player-tweaks', { version: '0.2.0', schemaVersion: 2, pageKind: 'static', optionalInSubset: true }],
+  ['ssmt.player-tweaks', { version: '0.2.1', schemaVersion: 2, pageKind: 'declarative', optionalInSubset: true }],
   ['ssmt.poser.genshin-probe', { version: '0.1.1', schemaVersion: 1, optionalInSubset: true }],
   ['ssmt.secondary-motion', { version: '3.3.4', schemaVersion: 2, pageKind: 'static' }],
 ])
@@ -245,7 +245,7 @@ assert.equal(
   'install-visible-incompatible',
   'Future Plugin API compatibility policy changed',
 )
-assert.equal(minor, 1, 'Plugin API 1.1 backend contract has an unexpected minor version')
+assert.equal(minor, 2, 'Plugin API 1.2 config-form contract has an unexpected minor version')
 assert.equal(patch, 0, 'Plugin API 1 contract was frozen at an unexpected patch version')
 
 console.log(JSON.stringify({
