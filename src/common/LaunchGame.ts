@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { exists, mkdir, copyFile, remove } from "@tauri-apps/plugin-fs";
+import { exists, mkdir, copyFile } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ResourceManager } from "../store/ResourceManager";
@@ -575,6 +575,7 @@ export class LaunchGame {
     ): Promise<'native' | 'direct' | false> {
         let managedStagedTarget: string | null = null;
         let launchSubmitted = false;
+        let pluginBackendsStarted = false;
         let runtimeDirectory: string | undefined;
         try {
             const pureMode =
@@ -595,7 +596,8 @@ export class LaunchGame {
             const launchTargetProgram = config.launchTargetProgram !== false;
             const pureDirectTarget = pureMode && launchTargetProgram;
             if (!pureDirectTarget) {
-                await this.ensureSSMTRuntimeFiles(migotoDir, gameName, config.gamePreset);
+                pluginBackendsStarted = true;
+                await this.preparePluginBackends(gameName, migotoDir);
             }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
@@ -950,6 +952,10 @@ export class LaunchGame {
             );
             throw e;
         } finally {
+            if (!launchSubmitted && pluginBackendsStarted) {
+                await invoke<string[]>("plugin_backend_lifecycle", { gameName, event: "cancel" }).catch(error =>
+                    console.warn("插件后台取消失败：", error));
+            }
             if (!launchSubmitted && runtimeDirectory) {
                 await invoke('cancel_runtime_deployment', { directory: runtimeDirectory }).catch(error =>
                     console.warn('撤回未提交的 Runtime 部署失败：', error));
@@ -966,24 +972,17 @@ export class LaunchGame {
         }
     }
 
-    private static async ensureSSMTRuntimeFiles(
-        migotoDir: string,
+    private static async preparePluginBackends(
         gameName: string,
-        gamePreset?: string,
+        runtimeDirectory: string,
     ): Promise<void> {
-        const dllTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.dll");
-        const configTargetPath = await join(migotoDir, "SSMT-Player-Tweaks.ini");
-        // Legacy versions copied the package DLL and generated INI into the
-        // 3Dmigoto root. New package versions are injected directly and keep
-        // their generated config beside the package DLL.
-        if (await exists(dllTargetPath)) await remove(dllTargetPath);
-        if (await exists(configTargetPath)) await remove(configTargetPath);
         try {
-            await invoke<unknown>("prepare_player_tweaks_launch", {
-                gameName, gamePreset: gamePreset || "",
-            });
+            const warnings = await invoke<string[]>("plugin_backend_lifecycle", { gameName, event: "prepare", launchContext: { runtimeDirectory } });
+            for (const warning of warnings) {
+                ElMessage.warning({ message: warning, showClose: true, duration: 12000 });
+            }
         } catch (error) {
-            ElMessage.warning({ message: `Player Tweaks 准备失败，本次继续普通启动：${String(error)}`, showClose: true, duration: 12000 });
+            ElMessage.warning({ message: t("launchGame.messages.pluginBackendPrepareFailed", { error: String(error) }), showClose: true, duration: 12000 });
         }
     }
 

@@ -4752,6 +4752,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssmt-plugin-graphics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "ssmt4"
 version = "1.0.0"
 dependencies = [
@@ -4774,6 +4783,7 @@ dependencies = [
  "serde_json",
  "sevenz-rust",
  "sha2",
+ "ssmt-plugin-graphics",
  "sysinfo",
  "tauri",
  "tauri-build",

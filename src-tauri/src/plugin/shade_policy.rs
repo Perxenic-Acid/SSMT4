@@ -18,12 +18,7 @@ pub(super) struct Policy {
     addons: String,
 }
 
-pub(super) struct Contribution {
-    pub source: String,
-    pub config: String,
-    pub preset: String,
-    pub addons: BTreeMap<String, PathBuf>,
-}
+pub(super) use ssmt_plugin_graphics::reshade_state::Contribution;
 
 impl Policy {
     pub fn load(plugin: &InstalledPlugin) -> Result<Self, String> {

@@ -10,7 +10,7 @@ Rust 能力目录和前端桥版本必须与快照一致。
 
 | 契约 | 当前版本 | 演进规则 |
 |---|---:|---|
-| Plugin API | `1.0.0` | `1.x` 只增不改；删除、重命名或改变语义必须发布 `2.0.0` |
+| Plugin API | `1.1.0` | `1.x` 只增不改；删除、重命名或改变语义必须发布 `2.0.0` |
 | Capability API | `1` | 能力 ID、权限和响应结构以快照为准 |
 | Manifest Schema | `2` | 与 Plugin API 分开演进；未知字段仍拒绝 |
 | 页面桥协议 | `1` | 消息名、字段和来源校验改变时必须提升协议版本 |
@@ -21,6 +21,10 @@ Rust 能力目录和前端桥版本必须与快照一致。
 新增能力时提升 Plugin API 次版本（例如 `1.1.0`），同步更新冻结快照和能力目录；
 已有声明 `>=1.0.0 <2.0.0` 的插件继续可用。插件若必须依赖新能力，可声明
 `>=1.1.0 <2.0.0`，旧宿主会把它显示为不兼容。
+
+`1.1.0` 增加包内后台 JSON 协议及通用启动贡献。后台可声明 `launch.describe`、
+`launch.prepare`、`launch.commit`、`launch.cancel`；启动共享数据保持不透明，
+权限、资源仲裁与回滚规则见 [插件自有后台](plugin-owned-backends.md)。
 
 ## 升级原则
 
@@ -49,12 +53,16 @@ Rust 能力目录和前端桥版本必须与快照一致。
 | DLSS5 Integration | `0.3.0` | 2 | `>=1.0.0 <2.0.0` | `static`；仍为不可发布草稿 |
 | HoYoShade Bridge | `0.2.0` | 2 | `>=1.0.0 <2.0.0` | 旧设置组件兼容入口 |
 | Liquid Gravity Probe | `0.2.33` | 2 | `>=1.0.0 <2.0.0` | `local-service` |
-| Player Tweaks | `0.2.0` | 2 | `>=1.0.0 <2.0.0` | `static` |
+| Player Tweaks | `0.2.0` | 2 | `>=1.1.0 <2.0.0` | `static` + 插件自有后台；开发包 |
 | Poser | `0.1.1` | 1 | legacy `pluginApiVersion: 1` | 无通用页面 |
 | Secondary Motion | `3.3.4` | 2 | `>=1.0.0 <2.0.0` | `static` |
 
 DLSS5 后续迁移已跳过，因此其 0.3.0 仅作为开发快照保留 `publish: false`，不纳入正式
 发布矩阵。
+
+## Plugin API 1.1 后台扩展
+
+新增 `plugin.backend.request`、清单 `backend` 声明及 `injectedDlls[].executableNames`。方法身份来自租约，业务逻辑由包内 EXE 执行；详见 [插件自有后台](plugin-owned-backends.md)。旧 1.0 插件继续兼容。
 
 ## 页面桥
 

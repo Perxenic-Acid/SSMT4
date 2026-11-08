@@ -45,6 +45,9 @@ pub(super) fn extensions(plugin: &InstalledPlugin) -> Vec<HostExtensionContribut
     if !plugin.manifest.contributions.host_extensions.is_empty() {
         return plugin.manifest.contributions.host_extensions.clone();
     }
+    if plugin.manifest.schema_version >= 2 || plugin.manifest.contributions.backend.is_some() {
+        return Vec::new();
+    }
     let (provider, priority, settings) = match plugin.id() {
         super::dlss5::DLSS5_PLUGIN_ID => ("ssmt.graphics.dlss5", 100, "ssmt.dlss5.settings"),
         super::hoyoshade::HOYOSHADE_PLUGIN_ID => {
@@ -343,39 +346,19 @@ mod tests {
 
     #[test]
     fn schema_two_graphics_profiles_are_strategy_based() {
-        let profiles = [
-            (
-                "../native/official-plugin-packages/ssmt.hoyoshade.bridge/0.2.0/ssmt-plugin.json",
-                "reshade-hot",
-                "ssmt.reshade.settings",
-            ),
-            (
-                "../native/official-plugin-packages/ssmt.dlss5.integration/0.3.0/ssmt-plugin.json",
-                "dlss5-hot",
-                "ssmt.dlss5.settings",
-            ),
-        ];
-        let present = profiles
-            .iter()
-            .filter(|(path, _, _)| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join(path)
-                    .is_file()
-            })
-            .count();
-        assert!(
-            present == 0 || present == profiles.len(),
-            "schema-two graphics fixture set is only partially present"
-        );
-        if present == 0 {
-            eprintln!("schema-two graphics fixtures are outside the minimal Native checkout");
-            return;
-        }
-        for (path, strategy, settings) in profiles {
-            let raw =
-                fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
-                    .unwrap();
-            let manifest = super::super::PluginManifest::from_json_str(&raw).unwrap();
+        for (strategy, settings) in [
+            ("reshade-hot", "ssmt.reshade.settings"),
+            ("dlss5-hot", "ssmt.dlss5.settings"),
+        ] {
+            let manifest = super::super::PluginManifest::from_json_str(&serde_json::json!({
+                "schemaVersion":2,"id":"example.graphics","name":"Example","version":"1.0.0","author":"Example",
+                "compatibility":{"ssmt":">=4.2.2","pluginApi":">=1.0.0 <2.0.0","platforms":["windows-x64"]},
+                "contributions":{
+                    "graphicsProfiles":[{"id":"graphics","strategy":strategy,"resources":["graphics.host"],"settingsComponent":settings}],
+                    "pages":[{"kind":"static","id":"settings","title":"Settings","path":"ui/index.html"}]
+                },
+                "permissions":["filesystem.read","filesystem.write","native.inject"]
+            }).to_string()).unwrap();
             let plugin = InstalledPlugin {
                 manifest,
                 package_root: std::path::PathBuf::from("fixture"),

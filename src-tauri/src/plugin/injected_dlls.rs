@@ -41,6 +41,13 @@ fn injected_dlls_for_game(game_name: &str) -> Result<PluginInjectedDllsResult, S
     let mut dlls = Vec::new();
     let mut warnings = Vec::new();
     for plugin in scoped.selected_plugins().filter(|plugin| plugin.enabled) {
+        if !super::backend::launch_allowed(game_name, plugin) {
+            warnings.push(format!(
+                "插件 {} 的后台准备未完成，已跳过本次注入",
+                plugin.manifest.name
+            ));
+            continue;
+        }
         if plugin.manifest.contributions.injected_dlls.is_empty() {
             continue;
         }
@@ -64,6 +71,22 @@ fn injected_dlls_for_game(game_name: &str) -> Result<PluginInjectedDllsResult, S
             continue;
         }
         for contribution in &plugin.manifest.contributions.injected_dlls {
+            let config_path =
+                crate::config::path_manager::PathManager::global_config_games_game_folder(
+                    game_name,
+                )
+                .join("Config.json");
+            let config: serde_json::Value = std::fs::read(config_path)
+                .ok()
+                .and_then(|raw| serde_json::from_slice(&raw).ok())
+                .unwrap_or_default();
+            let executable = config
+                .get("targetExePath")
+                .and_then(serde_json::Value::as_str)
+                .map(std::path::Path::new);
+            if !contribution.applies_to_executable(executable) {
+                continue;
+            }
             if let Err(error) = contribution.verify_file(&plugin.package_root) {
                 warnings.push(format!(
                     "插件 {} v{} 的注入 DLL 校验失败：{error}",

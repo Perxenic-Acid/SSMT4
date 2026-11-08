@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 
+pub mod backend;
+pub mod backend_launch;
 pub mod capability_broker;
 pub mod commands;
 pub mod data_store;
@@ -27,7 +29,6 @@ pub mod launch_plan;
 pub mod local_packages;
 pub mod logging;
 pub mod managed_cold_files;
-mod managed_files;
 pub mod managed_reshade;
 pub mod managed_reshade_journal;
 pub mod managed_stack;
@@ -35,17 +36,15 @@ pub mod marketplace;
 pub mod official_release;
 pub mod package_installer;
 pub mod page_runtime;
-pub mod player_tweaks;
 pub mod process_forwarder;
 pub mod registry;
 pub mod resource_cache;
 pub mod settings;
 mod shade_policy;
-pub mod star_rail_tweaks;
 
 pub const MIN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 2;
-pub const PLUGIN_API_VERSION: &str = "1.0.0";
+pub const PLUGIN_API_VERSION: &str = "1.1.0";
 pub const SUPPORTED_PLUGIN_API_VERSION: u32 = 1;
 pub const SUPPORTED_PLATFORM: &str = "windows-x64";
 
@@ -121,6 +120,8 @@ impl PluginCompatibility {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginContributions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<backend::BackendContribution>,
     #[serde(default)]
     pub host_extensions: Vec<host_extensions::HostExtensionContribution>,
     #[serde(default)]
@@ -373,11 +374,25 @@ pub struct RuntimePluginContribution {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InjectedDllContribution {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executable_names: Vec<String>,
     #[serde(default)]
     pub sha256: Option<String>,
 }
 
 impl InjectedDllContribution {
+    pub fn applies_to_executable(&self, executable: Option<&Path>) -> bool {
+        self.executable_names.is_empty()
+            || executable
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    self.executable_names
+                        .iter()
+                        .any(|expected| name.eq_ignore_ascii_case(expected))
+                })
+    }
+
     pub fn verify_file(&self, package_root: &Path) -> Result<(), String> {
         let path = package_root.join(&self.path);
         if !path.is_file() {
@@ -552,7 +567,9 @@ impl std::error::Error for PluginManifestError {}
 impl PluginManifest {
     pub fn is_app_scoped(&self) -> bool {
         self.compatibility.games.is_empty()
-            && (!self.contributions.ui_pages.is_empty() || !self.contributions.pages.is_empty())
+            && (!self.contributions.ui_pages.is_empty()
+                || !self.contributions.pages.is_empty()
+                || self.contributions.backend.is_some())
             && self.contributions.runtime_plugins.is_empty()
             && self.contributions.injected_dlls.is_empty()
             && self.contributions.launcher_adapters.is_empty()
@@ -658,6 +675,14 @@ impl PluginManifest {
         validate_contributions(&self.contributions, &self.external_dependencies)?;
         validate_external_dependencies(&self.external_dependencies)?;
         validate_permissions(&self.permissions)?;
+        if let Some(backend) = &self.contributions.backend {
+            backend.validate()?;
+            if !self.permissions.contains(&PluginPermission::ProcessSpawn) {
+                return Err(PluginManifestError::InvalidContribution(
+                    "backend requires process.spawn".into(),
+                ));
+            }
+        }
         validate_launch_hook_permissions(&self.contributions.launch_hooks, &self.permissions)?;
         if !self.contributions.data_directories.is_empty()
             && (!self.permissions.contains(&PluginPermission::FilesystemRead)

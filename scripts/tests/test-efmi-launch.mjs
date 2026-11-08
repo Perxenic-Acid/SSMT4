@@ -17,7 +17,7 @@ function load(relative, mocks) {
   return exports;
 }
 
-function harness(config, hostConfig = null, hotRuntime = null, settingsError = null, shadeHotRuntime = null, pluginInjectedDlls = []) {
+function harness(config, hostConfig = null, hotRuntime = null, settingsError = null, shadeHotRuntime = null, pluginInjectedDlls = [], backendError = null) {
   let ini = '[Loader]\nloader = XXMI Launcher.exe\nlaunch = C:/old.exe\nlaunch_args = old\nmodule = d3d11.dll\n';
   const calls = [];
   const messages = [];
@@ -39,14 +39,17 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
     '../store/GlobalConfig': {},
     '../store/GameConfig': {},
     '../utils/debugLog': { debugLog() {}, debugWarn() {} },
-    '../plugin/playerTweaksCamera': {},
-    '../plugin/playerTweaksGameplay': {},
     'element-plus': {
       ElMessage: Object.fromEntries(['info', 'success', 'error', 'warning'].map(kind => [kind, message => messages.push({ kind, message })])),
       ElMessageBox: { alert: async (...args) => { throw new Error(`Unexpected alert: ${args}`); } },
     },
     '@tauri-apps/api/core': { invoke: async (command, args) => {
       calls.push({ command, args });
+      if (command === 'plugin_backend_lifecycle') {
+        if (backendError && args.event === 'prepare') throw backendError;
+        return [];
+      }
+      if (command === 'cancel_runtime_deployment') return;
       if (command === 'prepare_plugin_host_config') return hostConfig;
       if (command === 'plugin_launch_injected_dlls') return { dlls: pluginInjectedDlls, warnings: [] };
       if (command === 'prepare_hoyoshade_launch') return null;
@@ -87,7 +90,6 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
   const launchPaths = load('../../src/common/LaunchPath.ts', mocks);
   const versions = load('../../src/common/UpdateCheckUtils.ts', {});
   const launch = load('../../src/common/LaunchGame.ts', { ...mocks, './LaunchPath': launchPaths, './UpdateCheckUtils': versions, '../store/MigotoManager': { MigotoManager: migoto } }).LaunchGame;
-  launch.ensureSSMTRuntimeFiles = async () => {};
   launch.ensureSSMTPluginHostFile = async () => {};
   const preflight = launch.prepareLaunch.bind(launch);
   launch.prepareLaunch = async () => ({ migotoDir: 'C:/Migoto', config, targetExe: config.targetExePath, graphicsDecision: 'continue_this_launch' });
@@ -95,6 +97,16 @@ function harness(config, hostConfig = null, hotRuntime = null, settingsError = n
 }
 
 const base = { gamePreset: 'EFMI', targetExePath: 'C:/Game/Endfield.exe', launchArgs: '-force-d3d11', launchTargetProgram: true };
+
+test('通用插件后台不可用时继续普通启动，纯净直启不执行后台生命周期', async () => {
+  const failed = harness({ ...base, launcherExePath: 'C:/Official/Games.exe' }, null, null, null, null, [], new Error('backend unavailable'));
+  await failed.launch.launch('EFMI', { gameLaunchMode: 'always-normal' }, () => {});
+  assert.ok(failed.calls.some(call => call.command === 'launch_programs'));
+  assert.ok(failed.messages.some(message => message.kind === 'warning'));
+  const pure = harness({ ...base, launcherExePath: 'C:/Official/Games.exe' });
+  await pure.launch.launch('EFMI', { gameLaunchMode: 'always-pure' }, () => {});
+  assert.equal(pure.calls.some(call => call.command === 'plugin_backend_lifecycle'), false);
+});
 
 for (const useShell of [false, true]) {
   for (const launchTargetProgram of [false, true]) {

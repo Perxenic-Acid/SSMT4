@@ -129,6 +129,11 @@ pub fn inspect_ssmtpkg(archive_path: &Path) -> Result<PackageInspection, Package
         }
     })?;
     let manifest = PluginManifest::from_json_str(&raw)?;
+    if let Some(backend) = &manifest.contributions.backend {
+        require_package_file(temporary.path(), &backend.executable)?;
+        super::backend::verify_backend(temporary.path(), backend)
+            .map_err(PackageInstallError::InvalidArchive)?;
+    }
     for runtime in &manifest.contributions.runtime_plugins {
         require_package_file(temporary.path(), &runtime.path)?;
     }

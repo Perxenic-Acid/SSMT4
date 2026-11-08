@@ -1,6 +1,6 @@
 {
   "contractVersion": "1.0.0",
-  "pluginApiVersion": "1.0.0",
+  "pluginApiVersion": "1.1.0",
   "capabilityApiVersion": 1,
   "manifestSchemaVersion": 2,
   "minimumManifestSchemaVersion": 1,
@@ -124,6 +124,12 @@
       "permissions": []
     },
     {
+      "id": "plugin.backend.request",
+      "permissions": [
+        "process.spawn"
+      ]
+    },
+    {
       "id": "plugin.data.list",
       "permissions": [
         "filesystem.read"
@@ -197,6 +203,7 @@
     }
   ],
   "errorCodes": [
+    "backend_failed",
     "bridge_error",
     "capability_denied",
     "capability_not_supported",

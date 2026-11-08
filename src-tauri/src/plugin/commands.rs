@@ -224,7 +224,7 @@ fn inspect_graphics_for_launch(
         .ok_or_else(|| "game executable has no file name".to_string())?;
     let hoyoshade_requested = registry
         .find(HOYOSHADE_PLUGIN_ID)
-        .filter(|plugin| plugin.enabled)
+        .filter(|plugin| plugin.enabled && plugin.manifest.contributions.backend.is_none())
         .map(|plugin| {
             HoYoShadeBridge::from_installed(plugin)
                 .map(|bridge| bridge.supports_process(process_name))
@@ -807,12 +807,24 @@ pub fn set_plugin_enabled_for_game(
             Dlss5State::Managed(_) | Dlss5State::NotManaged => {}
         }
     }
-    if id == super::star_rail_tweaks::PLUGIN_ID
-        && !enabled
-        && registry.find(&id).is_some()
-        && game_scope_preset(&game_name).eq_ignore_ascii_case("SRMI")
-    {
-        super::star_rail_tweaks::release_for_game(&game_name)?;
+    if !enabled && registry.game_enabled(&game_name, &id) {
+        if let Some(plugin) = registry.find(&id) {
+            if plugin
+                .manifest
+                .contributions
+                .backend
+                .as_ref()
+                .is_some_and(|backend| backend.events.iter().any(|event| event == "disabled"))
+            {
+                tauri::async_runtime::block_on(super::backend::request(
+                    plugin,
+                    &game_name,
+                    "disabled",
+                    serde_json::Value::Null,
+                    true,
+                ))?;
+            }
+        }
     }
     if registry
         .find(&id)
@@ -1739,6 +1751,7 @@ mod tests {
                     .any(|id| id == super::super::hoyoshade::HOYOSHADE_PLUGIN_ID)
                     && scoped
                         .find(super::super::hoyoshade::HOYOSHADE_PLUGIN_ID)
+                        .filter(|plugin| plugin.manifest.contributions.backend.is_none())
                         .is_some_and(|plugin| {
                             super::super::hoyoshade::HoYoShadeBridge::from_installed(plugin)
                                 .unwrap()
@@ -1916,6 +1929,7 @@ mod tests {
             contributions: PluginContributions {
                 injected_dlls: vec![crate::plugin::InjectedDllContribution {
                     path: "plugin/sbm.dll".to_string(),
+                    executable_names: Vec::new(),
                     sha256: None,
                 }],
                 ..PluginContributions::default()

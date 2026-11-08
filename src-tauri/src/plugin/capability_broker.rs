@@ -20,6 +20,7 @@ use tauri_plugin_dialog::DialogExt;
 pub const CAPABILITY_API_VERSION: u32 = 1;
 
 pub const CAPABILITY_ERROR_CODES: &[&str] = &[
+    "backend_failed",
     "bridge_error",
     "capability_denied",
     "capability_not_supported",
@@ -227,6 +228,19 @@ async fn execute_capability(
     }
 
     match capability {
+        "plugin.backend.request" => {
+            require_permission(plugin, PluginPermission::ProcessSpawn)?;
+            let method = payload_string(&payload, "method")?;
+            super::backend::request(
+                plugin,
+                game_name,
+                method,
+                payload.get("payload").cloned().unwrap_or(Value::Null),
+                false,
+            )
+            .await
+            .map_err(|error| ("backend_failed", error))
+        }
         "plugin.settings.get" => {
             let key = payload_key(&payload)?;
             let store = PluginSettingsStore::from_default_location()
@@ -873,6 +887,13 @@ fn failure(
 
 fn descriptors() -> Vec<CapabilityDescriptor> {
     vec![
+        descriptor(
+            "plugin.backend.request",
+            "Call a method declared by the plugin-owned backend",
+            &["process.spawn"],
+            json!({"type":"object","required":["method"],"properties":{"method":{"type":"string"},"payload":{}}}),
+            json!({}),
+        ),
         descriptor(
             "plugin.settings.get",
             "Read a key from this plugin's settings namespace.",

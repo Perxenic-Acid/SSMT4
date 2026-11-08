@@ -34,7 +34,7 @@ pub struct ResolvedPlugin {
 }
 
 impl ResolvedPlugin {
-    fn from_installed(plugin: &InstalledPlugin) -> Self {
+    fn from_installed(plugin: &InstalledPlugin, executable: Option<&std::path::Path>) -> Self {
         Self {
             id: plugin.manifest.id.clone(),
             version: plugin.manifest.version.clone(),
@@ -51,6 +51,7 @@ impl ResolvedPlugin {
                 .contributions
                 .injected_dlls
                 .iter()
+                .filter(|injected| injected.applies_to_executable(executable))
                 .map(|injected| plugin.package_root.join(&injected.path))
                 .collect(),
             launcher_adapter_count: plugin.manifest.contributions.launcher_adapters.len(),
@@ -271,7 +272,10 @@ impl<'a> LaunchCoordinator<'a> {
             .filter(|plugin| plugin.enabled)
             .map(|plugin| {
                 validate_plugin_preflight(plugin)?;
-                Ok(ResolvedPlugin::from_installed(plugin))
+                Ok(ResolvedPlugin::from_installed(
+                    plugin,
+                    session.plan.request.game_executable.as_deref(),
+                ))
             })
             .collect::<Result<Vec<_>, LaunchCoordinatorError>>()?;
         session.plan.launcher_adapter_count = enabled_plugins

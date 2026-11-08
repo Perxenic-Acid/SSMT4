@@ -67,6 +67,14 @@ impl PluginSettingsStore {
             .and_then(|namespace| namespace.get(key).cloned()))
     }
 
+    pub fn namespace(&self, plugin_id: &str) -> BTreeMap<String, Value> {
+        self.state
+            .namespaces
+            .get(plugin_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn remove_namespace(&mut self, plugin_id: &str) -> Result<(), PluginSettingsError> {
         if self.state.namespaces.remove(plugin_id).is_some() {
             write_state(&self.path, &self.state)?;
