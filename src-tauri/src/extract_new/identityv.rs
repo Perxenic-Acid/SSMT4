@@ -764,6 +764,7 @@ impl IdentityVNewExtractor {
             &self.fa,
             &sync_drawib_config,
             &self.workspace_path,
+            !self.specify_drawib_extract,
         )?;
         Ok(())
     }

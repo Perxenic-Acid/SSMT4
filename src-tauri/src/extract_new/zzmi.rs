@@ -932,26 +932,28 @@ impl ZZMINewExtractor {
                 crate::extract_log!("未找到对应PointlistIndex，该DrawIB可能为CPU-PreSkinning类型");
             }
 
-            let extract_success = self.extract_fee307b98a965c16(
-                &draw_ib,
-                &pointlist_index,
-                &trianglelist_index_list,
-                data_type_filter,
-            )?;
-
-            if !extract_success {
-                crate::extract_new::log_skipped_drawib(
-                    draw_ib,
+            let extract_success = crate::extract_new::evaluate_drawib_extraction(
+                draw_ib,
+                self.extract_fee307b98a965c16(
+                    &draw_ib,
+                    &pointlist_index,
+                    &trianglelist_index_list,
+                    data_type_filter,
+                ),
+                || {
                     format!(
                         "no valid data type matched. PointlistIndex: {} TrianglelistIndex: {:?}",
                         pointlist_index, trianglelist_index_list
-                    ),
-                );
+                    )
+                },
+                !self.specify_drawib_extract,
+            )?;
+            if !extract_success {
                 continue;
             }
         }
 
-        self.sync_zzmi_textures_and_json(draw_ib_list)?;
+        self.sync_zzmi_textures_and_json(draw_ib_list, !self.specify_drawib_extract)?;
         Ok(())
     }
 
@@ -961,7 +963,11 @@ impl ZZMINewExtractor {
     /// 本方法使用与模型提取阶段完全相同的部件归组逻辑
     /// （`collect_zzmi_components` + BOTH txt/buf 存在检查），
     /// 确保生成的子网格文件夹名与模型提取一致。
-    fn sync_zzmi_textures_and_json(&self, draw_ib_list: Vec<String>) -> Result<(), String> {
+    fn sync_zzmi_textures_and_json(
+        &self,
+        draw_ib_list: Vec<String>,
+        continue_after_item_error: bool,
+    ) -> Result<(), String> {
         let drawib_config = DrawIBConfig {
             path: String::new(),
             entries: draw_ib_list
@@ -1001,11 +1007,21 @@ impl ZZMINewExtractor {
                         .unwrap_or_default()
                 });
 
-            let components = self.collect_zzmi_components(
+            let components = match self.collect_zzmi_components(
                 draw_ib,
                 &trianglelist_index_list,
                 &fallback_pointlist_index,
-            )?;
+            ) {
+                Ok(components) => components,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        format!("workspace sync skipped: {}", error),
+                        continue_after_item_error,
+                    )?;
+                    continue;
+                }
+            };
 
             if components.is_empty() {
                 component_drawcall_index_list_dict

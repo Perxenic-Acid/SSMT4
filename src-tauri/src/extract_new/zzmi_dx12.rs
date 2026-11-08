@@ -2055,26 +2055,28 @@ impl ZZMIDX12NewExtractor {
                 crate::extract_log!("TriangleListIndex: {}", trianglelist_index);
             }
 
-            let extract_success = self.extract_fee307b98a965c16(
-                &draw_ib,
-                &pointlist_index,
-                &trianglelist_index_list,
-                data_type_filter,
-            )?;
-
-            if !extract_success {
-                crate::extract_new::log_skipped_drawib(
-                    draw_ib,
+            let extract_success = crate::extract_new::evaluate_drawib_extraction(
+                draw_ib,
+                self.extract_fee307b98a965c16(
+                    &draw_ib,
+                    &pointlist_index,
+                    &trianglelist_index_list,
+                    data_type_filter,
+                ),
+                || {
                     format!(
                         "no valid data type matched. PointlistIndex: {} TrianglelistIndex: {:?}",
                         pointlist_index, trianglelist_index_list
-                    ),
-                );
+                    )
+                },
+                !self.specify_drawib_extract,
+            )?;
+            if !extract_success {
                 continue;
             }
         }
 
-        self.sync_zzmi_textures_and_json(draw_ib_list)?;
+        self.sync_zzmi_textures_and_json(draw_ib_list, !self.specify_drawib_extract)?;
         Ok(())
     }
 
@@ -2084,7 +2086,11 @@ impl ZZMIDX12NewExtractor {
     /// 本方法使用与模型提取阶段完全相同的 IB 文件选取逻辑
     /// （`collect_match_first_index_ib_map` + BOTH txt/buf 存在检查），
     /// 确保生成的子网格文件夹名与模型提取一致。
-    fn sync_zzmi_textures_and_json(&self, draw_ib_list: Vec<String>) -> Result<(), String> {
+    fn sync_zzmi_textures_and_json(
+        &self,
+        draw_ib_list: Vec<String>,
+        continue_after_item_error: bool,
+    ) -> Result<(), String> {
         use std::collections::BTreeMap;
 
         let drawib_config = DrawIBConfig {
@@ -2111,74 +2117,88 @@ impl ZZMIDX12NewExtractor {
                 continue;
             }
 
-            // 使用与模型提取完全相同的 IB 文件选取逻辑
-            let match_first_index_ib_map =
-                self.collect_match_first_index_ib_map(&trianglelist_index_list)?;
+            let sync_result = (|| -> Result<(), String> {
+                // 使用与模型提取完全相同的 IB 文件选取逻辑
+                let match_first_index_ib_map =
+                    self.collect_match_first_index_ib_map(&trianglelist_index_list)?;
 
-            let mut first_index_index_count_map: BTreeMap<u64, String> = BTreeMap::new();
-            let mut first_index_trianglelist_index_map: BTreeMap<u64, Vec<String>> =
-                BTreeMap::new();
+                let mut first_index_index_count_map: BTreeMap<u64, String> = BTreeMap::new();
+                let mut first_index_trianglelist_index_map: BTreeMap<u64, Vec<String>> =
+                    BTreeMap::new();
 
-            for (&first_index, ib_txt_file_name) in match_first_index_ib_map.iter() {
-                let ib_buf_file_name =
-                    SSMTFileUtils::get_filename_with_new_extension(ib_txt_file_name, "buf")?;
-                let ib_txt_file_path = self.fa.log.get_deduped_filepath(ib_txt_file_name);
-                let ib_buf_file_path = self.fa.log.get_deduped_filepath(&ib_buf_file_name);
+                for (&first_index, ib_txt_file_name) in match_first_index_ib_map.iter() {
+                    let ib_buf_file_name =
+                        SSMTFileUtils::get_filename_with_new_extension(ib_txt_file_name, "buf")?;
+                    let ib_txt_file_path = self.fa.log.get_deduped_filepath(ib_txt_file_name);
+                    let ib_buf_file_path = self.fa.log.get_deduped_filepath(&ib_buf_file_name);
 
-                // 与 export_unity_vs_submeshes 一致：BOTH txt 和 buf 必须存在
-                if ib_txt_file_path.is_empty() || ib_buf_file_path.is_empty() {
-                    continue;
-                }
-
-                let ib_txt_file = IndexBufferTxtFile::new(&ib_txt_file_path, true)?;
-                let submesh_index_count = ib_txt_file.index_number_count.to_string();
-
-                first_index_index_count_map.insert(first_index, submesh_index_count);
-
-                // 收集此 first_index 对应的所有 trianglelist_index
-                for tl_idx in &trianglelist_index_list {
-                    let search_key = format!("{}-ib", tl_idx);
-                    let candidate_ib = self
-                        .fa
-                        .data
-                        .filter_first_file(&search_key, ".txt")
-                        .unwrap_or_default();
-                    if candidate_ib.is_empty() {
+                    // 与 export_unity_vs_submeshes 一致：BOTH txt 和 buf 必须存在
+                    if ib_txt_file_path.is_empty() || ib_buf_file_path.is_empty() {
                         continue;
                     }
-                    let candidate_path = self.fa.log.get_deduped_filepath(&candidate_ib);
-                    if candidate_path.is_empty() {
-                        continue;
-                    }
-                    let candidate_ib_file = IndexBufferTxtFile::new(&candidate_path, false)?;
-                    let candidate_first_index =
-                        candidate_ib_file.first_index.parse::<u64>().unwrap_or(0);
-                    if candidate_first_index == first_index {
-                        let list = first_index_trianglelist_index_map
-                            .entry(first_index)
-                            .or_default();
-                        if !list.contains(tl_idx) {
-                            list.push(tl_idx.clone());
+
+                    let ib_txt_file = IndexBufferTxtFile::new(&ib_txt_file_path, true)?;
+                    let submesh_index_count = ib_txt_file.index_number_count.to_string();
+
+                    first_index_index_count_map.insert(first_index, submesh_index_count);
+
+                    // 收集此 first_index 对应的所有 trianglelist_index
+                    for tl_idx in &trianglelist_index_list {
+                        let search_key = format!("{}-ib", tl_idx);
+                        let candidate_ib = self
+                            .fa
+                            .data
+                            .filter_first_file(&search_key, ".txt")
+                            .unwrap_or_default();
+                        if candidate_ib.is_empty() {
+                            continue;
+                        }
+                        let candidate_path = self.fa.log.get_deduped_filepath(&candidate_ib);
+                        if candidate_path.is_empty() {
+                            continue;
+                        }
+                        let candidate_ib_file = IndexBufferTxtFile::new(&candidate_path, false)?;
+                        let candidate_first_index =
+                            candidate_ib_file.first_index.parse::<u64>().unwrap_or(0);
+                        if candidate_first_index == first_index {
+                            let list = first_index_trianglelist_index_map
+                                .entry(first_index)
+                                .or_default();
+                            if !list.contains(tl_idx) {
+                                list.push(tl_idx.clone());
+                            }
                         }
                     }
                 }
-            }
 
-            if match_first_index_ib_map.is_empty() {
-                component_drawcall_index_list_dict
-                    .insert(draw_ib.to_string(), trianglelist_index_list.clone());
+                if match_first_index_ib_map.is_empty() {
+                    component_drawcall_index_list_dict
+                        .insert(draw_ib.to_string(), trianglelist_index_list.clone());
+                    return Ok(());
+                }
+
+                for (first_index, submesh_trianglelist_index_list) in
+                    first_index_trianglelist_index_map
+                {
+                    let index_count = first_index_index_count_map
+                        .get(&first_index)
+                        .cloned()
+                        .unwrap_or_default();
+                    let submesh_folder_name =
+                        format!("{}-{}-{}", draw_ib, index_count, first_index);
+                    component_drawcall_index_list_dict
+                        .insert(submesh_folder_name, submesh_trianglelist_index_list);
+                }
+                Ok(())
+            })();
+
+            if let Err(error) = sync_result {
+                crate::extract_new::handle_drawib_extraction_error(
+                    draw_ib,
+                    format!("workspace sync skipped: {}", error),
+                    continue_after_item_error,
+                )?;
                 continue;
-            }
-
-            for (first_index, submesh_trianglelist_index_list) in first_index_trianglelist_index_map
-            {
-                let index_count = first_index_index_count_map
-                    .get(&first_index)
-                    .cloned()
-                    .unwrap_or_default();
-                let submesh_folder_name = format!("{}-{}-{}", draw_ib, index_count, first_index);
-                component_drawcall_index_list_dict
-                    .insert(submesh_folder_name, submesh_trianglelist_index_list);
             }
         }
 

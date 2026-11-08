@@ -1002,6 +1002,7 @@ impl WWMINewExtractor {
                 &self.base.fa,
                 &self.base.drawib_config,
                 &self.base.workspace_path,
+                !self.base.specify_drawib_extract,
             )?;
         } else {
             let full_drawib_config = DrawIBConfig {
@@ -1021,6 +1022,7 @@ impl WWMINewExtractor {
                 &self.base.fa,
                 &full_drawib_config,
                 &self.base.workspace_path,
+                !self.base.specify_drawib_extract,
             )?;
         }
         Ok(())

@@ -1019,43 +1019,59 @@ impl APMI2NewExtractor {
             //拿到cs-cb0的文件名，判断是否包含指定的Hash
             let cs_cb0_key: String = format!("{}-cs-cb0=", pointlist_index);
             crate::extract_log!("cs-cb0 key: {}", cs_cb0_key);
-            let cs_cb0_filename: String = self.fa.data.filter_first_file(&cs_cb0_key, ".buf")?;
+            let cs_cb0_filename: String = match self.fa.data.filter_first_file(&cs_cb0_key, ".buf")
+            {
+                Ok(filename) => filename,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        error,
+                        !self.specify_drawib_extract,
+                    )?;
+                    continue;
+                }
+            };
             crate::extract_log!("cs-cb0 filename: {}", cs_cb0_filename);
             crate::extract_log!();
 
             if cs_cb0_filename.contains("38cddb8c0126726a") {
-                let result = self.extract_38cddb8c0126726a(
-                    &draw_ib,
-                    &pointlist_index,
-                    &trianglelist_index_list,
-                    data_type_filter,
-                )?;
-
-                if !result {
-                    crate::extract_new::log_skipped_drawib(
-                        draw_ib,
+                let result = crate::extract_new::evaluate_drawib_extraction(
+                    draw_ib,
+                    self.extract_38cddb8c0126726a(
+                        &draw_ib,
+                        &pointlist_index,
+                        &trianglelist_index_list,
+                        data_type_filter,
+                    ),
+                    || {
                         format!(
                             "no valid data type matched. PointlistIndex: {} TrianglelistIndex: {:?}",
                             pointlist_index, trianglelist_index_list
-                        ),
-                    );
+                        )
+                    },
+                    !self.specify_drawib_extract,
+                )?;
+                if !result {
                     continue;
                 }
             } else {
-                let result = self.extract_fee307b98a965c16(
-                    &draw_ib,
-                    &pointlist_index,
-                    &trianglelist_index_list,
-                    data_type_filter,
-                )?;
-                if !result {
-                    crate::extract_new::log_skipped_drawib(
-                        draw_ib,
+                let result = crate::extract_new::evaluate_drawib_extraction(
+                    draw_ib,
+                    self.extract_fee307b98a965c16(
+                        &draw_ib,
+                        &pointlist_index,
+                        &trianglelist_index_list,
+                        data_type_filter,
+                    ),
+                    || {
                         format!(
                             "no valid data type matched. PointlistIndex: {} TrianglelistIndex: {:?}",
                             pointlist_index, trianglelist_index_list
-                        ),
-                    );
+                        )
+                    },
+                    !self.specify_drawib_extract,
+                )?;
+                if !result {
                     continue;
                 }
             }
@@ -1067,6 +1083,7 @@ impl APMI2NewExtractor {
                 &self.fa,
                 &self.drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         } else {
             let full_drawib_config = DrawIBConfig {
@@ -1083,6 +1100,7 @@ impl APMI2NewExtractor {
                 &self.fa,
                 &full_drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         }
         Ok(())

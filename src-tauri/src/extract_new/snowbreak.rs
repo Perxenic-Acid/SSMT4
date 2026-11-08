@@ -666,8 +666,19 @@ impl SnowBreakNewExtractor {
 
             crate::extract_log!("TrianglelistIndex: {}", max_slot_trianglelist_index);
 
-            let mut possible_d3d11_game_type_list =
-                self.get_possible_gametype_list_unreal_vs(&draw_ib, &trianglelist_index_list)?;
+            let mut possible_d3d11_game_type_list = match self
+                .get_possible_gametype_list_unreal_vs(&draw_ib, &trianglelist_index_list)
+            {
+                Ok(list) => list,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        error,
+                        !self.specify_drawib_extract,
+                    )?;
+                    continue;
+                }
+            };
             possible_d3d11_game_type_list.retain(|gt| data_type_filter.allows(gt.gpu_pre_skinning));
             if possible_d3d11_game_type_list.is_empty() {
                 crate::extract_new::log_skipped_drawib(
@@ -680,22 +691,24 @@ impl SnowBreakNewExtractor {
                 continue;
             }
 
-            let extract_success = self.export_unreal_vs_submeshes(
-                "SnowBreak",
+            let extract_success = crate::extract_new::evaluate_drawib_extraction(
                 draw_ib,
-                &max_slot_trianglelist_index,
-                &trianglelist_index_list,
-                &possible_d3d11_game_type_list,
-            )?;
-
-            if !extract_success {
-                crate::extract_new::log_skipped_drawib(
+                self.export_unreal_vs_submeshes(
+                    "SnowBreak",
                     draw_ib,
+                    &max_slot_trianglelist_index,
+                    &trianglelist_index_list,
+                    &possible_d3d11_game_type_list,
+                ),
+                || {
                     format!(
                         "no valid data type matched. TrianglelistIndex: {:?}",
                         trianglelist_index_list
-                    ),
-                );
+                    )
+                },
+                !self.specify_drawib_extract,
+            )?;
+            if !extract_success {
                 continue;
             }
         }
@@ -706,6 +719,7 @@ impl SnowBreakNewExtractor {
                 &self.fa,
                 &self.drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         } else {
             let full_drawib_config = DrawIBConfig {
@@ -722,6 +736,7 @@ impl SnowBreakNewExtractor {
                 &self.fa,
                 &full_drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         }
         Ok(())

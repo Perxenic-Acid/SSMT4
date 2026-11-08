@@ -41,6 +41,11 @@ import ExtractConfigSection from './ExtractConfigSection.vue';
 import ConfigTables from './ConfigTables.vue';
 import type { ModelRow, SkipRow, VSCheckRow } from './WorkPage.types';
 import { workspacePublishErrorDetails } from './WorkspacePublishError';
+import {
+  createWorkspaceTabsAfterClear,
+  getNextWorkspaceTabIndex as getNextWorkspaceTabIndexForTabs,
+  type WorkspaceTabMeta,
+} from './WorkspaceTabs';
 
 const appSettings = AppStateManager.appSettings;
 const { t } = useI18n();
@@ -55,11 +60,6 @@ const workspaceAccessProxyPort = (): number | undefined => {
 type DrawIBSubmeshRange = {
   firstIndex: string;
   indexCount: string;
-};
-
-type WorkspaceTabMeta = {
-  id: string;
-  name: string;
 };
 
 type WorkPageTabsIndex = {
@@ -562,24 +562,10 @@ const createDefaultWorkspaceTabName = (index: number): string =>
   `${t('workPage.ui.defaultTabNamePrefix')}${index}`;
 
 const getNextWorkspaceTabIndex = (): number => {
-  const prefix = t('workPage.ui.defaultTabNamePrefix').toLowerCase();
-  let highestIndex = -1;
-
-  for (const tab of workspaceTabs.value) {
-    const normalizedName = normalizeWorkspaceTabName(tab.name).toLowerCase();
-    if (!normalizedName.startsWith(prefix)) {
-      continue;
-    }
-
-    const suffix = normalizedName.slice(prefix.length).trim();
-    if (!/^\d+$/.test(suffix)) {
-      continue;
-    }
-
-    highestIndex = Math.max(highestIndex, Number.parseInt(suffix, 10));
-  }
-
-  return highestIndex + 1;
+  return getNextWorkspaceTabIndexForTabs(
+    workspaceTabs.value,
+    t('workPage.ui.defaultTabNamePrefix'),
+  );
 };
 
 const createDefaultWorkspaceTabMeta = (): WorkspaceTabMeta => {
@@ -660,9 +646,11 @@ const movePathToRecycleBin = async (targetPath: string): Promise<void> => {
 
 const createInMemoryDefaultWorkspaceState = () => {
   resetLeftThreeLists();
-  const defaultTab = createDefaultWorkspaceTabMeta();
-  workspaceTabs.value = [defaultTab];
-  activeWorkspaceTabId.value = defaultTab.id;
+  workspaceTabs.value = createWorkspaceTabsAfterClear(
+    t('workPage.ui.defaultTabNamePrefix'),
+    createWorkspaceTabId,
+  );
+  activeWorkspaceTabId.value = workspaceTabs.value[0].id;
   editingWorkspaceTabId.value = null;
   workspaceTabNameEditBackup.value = {};
 };
