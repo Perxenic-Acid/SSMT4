@@ -2333,105 +2333,24 @@ impl SRMINewExtractor {
             //拿到cs-cb0的文件名，判断是否包含指定的Hash�?
             let cs_cb0_key: String = format!("{}-cs-cb0=", pointlist_index);
             crate::extract_log!("cs-cb0 key: {}", cs_cb0_key);
-            let cs_cb0_filename: String = self.fa_data.filter_first_file(&cs_cb0_key, ".buf")?;
+            let cs_cb0_filename: String = match self.fa_data.filter_first_file(&cs_cb0_key, ".buf")
+            {
+                Ok(filename) => filename,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        error,
+                        !self.specify_drawib_extract,
+                    )?;
+                    continue;
+                }
+            };
             crate::extract_log!("cs-cb0 filename: {}", cs_cb0_filename);
             crate::extract_log!();
 
             if pointlist_index.is_empty() {
-                crate::extract_log!("PointlistIndex is empty, skipping special shader detection and using general extraction");
-                crate::extract_log!("执行提取:通用提取fee307b98a965c16");
-                let mut possible_d3d11gametype_wrapper_list = self
-                    .auto_gametype_detect_fee307b98a965c16(
-                        pointlist_index.clone(),
-                        trianglelist_index_list.clone(),
-                    )?;
-                possible_d3d11gametype_wrapper_list.retain(|wrapper| {
-                    data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
-                });
-                crate::extract_log!(
-                    "possible_d3d11gametype_wrapper_list count: {}",
-                    possible_d3d11gametype_wrapper_list.len()
-                );
-                for d3d11gametype_wrapper in possible_d3d11gametype_wrapper_list.iter() {
-                    crate::extract_log!(
-                        "Matched GameType: {}",
-                        d3d11gametype_wrapper.d3d11_game_type.game_type_name
-                    );
-                }
-
-                self.extract_model_new(
-                    draw_ib.to_string(),
-                    possible_d3d11gametype_wrapper_list,
-                    pointlist_index.clone(),
-                    trianglelist_index_list.clone(),
-                )?;
-            } else {
-                if cs_cb0_filename.contains("1c932707d4d8df41")
-                    || cs_cb0_filename.contains("4d9c23fd387846c7")
-                    || cs_cb0_filename.contains("ba3d8ab37ea2fd2d")
-                {
-                    crate::extract_log!(
-                        "提取执行: 1c932707d4d8df41_4d9c23fd387846c7_ba3d8ab37ea2fd2d"
-                    );
-                    let mut possible_d3d11gametype_wrapper_list = self
-                        .auto_gametype_detect_1c932707d4d8df41_4d9c23fd387846c7(
-                            pointlist_index.clone(),
-                            trianglelist_index_list.clone(),
-                        )?;
-                    possible_d3d11gametype_wrapper_list.retain(|wrapper| {
-                        data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
-                    });
-                    crate::extract_log!(
-                        "possible_d3d11gametype_wrapper_list count: {}",
-                        possible_d3d11gametype_wrapper_list.len()
-                    );
-                    self.extract_model_new(
-                        draw_ib.to_string(),
-                        possible_d3d11gametype_wrapper_list,
-                        pointlist_index.clone(),
-                        trianglelist_index_list.clone(),
-                    )?;
-                } else if cs_cb0_filename.contains("d50694eedd2a8595") {
-                    crate::extract_log!("提取执行: d50694eedd2a8595");
-                    let mut possible_d3d11gametype_wrapper_list = self
-                        .auto_gametype_detect_d50694eedd2a8595(
-                            pointlist_index.clone(),
-                            trianglelist_index_list.clone(),
-                        )?;
-                    possible_d3d11gametype_wrapper_list.retain(|wrapper| {
-                        data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
-                    });
-                    crate::extract_log!(
-                        "possible_d3d11gametype_wrapper_list count: {}",
-                        possible_d3d11gametype_wrapper_list.len()
-                    );
-                    self.extract_model_new(
-                        draw_ib.to_string(),
-                        possible_d3d11gametype_wrapper_list,
-                        pointlist_index.clone(),
-                        trianglelist_index_list.clone(),
-                    )?;
-                } else if cs_cb0_filename.contains("c9f2b46571d22858") {
-                    crate::extract_log!("提取执行: c9f2b46571d22858");
-                    let mut possible_d3d11gametype_wrapper_list = self
-                        .auto_gametype_detect_1c932707d4d8df41_4d9c23fd387846c7(
-                            pointlist_index.clone(),
-                            trianglelist_index_list.clone(),
-                        )?;
-                    possible_d3d11gametype_wrapper_list.retain(|wrapper| {
-                        data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
-                    });
-                    crate::extract_log!(
-                        "possible_d3d11gametype_wrapper_list count: {}",
-                        possible_d3d11gametype_wrapper_list.len()
-                    );
-                    self.extract_model_new(
-                        draw_ib.to_string(),
-                        possible_d3d11gametype_wrapper_list,
-                        pointlist_index.clone(),
-                        trianglelist_index_list.clone(),
-                    )?;
-                } else {
+                let draw_result = (|| -> Result<bool, String> {
+                    crate::extract_log!("PointlistIndex is empty, skipping special shader detection and using general extraction");
                     crate::extract_log!("执行提取:通用提取fee307b98a965c16");
                     let mut possible_d3d11gametype_wrapper_list = self
                         .auto_gametype_detect_fee307b98a965c16(
@@ -2458,6 +2377,153 @@ impl SRMINewExtractor {
                         pointlist_index.clone(),
                         trianglelist_index_list.clone(),
                     )?;
+                    Ok(true)
+                })();
+                if !crate::extract_new::evaluate_drawib_extraction(
+                    draw_ib,
+                    draw_result,
+                    || "no valid data type matched".to_string(),
+                    !self.specify_drawib_extract,
+                )? {
+                    continue;
+                }
+            } else {
+                if cs_cb0_filename.contains("1c932707d4d8df41")
+                    || cs_cb0_filename.contains("4d9c23fd387846c7")
+                    || cs_cb0_filename.contains("ba3d8ab37ea2fd2d")
+                {
+                    let draw_result = (|| -> Result<bool, String> {
+                        crate::extract_log!(
+                            "提取执行: 1c932707d4d8df41_4d9c23fd387846c7_ba3d8ab37ea2fd2d"
+                        );
+                        let mut possible_d3d11gametype_wrapper_list = self
+                            .auto_gametype_detect_1c932707d4d8df41_4d9c23fd387846c7(
+                                pointlist_index.clone(),
+                                trianglelist_index_list.clone(),
+                            )?;
+                        possible_d3d11gametype_wrapper_list.retain(|wrapper| {
+                            data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
+                        });
+                        crate::extract_log!(
+                            "possible_d3d11gametype_wrapper_list count: {}",
+                            possible_d3d11gametype_wrapper_list.len()
+                        );
+                        self.extract_model_new(
+                            draw_ib.to_string(),
+                            possible_d3d11gametype_wrapper_list,
+                            pointlist_index.clone(),
+                            trianglelist_index_list.clone(),
+                        )?;
+                        Ok(true)
+                    })();
+                    if !crate::extract_new::evaluate_drawib_extraction(
+                        draw_ib,
+                        draw_result,
+                        || "no valid data type matched".to_string(),
+                        !self.specify_drawib_extract,
+                    )? {
+                        continue;
+                    }
+                } else if cs_cb0_filename.contains("d50694eedd2a8595") {
+                    let draw_result = (|| -> Result<bool, String> {
+                        crate::extract_log!("提取执行: d50694eedd2a8595");
+                        let mut possible_d3d11gametype_wrapper_list = self
+                            .auto_gametype_detect_d50694eedd2a8595(
+                                pointlist_index.clone(),
+                                trianglelist_index_list.clone(),
+                            )?;
+                        possible_d3d11gametype_wrapper_list.retain(|wrapper| {
+                            data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
+                        });
+                        crate::extract_log!(
+                            "possible_d3d11gametype_wrapper_list count: {}",
+                            possible_d3d11gametype_wrapper_list.len()
+                        );
+                        self.extract_model_new(
+                            draw_ib.to_string(),
+                            possible_d3d11gametype_wrapper_list,
+                            pointlist_index.clone(),
+                            trianglelist_index_list.clone(),
+                        )?;
+                        Ok(true)
+                    })();
+                    if !crate::extract_new::evaluate_drawib_extraction(
+                        draw_ib,
+                        draw_result,
+                        || "no valid data type matched".to_string(),
+                        !self.specify_drawib_extract,
+                    )? {
+                        continue;
+                    }
+                } else if cs_cb0_filename.contains("c9f2b46571d22858") {
+                    let draw_result = (|| -> Result<bool, String> {
+                        crate::extract_log!("提取执行: c9f2b46571d22858");
+                        let mut possible_d3d11gametype_wrapper_list = self
+                            .auto_gametype_detect_1c932707d4d8df41_4d9c23fd387846c7(
+                                pointlist_index.clone(),
+                                trianglelist_index_list.clone(),
+                            )?;
+                        possible_d3d11gametype_wrapper_list.retain(|wrapper| {
+                            data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
+                        });
+                        crate::extract_log!(
+                            "possible_d3d11gametype_wrapper_list count: {}",
+                            possible_d3d11gametype_wrapper_list.len()
+                        );
+                        self.extract_model_new(
+                            draw_ib.to_string(),
+                            possible_d3d11gametype_wrapper_list,
+                            pointlist_index.clone(),
+                            trianglelist_index_list.clone(),
+                        )?;
+                        Ok(true)
+                    })();
+                    if !crate::extract_new::evaluate_drawib_extraction(
+                        draw_ib,
+                        draw_result,
+                        || "no valid data type matched".to_string(),
+                        !self.specify_drawib_extract,
+                    )? {
+                        continue;
+                    }
+                } else {
+                    let draw_result = (|| -> Result<bool, String> {
+                        crate::extract_log!("执行提取:通用提取fee307b98a965c16");
+                        let mut possible_d3d11gametype_wrapper_list = self
+                            .auto_gametype_detect_fee307b98a965c16(
+                                pointlist_index.clone(),
+                                trianglelist_index_list.clone(),
+                            )?;
+                        possible_d3d11gametype_wrapper_list.retain(|wrapper| {
+                            data_type_filter.allows(wrapper.d3d11_game_type.gpu_pre_skinning)
+                        });
+                        crate::extract_log!(
+                            "possible_d3d11gametype_wrapper_list count: {}",
+                            possible_d3d11gametype_wrapper_list.len()
+                        );
+                        for d3d11gametype_wrapper in possible_d3d11gametype_wrapper_list.iter() {
+                            crate::extract_log!(
+                                "Matched GameType: {}",
+                                d3d11gametype_wrapper.d3d11_game_type.game_type_name
+                            );
+                        }
+
+                        self.extract_model_new(
+                            draw_ib.to_string(),
+                            possible_d3d11gametype_wrapper_list,
+                            pointlist_index.clone(),
+                            trianglelist_index_list.clone(),
+                        )?;
+                        Ok(true)
+                    })();
+                    if !crate::extract_new::evaluate_drawib_extraction(
+                        draw_ib,
+                        draw_result,
+                        || "no valid data type matched".to_string(),
+                        !self.specify_drawib_extract,
+                    )? {
+                        continue;
+                    }
                 }
             }
         }

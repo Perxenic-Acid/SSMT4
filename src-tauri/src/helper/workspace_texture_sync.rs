@@ -225,6 +225,7 @@ pub fn sync_yysls_workspace_deduped_textures_and_json(
     fa: &FrameAnalysis,
     drawib_config: &DrawIBConfig,
     workspace_path: &str,
+    continue_after_item_error: bool,
 ) -> Result<(), String> {
     let frame_analysis_folder = PathBuf::from(&fa.folder_path);
 
@@ -242,7 +243,17 @@ pub fn sync_yysls_workspace_deduped_textures_and_json(
         }
 
         let ctx_info_list =
-            resolve_yysls_ctx_info_list_for_draw_ib(&frame_analysis_folder, draw_ib)?;
+            match resolve_yysls_ctx_info_list_for_draw_ib(&frame_analysis_folder, draw_ib) {
+                Ok(list) => list,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        error,
+                        continue_after_item_error,
+                    )?;
+                    continue;
+                }
+            };
         if ctx_info_list.is_empty() {
             continue;
         }
@@ -275,7 +286,21 @@ pub fn sync_yysls_workspace_deduped_textures_and_json(
                     continue;
                 }
 
-                let ib_txt_file = IndexBufferTxtFile::new(&ib_txt_filepath, true)?;
+                let ib_txt_file = match IndexBufferTxtFile::new(&ib_txt_filepath, true) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        crate::extract_new::handle_drawib_extraction_error(
+                            draw_ib,
+                            format!(
+                                "failed to parse IB txt {}: {}",
+                                ib_txt_filepath.to_string_lossy(),
+                                error
+                            ),
+                            continue_after_item_error,
+                        )?;
+                        continue;
+                    }
+                };
                 let first_index = ib_txt_file.first_index.trim().parse::<u64>().unwrap_or(0);
                 let index_count = ib_txt_file.index_number_count.to_string();
                 if !index_count.is_empty() {
@@ -395,8 +420,15 @@ pub fn sync_workspace_deduped_textures_and_json(
     fa: &FrameAnalysis,
     drawib_config: &DrawIBConfig,
     workspace_path: &str,
+    continue_after_item_error: bool,
 ) -> Result<(), String> {
-    sync_workspace_deduped_textures_and_json_impl(fa, drawib_config, workspace_path, false)
+    sync_workspace_deduped_textures_and_json_impl(
+        fa,
+        drawib_config,
+        workspace_path,
+        false,
+        continue_after_item_error,
+    )
 }
 
 // CAMI（卡拉彼丘）的 FA 转储含 trianglestrip 等非 trianglelist 的 ib txt（无 first/count 语义），
@@ -407,7 +439,7 @@ pub fn sync_cami_workspace_deduped_textures_and_json(
     drawib_config: &DrawIBConfig,
     workspace_path: &str,
 ) -> Result<(), String> {
-    sync_workspace_deduped_textures_and_json_impl(fa, drawib_config, workspace_path, true)
+    sync_workspace_deduped_textures_and_json_impl(fa, drawib_config, workspace_path, true, true)
 }
 
 fn sync_workspace_deduped_textures_and_json_impl(
@@ -415,6 +447,7 @@ fn sync_workspace_deduped_textures_and_json_impl(
     drawib_config: &DrawIBConfig,
     workspace_path: &str,
     skip_non_trianglelist_ib: bool,
+    continue_after_item_error: bool,
 ) -> Result<(), String> {
     let mut component_drawcall_index_list_dict: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -448,16 +481,16 @@ fn sync_workspace_deduped_textures_and_json_impl(
                 continue;
             }
 
-            let ib_txt_file = if skip_non_trianglelist_ib {
-                match IndexBufferTxtFile::new(&ib_txt_filepath, true) {
-                    Ok(file) => file,
-                    Err(error) => {
-                        crate::extract_log!("跳过无法解析的 IB txt {}: {}", ib_txt_filename, error);
-                        continue;
-                    }
+            let ib_txt_file = match IndexBufferTxtFile::new(&ib_txt_filepath, true) {
+                Ok(file) => file,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        format!("failed to parse IB txt {}: {}", ib_txt_filename, error),
+                        continue_after_item_error,
+                    )?;
+                    continue;
                 }
-            } else {
-                IndexBufferTxtFile::new(&ib_txt_filepath, true)?
             };
             // 非 trianglelist（如 trianglestrip）的 ib txt 没有 first/count 语义，
             // 参与分组会把组件名污染成 {draw_ib}-0-0 这类错误文件夹名。

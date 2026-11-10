@@ -57,10 +57,20 @@ import {
   XIANZUN_PROVIDER_GROUP_LABELS,
   XIANZUN_PROVIDER_PRESETS,
   createXianZunProvider,
+  resolveXianZunProviderModel,
+  snapshotXianZunProvider,
+  type XianZunApiFormat,
   type XianZunProvider,
 } from '../../store/XianZunProviders'
-import { streamXianZunAnthropic, testXianZunProvider } from '../../store/XianZunAnthropic'
-import { fetchXianZunModels, xianZunEndpoint } from '../../store/XianZunApi'
+import { streamXianZunAnthropic } from '../../store/XianZunAnthropic'
+import { fetchXianZunModels, mergeXianZunModels, xianZunEndpoint } from '../../store/XianZunApi'
+import { buildXianZunRequestHeaders } from '../../store/XianZunRequest'
+import {
+  streamXianZunProvider,
+  xianZunProviderIdentity,
+} from '../../services/xianzun/providerTransport'
+import { toTextFallbackMessages } from '../../services/xianzun/piAiAdapter'
+import type { XianZunPiMessage } from '../../services/xianzun/types'
 import Vditor from 'vditor'
 import vditorLutePath from 'vditor/dist/js/lute/lute.min.js?url'
 import mathJaxBundleUrl from 'vditor/dist/js/mathjax/tex-svg-full.js?url'
@@ -176,6 +186,8 @@ interface ChatMessage {
   lastPromptTokens?: number
   createdAt: number
   toolEvents?: ToolEvent[]
+  nativeToolCalls?: NativeToolCall[]
+  nativeProtocolMessages?: XianZunPiMessage[]
   hidden?: boolean
   attachments?: string[]
 }
@@ -186,6 +198,7 @@ interface ToolEvent {
   result: string
   ok: boolean
   durationMs?: number
+  toolCallId?: string
   status?: 'pending' | 'running' | 'done'
   streamingArguments?: string
   progress?: { current: number; total: number; stage: string; percent: number }
@@ -224,6 +237,15 @@ interface XianZunCommand {
 interface ApiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  assistantMessage?: XianZunPiMessage['assistantMessage']
+  toolCalls?: Array<{
+    id: string
+    name: string
+    arguments: string
+  }>
+  toolCallId?: string
+  toolName?: string
+  isError?: boolean
 }
 
 /* ═══════════════════════════════════════════════
@@ -416,7 +438,8 @@ const activeProvider = computed<XianZunProvider>(() =>
 )
 
 const syncLegacyProviderFields = () => {
-  const provider = activeProvider.value
+  const liveProvider = activeProvider.value
+  const provider = liveProvider ? snapshotXianZunProvider(liveProvider) : undefined
   if (!provider) return
   provider.updatedAt = Date.now()
   appSettings.xianzunApiKey = provider.apiKey
@@ -1108,7 +1131,7 @@ const commands: XianZunCommand[] = [
 const CONVERSATIONS_STORAGE_KEY = 'xianzun.conversations.v1'
 const conversations = ref<XianZunConversation[]>([])
 const activeConversationId = ref('')
-const activeConversation = computed(
+const activeConversation = computed<XianZunConversation | null>(
   () => conversations.value.find((c) => c.id === activeConversationId.value) ?? null,
 )
 const sidebarOpen = ref(true)
@@ -1619,7 +1642,7 @@ const isAbortError = (err: unknown): boolean => {
     return (
       err.name === 'AbortError' ||
       err.name === 'Canceled' ||
-      /cancelled|canceled/i.test(err.message)
+      /abort|cancelled|canceled/i.test(err.message)
     )
   }
   return false
@@ -1642,26 +1665,45 @@ interface StreamChunkResult {
   reasoning: string
   toolCalls: NativeToolCall[]
   usage: UsageData | null
+  assistantMessage?: XianZunPiMessage['assistantMessage']
+  toolMode?: 'native' | 'text'
 }
 
 const streamChatCompletion = async (opts: {
+  provider?: XianZunProvider
   protocol: 'openai' | 'anthropic'
   anthropicAuth: 'bearer' | 'x-api-key'
   apiUrl: string
   apiKey: string
   model: string
+  sessionId: string
   messages: ApiMessage[]
   signal: AbortSignal
   reasoningEffort?: string
+  maxTokens?: number
   tools?: Array<{ type: string; function: { name: string; description: string; parameters: unknown } }>
   onChunk: (chunk: {
     content?: string
     reasoning?: string
-    toolCall?: { index: number; name?: string; argumentsDelta?: string }
+    toolCall?: { id?: string; index: number; name?: string; argumentsDelta?: string }
   }) => void
 }): Promise<StreamChunkResult> => {
+  if (opts.provider) {
+    return streamXianZunProvider({
+      provider: opts.provider,
+      model: opts.model,
+      messages: opts.messages,
+      tools: opts.tools,
+      sessionId: opts.sessionId,
+      reasoningEffort: opts.reasoningEffort,
+      maxTokens: opts.maxTokens,
+      signal: opts.signal,
+      fetchImpl: fetch as unknown as typeof globalThis.fetch,
+      onChunk: opts.onChunk,
+    })
+  }
   if (opts.protocol === 'anthropic') {
-    return streamXianZunAnthropic({
+    const result = await streamXianZunAnthropic({
       baseUrl: opts.apiUrl,
       apiKey: opts.apiKey,
       model: opts.model,
@@ -1672,6 +1714,10 @@ const streamChatCompletion = async (opts: {
       tools: opts.tools,
       onChunk: opts.onChunk,
     })
+    return {
+      ...result,
+      toolMode: opts.tools?.length ? 'native' : 'text',
+    }
   }
 
   const url = xianZunEndpoint(opts.apiUrl, 'chat/completions')
@@ -1712,10 +1758,11 @@ const streamChatCompletion = async (opts: {
     { ...initialFeatures, reasoning: false },
     { ...initialFeatures, tools: false, reasoning: false, temperature: false },
   ]
-  const requestHeaders = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${opts.apiKey}`,
-  }
+  const requestHeaders = buildXianZunRequestHeaders({
+    apiKey: opts.apiKey,
+    baseUrl: opts.apiUrl,
+    sessionId: opts.sessionId,
+  })
   let res: Response | null = null
   let detail = ''
   for (let variantIndex = 0; variantIndex < featureVariants.length; variantIndex += 1) {
@@ -1838,6 +1885,7 @@ const streamChatCompletion = async (opts: {
     reasoning: fullReasoning,
     toolCalls: nativeCalls.filter((tc) => tc && tc.name),
     usage: fullUsage,
+    toolMode: opts.tools?.length ? 'native' : 'text',
   }
 }
 
@@ -2021,11 +2069,13 @@ const progressSafe = (evt: ToolEvent) =>
 
 interface ApprovalContext {
   mode: XianZunApprovalMode
+  provider: XianZunProvider
   protocol: 'openai' | 'anthropic'
   anthropicAuth: 'bearer' | 'x-api-key'
   apiUrl: string
   apiKey: string
   model: string
+  sessionId: string
   reasoningEffort: string
   signal: AbortSignal
 }
@@ -2061,14 +2111,17 @@ const requestAutoApproval = async (
   ]
   try {
     const raw = await streamChatCompletion({
+      provider: context.provider,
       protocol: context.protocol,
       anthropicAuth: context.anthropicAuth,
       apiUrl: context.apiUrl,
       apiKey: context.apiKey,
       model: context.model,
+      sessionId: context.sessionId,
       messages: reviewMessages,
       signal: context.signal,
       reasoningEffort: context.reasoningEffort,
+      maxTokens: 2048,
       onChunk: () => undefined,
     })
     const jsonText = raw.content.match(/\{[\s\S]*\}/)?.[0] ?? raw.content
@@ -2191,7 +2244,11 @@ const executeCommand = async (
    Agent turn loop
    ═══════════════════════════════════════════════ */
 
-const buildApiMessages = (): ApiMessage[] => {
+const buildApiMessages = (
+  api?: XianZunApiFormat,
+  providerIdentity?: string,
+  model = '',
+): ApiMessage[] => {
   const list: ApiMessage[] = []
   for (const msg of messages.value) {
     if (msg.role === 'user') {
@@ -2200,8 +2257,44 @@ const buildApiMessages = (): ApiMessage[] => {
         : ''
       list.push({ role: 'user', content: msg.content + attachmentContext })
     }
-    else if (msg.role === 'assistant' && msg.content.trim()) {
-      list.push({ role: 'assistant', content: msg.content })
+    else if (msg.role === 'assistant') {
+      if (msg.nativeProtocolMessages?.length) {
+        const compatible = !api || msg.nativeProtocolMessages.every((protocolMessage) =>
+          protocolMessage.role !== 'assistant'
+          || !protocolMessage.assistantMessage
+          || (
+            protocolMessage.assistantMessage.api === api
+            && (!providerIdentity
+              || protocolMessage.assistantMessage.providerIdentity === providerIdentity)
+            && (!model || protocolMessage.assistantMessage.model === model)
+          )
+        )
+        list.push(...(compatible
+          ? msg.nativeProtocolMessages
+          : toTextFallbackMessages(msg.nativeProtocolMessages)))
+        continue
+      }
+
+      let assistantContent = msg.content
+      if (msg.nativeToolCalls?.length) {
+        const legacyCalls = msg.nativeToolCalls.map((call) =>
+          `[Tool call ${call.id}: ${call.name}]\n${call.arguments}`,
+        )
+        assistantContent = [assistantContent, ...legacyCalls].filter(Boolean).join('\n\n')
+      }
+      if (assistantContent.trim()) {
+        list.push({ role: 'assistant', content: assistantContent })
+      }
+      for (const toolEvent of msg.toolEvents ?? []) {
+        if (!toolEvent.toolCallId || toolEvent.status !== 'done') continue
+        list.push({
+          role: 'user',
+          content: [
+            `[Tool result for ${toolEvent.command}]`,
+            toolEvent.result,
+          ].join('\n'),
+        })
+      }
     }
   }
   return list
@@ -2210,10 +2303,12 @@ const buildApiMessages = (): ApiMessage[] => {
 const runAgentTurn = async () => {
   if (isStreaming.value) return
 
-  const provider = activeProvider.value
+  const liveProvider = activeProvider.value
+  const provider = liveProvider ? snapshotXianZunProvider(liveProvider) : undefined
   const apiKey = provider?.apiKey.trim() || ''
   const apiUrl = provider?.baseUrl.trim() || ''
-  if (!apiKey || !apiUrl) {
+  const sessionId = activeConversationId.value
+  if (!provider || !apiKey || !apiUrl) {
     messages.value.push({
       id: nextId(),
       role: 'error',
@@ -2248,17 +2343,23 @@ const runAgentTurn = async () => {
   const assistantMsg = messages.value[messages.value.length - 1] as ChatMessage
   void scrollToBottom(true)
 
-  const toolResultQueue: ApiMessage[] = []
+  const providerIdentity = xianZunProviderIdentity(provider)
+  const protocolTranscript: XianZunPiMessage[] = []
+  let toolMode: 'native' | 'text' = 'native'
   const model = provider.model.trim() || 'deepseek-v4-flash'
+  const conversationBase = buildApiMessages(provider.api, providerIdentity, model)
+  const maxTokens = resolveXianZunProviderModel(provider, model).maxTokens
   const reasoningEffort = appSettings.xianzunReasoningEffort || 'auto'
   const maxToolRounds = appSettings.xianzunMaxToolRounds || 20
   const approvalContext: ApprovalContext = {
     mode: appSettings.xianzunApprovalMode,
+    provider,
     protocol: provider.protocol,
     anthropicAuth: provider.anthropicAuth,
     apiUrl,
     apiKey,
     model,
+    sessionId: sessionId,
     reasoningEffort,
     signal,
   }
@@ -2286,10 +2387,10 @@ const runAgentTurn = async () => {
         markTaskPlanCancelled()
         throw new Error('Request cancelled')
       }
+      const turnMessages = [...conversationBase, ...protocolTranscript]
       const history: ApiMessage[] = [
         { role: 'system', content: systemPrompt },
-        ...buildApiMessages(),
-        ...toolResultQueue,
+        ...(toolMode === 'text' ? toTextFallbackMessages(turnMessages) : turnMessages),
       ]
       recordLog(
         'chat',
@@ -2299,7 +2400,8 @@ const runAgentTurn = async () => {
             reasoningEffort,
             messages: history.length,
             systemPromptChars: systemPrompt.length,
-            toolResultsQueued: toolResultQueue.length,
+            protocolMessages: protocolTranscript.length,
+            toolMode,
           },
           null,
           2,
@@ -2307,15 +2409,18 @@ const runAgentTurn = async () => {
       )
 
       const raw = await streamChatCompletion({
+        provider,
         protocol: provider.protocol,
         anthropicAuth: provider.anthropicAuth,
         apiUrl,
         apiKey,
         model,
+        sessionId: sessionId,
         messages: history,
         signal,
         reasoningEffort,
-        tools: buildOpenAiTools(),
+        maxTokens,
+        tools: toolMode === 'native' ? buildOpenAiTools() : undefined,
         onChunk: (chunk) => {
           if (chunk.content) {
             assistantMsg.content += chunk.content
@@ -2384,17 +2489,44 @@ const runAgentTurn = async () => {
         assistantMsg.usageModel = model
       }
 
+      if (raw.toolMode) toolMode = raw.toolMode
+      const assistantProtocolMessage: XianZunPiMessage = {
+        role: 'assistant',
+        content: raw.content,
+        ...(raw.assistantMessage
+          ? { assistantMessage: raw.assistantMessage }
+          : raw.toolCalls.length
+            ? {
+                toolCalls: raw.toolCalls.map((toolCall) => ({
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  arguments: toolCall.arguments,
+                })),
+              }
+            : {}),
+      }
+      protocolTranscript.push(assistantProtocolMessage)
+      assistantMsg.nativeProtocolMessages = [...protocolTranscript]
+
       const { calls: textCalls } = extractToolCalls(raw.content)
       // Merge native function calls (OpenAI tool_calls) with text-protocol calls.
+      assistantMsg.nativeToolCalls = raw.toolCalls.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+        index: tc.index,
+      }))
       const nativeCalls = raw.toolCalls.map((tc) => ({
         command: tc.name,
         arguments: safeParseJson(tc.arguments),
         nativeIndex: tc.index,
+        toolCallId: tc.id,
       }))
       const calls: Array<{
         command: string
         arguments: Record<string, unknown>
         nativeIndex?: number
+        toolCallId?: string
       }> = [...textCalls, ...nativeCalls]
       // Keep the raw response in history: mutating earlier messages between
       // rounds would break the prompt prefix and force a full cache miss.
@@ -2425,6 +2557,7 @@ const runAgentTurn = async () => {
         const evt = assistantMsg.toolEvents[toolIdx]
         evt.command = tc.name
         evt.arguments = safeParseJson(tc.arguments)
+        evt.toolCallId = tc.id
         delete evt.streamingArguments
       }
 
@@ -2448,6 +2581,7 @@ const runAgentTurn = async () => {
         break
       }
 
+      const roundProtocolMessages: XianZunPiMessage[] = []
       for (const call of calls) {
         // Reuse the card that was already streamed into the timeline (native
         // tool calls), or push a fresh one for text-protocol calls.
@@ -2474,22 +2608,36 @@ const runAgentTurn = async () => {
         evt.result = ''
         evt.ok = true
         evt.status = 'running'
+        if (call.toolCallId) evt.toolCallId = call.toolCallId
         delete evt.streamingArguments
         toolRunning.value = true
         const finalEvt = await executeCommand(call, approvalContext)
         toolRunning.value = false
         Object.assign(evt, finalEvt, { status: 'done' })
-        toolResultQueue.push({
-          role: 'user',
-          content: [
-            `[指令执行结果] 指令: ${finalEvt.command}`,
-            `参数: ${JSON.stringify(finalEvt.arguments ?? {})}`,
-            `结果: ${finalEvt.result}`,
-            '',
-            '如果任务已完成,请直接给用户最终答复;如果还需要其他操作,可以继续调用指令。',
-          ].join('\n'),
-        })
+        roundProtocolMessages.push(call.toolCallId
+          ? {
+              role: 'tool',
+              content: finalEvt.result,
+              toolCallId: call.toolCallId,
+              toolName: finalEvt.command,
+              isError: !finalEvt.ok,
+            }
+          : {
+              role: 'user',
+              content: [
+                `[指令执行结果] 指令: ${finalEvt.command}`,
+                `参数: ${JSON.stringify(finalEvt.arguments ?? {})}`,
+                `结果: ${finalEvt.result}`,
+                '',
+                '如果任务已完成,请直接给用户最终答复;如果还需要其他操作,可以继续调用指令。',
+              ].join('\n'),
+            })
       }
+      protocolTranscript.push(
+        ...roundProtocolMessages.filter(message => message.role === 'tool'),
+        ...roundProtocolMessages.filter(message => message.role !== 'tool'),
+      )
+      assistantMsg.nativeProtocolMessages = [...protocolTranscript]
 
       if (rounds >= maxToolRounds) {
         hitRoundCap = true
@@ -2498,8 +2646,11 @@ const runAgentTurn = async () => {
         recordLog('system', '工具轮次上限', capNote)
 
         // Persist tool progress so a follow-up "continue" resumes instead of restarting.
-        if (toolResultQueue.length > 0) {
-          const progress = toolResultQueue.map((m) => m.content).join('\n\n')
+        const completedResults = protocolTranscript.filter(
+          (message) => message.role === 'tool' || message.role === 'user',
+        )
+        if (completedResults.length > 0) {
+          const progress = completedResults.map((message) => message.content).join('\n\n')
           messages.value.push({
             id: nextId(),
             role: 'user',
@@ -2714,14 +2865,27 @@ const testConnection = async () => {
       ElMessage.warning(!apiKey ? t('xianzun.missingKey') : '请先配置 API 地址。')
       return
     }
-    await testXianZunProvider({
-      protocol: provider.protocol,
-      baseUrl: apiUrl,
-      apiKey,
-      auth: provider.anthropicAuth,
+    const model = provider.model.trim()
+    if (!model) {
+      ElMessage.warning('请先选择模型。')
+      return
+    }
+    const result = await streamXianZunProvider({
+      provider,
+      model,
+      messages: [{ role: 'user', content: '只回复 OK' }],
+      sessionId: activeConversationId.value || `connection-test-${Date.now()}`,
+      reasoningEffort: 'auto',
+      maxTokens: 16,
+      signal: AbortSignal.timeout(60000),
+      fetchImpl: fetch as unknown as typeof globalThis.fetch,
+      onChunk: () => undefined,
     })
+    if (!result.content.trim() && result.toolCalls.length === 0) {
+      throw new Error('供应商返回了空响应')
+    }
     rememberApiUrl(apiUrl)
-    ElMessage.success(t('xianzun.connectOk'))
+    ElMessage.success('真实对话连接成功')
   } catch (err) {
     ElMessage.error(t('xianzun.connectFail', { error: errorText(err) }))
   } finally {
@@ -2760,11 +2924,13 @@ const importSelectedCcswitchProvider = async () => {
     id: `xz-provider-ccswitch-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
     name: imported.name || `CCSwitch ${imported.appType}`,
     protocol: imported.protocol,
+    api: imported.protocol === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
     baseUrl: imported.baseUrl,
     apiKey: imported.apiKey,
     model: imported.model,
     models: imported.model ? [imported.model] : [],
     anthropicAuth: imported.anthropicAuth,
+    sendsOpencodeSessionHeader: /opencode\.ai/i.test(imported.baseUrl),
     presetId: 'ccswitch',
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -2793,12 +2959,16 @@ const refreshModelList = async () => {
       baseUrl,
       apiKey,
       auth: provider.anthropicAuth,
+      headers: provider.headers,
+      fetchImpl: fetch as unknown as typeof globalThis.fetch,
     })
     const currentModel = provider.model.trim()
     if (options.length > 0) {
-      const modelIds = options.map((option) => option.id)
-      if (currentModel && !modelIds.includes(currentModel)) modelIds.push(currentModel)
-      provider.models = Array.from(new Set(modelIds))
+      provider.models = mergeXianZunModels(
+        provider.models,
+        options.map((option) => option.id),
+        currentModel,
+      )
       rememberApiUrl(baseUrl)
     }
     if (!currentModel && provider.models.length > 0) provider.model = provider.models[0]
@@ -2817,6 +2987,104 @@ const refreshModelList = async () => {
 }
 
 const selectedProviderPreset = ref('deepseek')
+const XIANZUN_API_OPTIONS: Array<{ label: string; value: XianZunApiFormat }> = [
+  { label: 'OpenAI Chat Completions', value: 'openai-completions' },
+  { label: 'OpenAI Responses', value: 'openai-responses' },
+  { label: 'Anthropic Messages', value: 'anthropic-messages' },
+]
+const selectedProviderVariantId = ref('')
+const selectedProviderPresetBase = computed(() =>
+  XIANZUN_PROVIDER_PRESETS.find((item) => item.id === selectedProviderPreset.value) ?? null,
+)
+const providerPresetRoutes = computed(() => selectedProviderPresetBase.value?.variants ?? [])
+const selectedProviderPresetInfo = computed(() => {
+  const preset = selectedProviderPresetBase.value
+  if (!preset) return null
+  const route = preset.variants?.find(item => item.id === selectedProviderVariantId.value)
+    ?? preset.variants?.find(item => item.id === preset.primaryRouteId)
+    ?? preset.variants?.[0]
+  if (!route) return preset
+  return {
+    ...preset,
+    ...route,
+    id: preset.id,
+    name: preset.name,
+    group: preset.group,
+    variants: preset.variants,
+  }
+})
+watch(selectedProviderPreset, () => {
+  const preset = selectedProviderPresetBase.value
+  selectedProviderVariantId.value =
+    preset?.variants?.find(route => route.id === preset.primaryRouteId)?.id
+    ?? preset?.variants?.[0]?.id
+    ?? ''
+}, { immediate: true })
+const activeModelProfile = computed(() => {
+  const provider = activeProvider.value
+  if (!provider?.model) return null
+  return resolveXianZunProviderModel(provider, provider.model)
+})
+const headersJsonDraft = ref('{}')
+const compatJsonDraft = ref('{}')
+const advancedConfigStatus = ref('')
+
+const formatTokenCapacity = (value: number): string => {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 ? 1 : 0)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 ? 1 : 0)}K`
+  return String(value)
+}
+
+const syncAdvancedProviderDrafts = () => {
+  headersJsonDraft.value = JSON.stringify(activeProvider.value?.headers ?? {}, null, 2)
+  compatJsonDraft.value = JSON.stringify(activeProvider.value?.compat ?? {}, null, 2)
+  advancedConfigStatus.value = ''
+}
+
+watch(
+  () => [
+    activeProvider.value?.id,
+    activeProvider.value?.headers,
+    activeProvider.value?.compat,
+  ],
+  syncAdvancedProviderDrafts,
+  { deep: true, immediate: true },
+)
+
+const onProviderApiChange = (api: XianZunApiFormat) => {
+  const provider = activeProvider.value
+  if (!provider) return
+  provider.api = api
+  provider.protocol = api === 'anthropic-messages' ? 'anthropic' : 'openai'
+  provider.updatedAt = Date.now()
+}
+
+const applyAdvancedProviderConfig = async () => {
+  const provider = activeProvider.value
+  if (!provider) return
+  try {
+    const headers = headersJsonDraft.value.trim() ? JSON.parse(headersJsonDraft.value) : {}
+    const compat = compatJsonDraft.value.trim() ? JSON.parse(compatJsonDraft.value) : {}
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
+      throw new Error('请求头必须是 JSON 对象')
+    }
+    const invalidHeader = Object.entries(headers).find(([, value]) => typeof value !== 'string')
+    if (invalidHeader) throw new Error(`请求头 ${invalidHeader[0]} 的值必须是字符串`)
+    if (!compat || typeof compat !== 'object' || Array.isArray(compat)) {
+      throw new Error('兼容参数必须是 JSON 对象')
+    }
+    provider.headers = Object.keys(headers).length > 0 ? headers as Record<string, string> : undefined
+    provider.compat = Object.keys(compat).length > 0 ? compat as Record<string, unknown> : undefined
+    provider.updatedAt = Date.now()
+    advancedConfigStatus.value = '高级配置已应用'
+    await AppStateManager.saveSettingsNow()
+    ElMessage.success(advancedConfigStatus.value)
+  } catch (error) {
+    advancedConfigStatus.value = `高级配置无效：${errorText(error)}`
+    ElMessage.error(advancedConfigStatus.value)
+  }
+}
+
 const providerPresetGroups = computed(() => {
   const groups = new Map<string, typeof XIANZUN_PROVIDER_PRESETS>()
   for (const preset of XIANZUN_PROVIDER_PRESETS) {
@@ -2824,13 +3092,23 @@ const providerPresetGroups = computed(() => {
     list.push(preset)
     groups.set(preset.group, list)
   }
-  return Array.from(groups.entries())
+  const order = ['international', 'china', 'aggregator', 'third_party', 'cloud', 'local', 'custom']
+  return Array.from(groups.entries()).sort((left, right) => {
+    const leftIndex = order.indexOf(left[0])
+    const rightIndex = order.indexOf(right[0])
+    return (leftIndex < 0 ? order.length : leftIndex) - (rightIndex < 0 ? order.length : rightIndex)
+  })
 })
 
 const addProvider = () => {
-  const preset = XIANZUN_PROVIDER_PRESETS.find((item) => item.id === selectedProviderPreset.value)
+  const preset = selectedProviderPresetBase.value
   if (!preset) return
-  const provider = createXianZunProvider(preset)
+  const route = selectedProviderPresetInfo.value
+  if (route?.unsupportedReason) {
+    ElMessage.warning(route.unsupportedReason)
+    return
+  }
+  const provider = createXianZunProvider(preset, selectedProviderVariantId.value)
   appSettings.xianzunProviders.push(provider)
   appSettings.xianzunActiveProviderId = provider.id
 }
@@ -4260,9 +4538,13 @@ onUnmounted(() => {
           <div class="xz-status">
             <span class="xz-dot" :class="statusClass"></span>
             {{ statusText }}
-            <span v-if="appSettings.xianzunApprovalMode === 'none'" class="xz-approval-warning">
+            <span
+              v-if="appSettings.xianzunApprovalMode === 'none'"
+              class="xz-approval-warning"
+              :title="t('xianzun.noApprovalWarning')"
+            >
               <el-icon><WarningFilled /></el-icon>
-              {{ t('xianzun.noApprovalWarning') }}
+              <span class="xz-approval-warning-text">{{ t('xianzun.noApprovalWarning') }}</span>
             </span>
           </div>
         </div>
@@ -4687,9 +4969,9 @@ onUnmounted(() => {
           <div class="xz-composer-left">
             <span class="xz-hint">
               {{ t('xianzun.hint') }}
-              <span class="xz-hint-sep">·</span>
+              <span class="xz-hint-sep xz-hint-sep-main">·</span>
               <span class="xz-hint-drop">{{ t('xianzun.dropHint') }}</span>
-              <span class="xz-hint-sep">·</span>
+              <span class="xz-hint-sep xz-hint-sep-drop">·</span>
               <span class="xz-hint-model">{{ appSettings.xianzunModel || 'deepseek-v4-flash' }}</span>
             </span>
 
@@ -4833,7 +5115,7 @@ onUnmounted(() => {
         <label class="xz-field">
           <span class="xz-field-label">当前供应商</span>
           <div class="xz-provider-row">
-            <el-select v-model="appSettings.xianzunActiveProviderId" class="xz-provider-select">
+            <el-select v-model="appSettings.xianzunActiveProviderId" class="xz-provider-select" filterable>
               <el-option
                 v-for="provider in appSettings.xianzunProviders"
                 :key="provider.id"
@@ -4850,20 +5132,58 @@ onUnmounted(() => {
         <label class="xz-field">
           <span class="xz-field-label">添加供应商</span>
           <div class="xz-provider-row">
-            <el-select v-model="selectedProviderPreset" class="xz-provider-select">
+            <el-select
+              v-model="selectedProviderPreset"
+              class="xz-provider-select"
+              filterable
+            >
               <el-option-group
                 v-for="[group, presets] in providerPresetGroups"
                 :key="group"
                 :label="XIANZUN_PROVIDER_GROUP_LABELS[group as keyof typeof XIANZUN_PROVIDER_GROUP_LABELS]"
               >
-                <el-option v-for="preset in presets" :key="preset.id" :label="preset.name" :value="preset.id" />
+                <el-option
+                  v-for="preset in presets"
+                  :key="preset.id"
+                  :label="preset.unsupportedReason ? `${preset.name}（暂不支持）` : preset.name"
+                  :value="preset.id"
+                  :disabled="!!preset.unsupportedReason"
+                />
               </el-option-group>
             </el-select>
-            <el-button type="primary" @click="addProvider">
+            <el-button
+              type="primary"
+              :disabled="!!selectedProviderPresetInfo?.unsupportedReason"
+              @click="addProvider"
+            >
               <el-icon><Plus /></el-icon>
               <span>添加</span>
             </el-button>
           </div>
+          <span
+            v-if="selectedProviderPresetInfo?.unsupportedReason || selectedProviderPresetInfo?.hint"
+            class="xz-field-hint xz-provider-preset-hint"
+          >
+            {{ selectedProviderPresetInfo.unsupportedReason || selectedProviderPresetInfo.hint }}
+          </span>
+        </label>
+
+        <label v-if="providerPresetRoutes.length > 1" class="xz-field">
+          <span class="xz-field-label">接口版本</span>
+          <el-select
+            v-model="selectedProviderVariantId"
+            class="xz-provider-select"
+            filterable
+          >
+            <el-option
+              v-for="route in providerPresetRoutes"
+              :key="route.id"
+              :label="route.unsupportedReason
+                ? `${route.label}（暂不支持）`
+                : route.label"
+              :value="route.id"
+            />
+          </el-select>
         </label>
 
         <div class="xz-ccswitch-import">
@@ -4901,14 +5221,18 @@ onUnmounted(() => {
 
         <label class="xz-field">
           <span class="xz-field-label">接口协议</span>
-          <el-segmented
-            v-model="activeProvider.protocol"
-            class="xz-mode-switch"
-            :options="[
-              { label: 'OpenAI Chat Completions', value: 'openai' },
-              { label: 'Anthropic Messages', value: 'anthropic' },
-            ]"
-          />
+          <el-select
+            v-model="activeProvider.api"
+            class="xz-settings-model"
+            @change="onProviderApiChange"
+          >
+            <el-option
+              v-for="option in XIANZUN_API_OPTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
         </label>
 
         <label v-if="activeProvider.protocol === 'anthropic'" class="xz-field">
@@ -4994,6 +5318,44 @@ onUnmounted(() => {
           </div>
           <span v-if="modelsStatus" class="xz-field-hint">{{ modelsStatus }}</span>
         </label>
+
+        <div v-if="activeModelProfile" class="xz-model-capabilities">
+          <span>上下文 {{ formatTokenCapacity(activeModelProfile.contextWindow) }}</span>
+          <span>最大输出 {{ formatTokenCapacity(activeModelProfile.maxTokens) }}</span>
+          <span>输入类型 {{ activeModelProfile.input.join(' / ') }}</span>
+          <span>推理 {{ activeModelProfile.reasoning ? '支持' : '未声明' }}</span>
+        </div>
+
+        <div class="xz-advanced-provider">
+          <div class="xz-advanced-provider-head">
+            <div>
+              <span class="xz-field-label">高级请求配置</span>
+              <span class="xz-field-hint">用于兼容第三方网关的请求头和协议参数</span>
+            </div>
+            <el-button size="small" type="primary" @click="applyAdvancedProviderConfig">
+              应用高级配置
+            </el-button>
+          </div>
+          <label class="xz-field">
+            <span class="xz-field-label">请求头 JSON</span>
+            <el-input
+              v-model="headersJsonDraft"
+              type="textarea"
+              :rows="4"
+              placeholder="{&quot;x-custom-header&quot;:&quot;value&quot;}"
+            />
+          </label>
+          <label class="xz-field">
+            <span class="xz-field-label">兼容参数 JSON</span>
+            <el-input
+              v-model="compatJsonDraft"
+              type="textarea"
+              :rows="4"
+              placeholder="{&quot;supportsDeveloperRole&quot;:false,&quot;maxTokensField&quot;:&quot;max_tokens&quot;}"
+            />
+          </label>
+          <span v-if="advancedConfigStatus" class="xz-field-hint">{{ advancedConfigStatus }}</span>
+        </div>
 
         <label class="xz-field">
           <span class="xz-field-label">{{ t('xianzun.reasoningEffort') }}</span>
@@ -5281,9 +5643,11 @@ onUnmounted(() => {
 
 .xz-brand {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 12px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .xz-avatar {
@@ -5322,12 +5686,20 @@ onUnmounted(() => {
 
 .xz-brand-text {
   min-width: 0;
+  overflow: hidden;
 }
 
-.xz-name {
+.xz-name,
+.xz-status {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.xz-name {
   font-size: 15px;
   line-height: 1.25;
   font-weight: 700;
@@ -5335,6 +5707,7 @@ onUnmounted(() => {
 }
 
 .xz-name-en {
+  flex: 0 0 auto;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.6px;
@@ -5342,7 +5715,6 @@ onUnmounted(() => {
 }
 
 .xz-status {
-  display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 3px;
@@ -5361,6 +5733,15 @@ onUnmounted(() => {
 .xz-approval-warning {
   margin-left: 5px;
   font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.xz-approval-warning-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .xz-field-warning {
@@ -5400,6 +5781,9 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .xz-model-select {
@@ -7068,9 +7452,12 @@ onUnmounted(() => {
 .xz-hint {
   font-size: 11px;
   color: rgba(var(--theme-text-secondary-rgb), 0.5);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .xz-hint-sep {
@@ -7086,7 +7473,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .xz-usage-chip {
@@ -7317,6 +7706,49 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+.xz-provider-preset-hint {
+  line-height: 1.5;
+}
+
+.xz-model-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.xz-model-capabilities span {
+  padding: 4px 8px;
+  border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.14);
+  border-radius: 6px;
+  background: rgba(var(--theme-surface-tint-rgb), 0.06);
+  color: rgba(var(--theme-text-secondary-rgb), 0.9);
+  font-size: 11px;
+}
+
+.xz-advanced-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(var(--theme-surface-tint-rgb), 0.16);
+  border-radius: 8px;
+  background: rgba(var(--theme-surface-tint-rgb), 0.045);
+}
+
+.xz-advanced-provider-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.xz-advanced-provider-head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 .xz-mode-switch {
   width: 100%;
   padding: 3px;
@@ -7393,13 +7825,98 @@ onUnmounted(() => {
 }
 
 /* ── Responsive ── */
-@media (max-width: 760px) {
-  .xz-msg-main {
-    max-width: 88%;
+@media (max-width: 1280px) {
+  .xz-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+    align-items: center;
+    gap: 10px 12px;
+  }
+
+  .xz-brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .xz-plan-pill {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    max-width: min(42vw, 440px);
+  }
+
+  .xz-plan-pill-btn {
+    max-width: 100%;
+  }
+
+  .xz-header-actions {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .xz-approval-warning-text {
+    display: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .xz-header-actions {
+    justify-content: flex-start;
+  }
+
+  .xz-provider-quick-select,
+  .xz-model-select,
+  .xz-approval-select {
+    flex: 1 1 150px;
+    width: auto;
+    min-width: 140px;
   }
 
   .xz-model-select {
-    width: 140px;
+    flex-basis: 170px;
+  }
+
+  .xz-nsfw-label,
+  .xz-name-en,
+  .xz-hint-drop,
+  .xz-hint-sep-drop {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .xz-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .xz-brand {
+    grid-column: 1;
+  }
+
+  .xz-plan-pill {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: stretch;
+    max-width: 100%;
+  }
+
+  .xz-header-actions {
+    grid-row: 3;
+  }
+
+  .xz-provider-quick-select,
+  .xz-model-select,
+  .xz-approval-select {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .xz-msg-main {
+    max-width: 88%;
   }
 
   .xz-hint {

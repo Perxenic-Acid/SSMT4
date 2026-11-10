@@ -1409,8 +1409,21 @@ impl NTEMINewExtractor {
             }
 
             //根据DrawIB和TrianglelistIndex列表，获取可能的数据类型列表
-            let mut possible_gametype_list =
-                self.detect_gametype_list(&draw_ib, &pointlist_index, &trianglelist_index_list)?;
+            let mut possible_gametype_list = match self.detect_gametype_list(
+                &draw_ib,
+                &pointlist_index,
+                &trianglelist_index_list,
+            ) {
+                Ok(list) => list,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        error,
+                        !self.specify_drawib_extract,
+                    )?;
+                    continue;
+                }
+            };
 
             possible_gametype_list
                 .retain(|gt| data_type_filter.allows(gt.d3d11gametype.gpu_pre_skinning));
@@ -1430,11 +1443,24 @@ impl NTEMINewExtractor {
                 continue;
             }
 
-            self.export_unity_vs_submeshes(
+            let extract_success = crate::extract_new::evaluate_drawib_extraction(
                 draw_ib,
-                &trianglelist_index_list,
-                &possible_gametype_list,
+                self.export_unity_vs_submeshes(
+                    draw_ib,
+                    &trianglelist_index_list,
+                    &possible_gametype_list,
+                ),
+                || {
+                    format!(
+                        "no valid data type matched. TrianglelistIndex: {:?} PointlistIndex: {}",
+                        trianglelist_index_list, pointlist_index
+                    )
+                },
+                !self.specify_drawib_extract,
             )?;
+            if !extract_success {
+                continue;
+            }
         }
 
         crate::extract_log!("提取正常执行完成");

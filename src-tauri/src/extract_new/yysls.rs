@@ -1053,7 +1053,17 @@ impl YYSLSNewExtractor {
         for draw_ib in draw_ib_list.iter() {
             crate::extract_log!("当前DrawIB: {}", draw_ib);
 
-            let request_list = self.build_ctx_extract_requests_for_draw_ib(draw_ib)?;
+            let request_list = match self.build_ctx_extract_requests_for_draw_ib(draw_ib) {
+                Ok(list) => list,
+                Err(error) => {
+                    crate::extract_new::handle_drawib_extraction_error(
+                        draw_ib,
+                        error,
+                        !self.specify_drawib_extract,
+                    )?;
+                    continue;
+                }
+            };
             if request_list.is_empty() {
                 crate::extract_new::log_skipped_drawib(draw_ib, "no available CTX extract request");
                 continue;
@@ -1063,25 +1073,28 @@ impl YYSLSNewExtractor {
             for request in request_list.iter() {
                 crate::extract_log!("当前CTX对应的VSHash: {}", request.vs_hash);
 
-                let result = if request.vs_hash == SPECIAL_VS_HASH_8299998BC5A81A12 {
-                    crate::extract_log!("执行提取流程: extract_8299998bc5a81a12");
-                    let field_offsets = Self::load_8299998bc5a81a12_field_offsets()?;
-                    self.extract_ctx_request(
-                        draw_ib,
-                        request,
-                        Some(&field_offsets),
-                        data_type_filter,
-                    )?
-                } else {
-                    crate::extract_log!("执行提取流程: extract_default_ctx_request");
-                    self.extract_ctx_request(draw_ib, request, None, data_type_filter)?
-                };
+                let result = (|| -> Result<bool, String> {
+                    if request.vs_hash == SPECIAL_VS_HASH_8299998BC5A81A12 {
+                        crate::extract_log!("执行提取流程: extract_8299998bc5a81a12");
+                        let field_offsets = Self::load_8299998bc5a81a12_field_offsets()?;
+                        self.extract_ctx_request(
+                            draw_ib,
+                            request,
+                            Some(&field_offsets),
+                            data_type_filter,
+                        )
+                    } else {
+                        crate::extract_log!("执行提取流程: extract_default_ctx_request");
+                        self.extract_ctx_request(draw_ib, request, None, data_type_filter)
+                    }
+                })();
 
-                if !result {
-                    crate::extract_new::log_skipped_drawib(
-                        draw_ib,
-                        "CTX extract request produced no output",
-                    );
+                if !crate::extract_new::evaluate_drawib_extraction(
+                    draw_ib,
+                    result,
+                    || "CTX extract request produced no output".to_string(),
+                    !self.specify_drawib_extract,
+                )? {
                     continue;
                 }
             }
@@ -1093,6 +1106,7 @@ impl YYSLSNewExtractor {
                 &self.fa,
                 &self.drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         } else {
             let full_drawib_config = DrawIBConfig {
@@ -1109,6 +1123,7 @@ impl YYSLSNewExtractor {
                 &self.fa,
                 &full_drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         }
         Ok(())

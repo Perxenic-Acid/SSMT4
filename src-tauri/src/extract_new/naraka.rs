@@ -671,20 +671,23 @@ impl NarakaNewExtractor {
                 crate::extract_log!("TrianglelistIndex: {}", trianglelist_index);
             }
 
-            let result = self.extract_fee307b98a965c16(
-                &draw_ib,
-                &pointlist_index,
-                &trianglelist_index_list,
-                data_type_filter,
-            )?;
-            if !result {
-                crate::extract_new::log_skipped_drawib(
-                    draw_ib,
+            let result = crate::extract_new::evaluate_drawib_extraction(
+                draw_ib,
+                self.extract_fee307b98a965c16(
+                    &draw_ib,
+                    &pointlist_index,
+                    &trianglelist_index_list,
+                    data_type_filter,
+                ),
+                || {
                     format!(
                         "no valid data type matched. PointlistIndex: {} TrianglelistIndex: {:?}",
                         pointlist_index, trianglelist_index_list
-                    ),
-                );
+                    )
+                },
+                !self.specify_drawib_extract,
+            )?;
+            if !result {
                 continue;
             }
         }
@@ -695,6 +698,7 @@ impl NarakaNewExtractor {
                 &self.fa,
                 &self.drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         } else {
             let full_drawib_config = DrawIBConfig {
@@ -711,6 +715,7 @@ impl NarakaNewExtractor {
                 &self.fa,
                 &full_drawib_config,
                 &self.workspace_path,
+                !self.specify_drawib_extract,
             )?;
         }
         Ok(())

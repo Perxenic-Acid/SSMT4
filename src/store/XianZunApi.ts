@@ -93,28 +93,63 @@ export const apiErrorMessage = (payload: unknown, fallback: string): string => {
   return asText(errorRecord.message) || asText(root.message) || fallback
 }
 
+const removeHeader = (headers: Record<string, string>, name: string) => {
+  const target = name.toLowerCase()
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === target) delete headers[key]
+  }
+}
+
+export const buildXianZunRequestHeaders = (options: {
+  protocol: XianZunProviderProtocol
+  apiKey: string
+  auth: XianZunAnthropicAuth
+  headers?: Record<string, string>
+}): Record<string, string> => {
+  const headers: Record<string, string> = { ...(options.headers ?? {}) }
+  removeHeader(headers, 'authorization')
+  removeHeader(headers, 'x-api-key')
+  if (options.protocol === 'anthropic') {
+    headers['anthropic-version'] = '2023-06-01'
+    headers['anthropic-dangerous-direct-browser-access'] = 'true'
+    if (options.auth === 'x-api-key') {
+      headers['x-api-key'] = options.apiKey
+    } else {
+      headers.Authorization = `Bearer ${options.apiKey}`
+    }
+  } else {
+    headers.Authorization = `Bearer ${options.apiKey}`
+  }
+  return headers
+}
+
 export const fetchXianZunModels = async (options: {
   protocol: XianZunProviderProtocol
   baseUrl: string
   apiKey: string
   auth: XianZunAnthropicAuth
+  headers?: Record<string, string>
+  fetchImpl?: typeof globalThis.fetch
 }): Promise<XianZunModelOption[]> => {
   const endpoint = xianZunEndpoint(options.baseUrl, 'models', options.protocol)
-  const headers: Record<string, string> = options.protocol === 'anthropic'
-    ? {
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-        ...(options.auth === 'x-api-key'
-          ? { 'x-api-key': options.apiKey }
-          : { Authorization: `Bearer ${options.apiKey}` }),
-      }
-    : { Authorization: `Bearer ${options.apiKey}` }
-  const response = await fetch(endpoint, {
+  const request = options.fetchImpl ?? fetch
+  const response = await request(endpoint, {
     method: 'GET',
-    headers,
+    headers: buildXianZunRequestHeaders(options),
     signal: AbortSignal.timeout(15000),
   })
   const payload = await readPayload(response)
   if (!response.ok) throw new Error(`HTTP ${response.status}${payload ? ` - ${apiErrorMessage(payload, String(payload))}` : ''}`)
   return parseXianZunModelPayload(payload)
+}
+
+export const mergeXianZunModels = (
+  existingModels: string[],
+  discoveredModels: string[],
+  currentModel = '',
+): string[] => {
+  const merged = [...existingModels]
+  if (currentModel.trim()) merged.push(currentModel.trim())
+  merged.push(...discoveredModels)
+  return Array.from(new Set(merged.filter(Boolean)))
 }
