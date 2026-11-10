@@ -1472,7 +1472,11 @@ const appendModsIncrementally = async (
         if (refreshAnalysis) clearModAnalysisSubscriptions();
 
         if (mods.value.length > 0) {
-            const next = reconcileModSnapshot(mods.value, incomingMods, removeMissing);
+            const existingIds = new Set(mods.value.map(mod => normalizeModIdentity(mod.relativePath || mod.id)));
+            const next = refreshAnalysis
+                ? reconcileModSnapshot(mods.value, incomingMods, removeMissing)
+                : [...mods.value, ...incomingMods.filter(mod => !existingIds.has(normalizeModIdentity(mod.relativePath || mod.id)))];
+            totalModsCount.value = next.length;
             if (next.length !== mods.value.length || next.some((mod, index) => mod !== mods.value[index])) mods.value = next;
             loadedModsCount.value = next.length;
             if (refreshAnalysis && next.length) queueVisibleModAnalysis(next);
@@ -1720,7 +1724,33 @@ const {
     loading,
     t,
     pendingDropGroup: pendingExternalFileDropGroup,
-    reconcileInstalledMods: () => refreshAfterMutation('structure'),
+    reconcileInstalledMods: async (gameName, targetGroup, names) => {
+        // 只索引导入目标及新增子树，不重建全库或先切回根分类。
+        const prefix = targetGroup && targetGroup !== 'Root' ? `${targetGroup}/` : '';
+        const importedPaths = names.map(name => `${prefix}${name}`);
+        const pending = [targetGroup || 'Root'];
+        let parent = targetGroup;
+        while (parent && parent !== 'Root' && !availableGroups.value.some(group => group.id === parent)) {
+            const separator = parent.lastIndexOf('/');
+            parent = separator < 0 ? 'Root' : parent.slice(0, separator);
+            pending.unshift(parent);
+        }
+        const visited = new Set<string>();
+        while (pending.length) {
+            const group = pending.shift()!;
+            if (visited.has(group)) continue;
+            visited.add(group);
+            const snapshot = await ModManager.scanGroup(gameName, group, undefined, { refresh: true });
+            for (const child of snapshot.groups) {
+                if (importedPaths.some(path => child.id === path || child.id.startsWith(`${path}/`))) pending.push(child.id);
+            }
+            if (selectedGame.value === gameName) updateAvailableGroups(snapshot.groups);
+        }
+        if (selectedGame.value !== gameName) return;
+        allModsCatalogLoadedForGame.value = '';
+        await withOrderPersistencePaused(() => loadGroupMods(selectedGroup.value, { showProgress: false, refreshAnalysis: false }));
+        await loadTagState(gameName);
+    },
     suppressFsRefresh: (durationMs) => suppressFsRefresh(durationMs),
 });
 
@@ -3008,7 +3038,7 @@ const onMouseSideBack = (e: MouseEvent) => {
     void navigateBackGroup();
 };
 
-const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean; signal?: { isCancelled?: () => boolean }; refresh?: boolean }) => {
+const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean; signal?: { isCancelled?: () => boolean }; refresh?: boolean; refreshAnalysis?: boolean }) => {
     if (!selectedGame.value) return;
     const gameName = selectedGame.value;
     const token = ++groupLoadToken;
@@ -3025,7 +3055,7 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
     let usedCache = false;
     try {
         // Show cached data immediately for instant perceived response
-        if (!options?.refresh && !isAllGroup) {
+        if (!options?.refresh && options?.refreshAnalysis !== false && !isAllGroup) {
             const cached = ModManager.getCachedGroup(gameName, String(path));
             if (cached) {
                 usedCache = true;
@@ -3055,10 +3085,14 @@ const loadGroupMods = async (groupId: string, options?: { showProgress?: boolean
         if (!isAllGroup) {
             markGroupChildrenLoaded(groupId);
         }
-        if (!isAllGroup) {
+        if (!isAllGroup && options?.refreshAnalysis !== false) {
             void preloadSubgroupPreviewImages(nextGroups);
         }
-        await appendModsIncrementally(newMods, token);
+        const existing = new Set(mods.value.map(mod => normalizeModIdentity(mod.relativePath || mod.id)));
+        await appendModsIncrementally(newMods, token, { refreshAnalysis: options?.refreshAnalysis });
+        if (options?.refreshAnalysis === false) {
+            queueVisibleModAnalysis(mods.value.filter(mod => !existing.has(normalizeModIdentity(mod.relativePath || mod.id))));
+        }
     } catch (e) {
         if (token !== groupLoadToken) return;
         if (ModManager.isScanCancelled(e)) return;

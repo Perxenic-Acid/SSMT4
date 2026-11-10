@@ -192,3 +192,47 @@ test('合并的结构变更向失效处理传递正确影响范围', async () =>
   await reconciler.reconcile('content');
   assert.deepEqual(calls.slice(2), [['Game', 'content'], 'content']);
 });
+
+test('导入只扫描目标及新增子树，不扫描已有分类，刷新当前视图时保留分析缓存', async () => {
+  const source = readFileSync('src/views/ModsManagement/ModsManagement.vue', 'utf8');
+  const callback = source.slice(source.indexOf('    reconcileInstalledMods: async'), source.indexOf('    suppressFsRefresh: (durationMs)'));
+  const code = ts.transpileModule('exports.options = ({' + callback + '});', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const scans = [], views = [];
+  const context = {
+    exports: {}, availableGroups: ref([{ id: 'Target' }]), selectedGame: ref('game'), selectedGroup: ref('All'), allModsCatalogLoadedForGame: ref('game'),
+    ModManager: { scanGroup: async (game, group, signal, options) => {
+      scans.push(group);
+      assert.equal(options.refresh, true);
+      return { mods: [], groups: group === 'Target' ? [{ id: 'Target/New' }, { id: 'Target/Existing' }] : [] };
+    } },
+    updateAvailableGroups() {}, withOrderPersistencePaused: fn => fn(), loadTagState: async () => {},
+    loadGroupMods: async (group, options) => views.push({ group, ...options }),
+  };
+  vm.runInNewContext(code, context);
+  await context.exports.options.reconcileInstalledMods('game', 'Target', ['New']);
+  assert.deepEqual(scans, ['Target','Target/New']);
+  assert.deepEqual(views, [{ group: 'All', showProgress: false, refreshAnalysis: false }]);
+  context.selectedGame.value = 'other';
+  await context.exports.options.reconcileInstalledMods('game', 'Target', ['New']);
+  assert.equal(views.length, 1);
+});
+
+test('导入合并仅追加新卡片，不修改已有对象或清除其分析订阅', async () => {
+  const source = readFileSync('src/views/ModsManagement/ModsManagement.vue', 'utf8');
+  const callback = source.slice(source.indexOf('const appendModsIncrementally ='), source.indexOf('const reconcileCurrentSubGroups ='));
+  const code = ts.transpileModule(callback + '\nexports.append = appendModsIncrementally;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const old = { id: 'Old', relativePath: 'Old', preview_images: ['old.png'] };
+  const state = ref([old]);
+  const existing = state.value[0];
+  const context = { exports: {}, mods: state, modHydrationDepth: ref(0), groupLoadToken: 1,
+    totalModsCount: ref(0), loadedModsCount: ref(0), normalizeModIdentity: value => value,
+    clearModAnalysisSubscriptions: () => assert.fail('不能清除已有分析'),
+    queueVisibleModAnalysis: () => assert.fail('不能重新分析已有卡片'),
+  };
+  vm.runInNewContext(code, context);
+  await context.exports.append([{ id: 'Old', relativePath: 'Old', preview_images: [] }, { id: 'New', relativePath: 'New' }], 1, { refreshAnalysis: false });
+  assert.equal(state.value.length, 2);
+  assert.equal(state.value[0], existing);
+  assert.deepEqual(existing.preview_images, ['old.png']);
+  assert.equal(context.totalModsCount.value, 2);
+});

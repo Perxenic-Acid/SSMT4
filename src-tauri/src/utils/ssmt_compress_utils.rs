@@ -25,6 +25,48 @@ pub struct ExtractResult {
     pub total: u64,
 }
 
+pub const ARCHIVE_PASSWORD_REQUIRED: &str = "ARCHIVE_PASSWORD_REQUIRED";
+pub const ARCHIVE_PASSWORD_INVALID: &str = "ARCHIVE_PASSWORD_INVALID";
+
+fn zip_entry<'a>(
+    archive: &'a mut zip::ZipArchive<fs::File>,
+    index: usize,
+    password: Option<&str>,
+) -> Result<zip::read::ZipFile<'a>, String> {
+    match password {
+        Some(password) => archive
+            .by_index_decrypt(index, password.as_bytes())
+            .map_err(zip_error)?
+            .map_err(|_| ARCHIVE_PASSWORD_INVALID.to_string()),
+        None => archive.by_index(index).map_err(zip_error),
+    }
+}
+fn zip_error(error: zip::result::ZipError) -> String {
+    match error {
+        zip::result::ZipError::UnsupportedArchive(zip::result::ZipError::PASSWORD_REQUIRED) => {
+            ARCHIVE_PASSWORD_REQUIRED.into()
+        }
+        _ => error.to_string(),
+    }
+}
+fn seven_zip_error(error: sevenz_rust::Error, has_password: bool) -> String {
+    match error {
+        sevenz_rust::Error::PasswordRequired => ARCHIVE_PASSWORD_REQUIRED.into(),
+        sevenz_rust::Error::MaybeBadPassword(_) if has_password => ARCHIVE_PASSWORD_INVALID.into(),
+        sevenz_rust::Error::ChecksumVerificationFailed if has_password => {
+            ARCHIVE_PASSWORD_INVALID.into()
+        }
+        _ => error.to_string(),
+    }
+}
+fn rar_error<T>(error: unrar::error::UnrarError<T>) -> String {
+    match error.code {
+        unrar::error::Code::MissingPassword => ARCHIVE_PASSWORD_REQUIRED.into(),
+        unrar::error::Code::BadPassword => ARCHIVE_PASSWORD_INVALID.into(),
+        _ => error.to_string(),
+    }
+}
+
 impl SSMTCompressUtils {
     fn run_cli(program_path: &Path, arguments: &[String]) -> Result<String, String> {
         if !program_path.exists() {
@@ -238,7 +280,8 @@ impl SSMTCompressUtils {
             let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
             for i in 0..archive.len() {
-                if let Ok(file) = archive.by_index(i) {
+                {
+                    let file = zip_entry(&mut archive, i, password)?;
                     let name = Self::decode_zip_name(&file);
                     if Self::is_ignorable_archive_entry(&name) {
                         continue;
@@ -265,10 +308,15 @@ impl SSMTCompressUtils {
         } else if ext == "7z" {
             let file = fs::File::open(path).map_err(|e| e.to_string())?;
             let len = file.metadata().map_err(|e| e.to_string())?.len();
-            let password = sevenz_rust::Password::from("");
-            let mut reader =
-                sevenz_rust::SevenZReader::new(file, len, password).map_err(|e| e.to_string())?;
+            let archive_password = sevenz_rust::Password::from(password.unwrap_or_default());
+            let mut reader = sevenz_rust::SevenZReader::new(file, len, archive_password)
+                .map_err(|e| seven_zip_error(e, password.is_some()))?;
 
+            let encrypted = reader.archive().folders.iter().any(|folder| {
+                folder.coders.iter().any(|coder| {
+                    coder.decompression_method_id() == sevenz_rust::SevenZMethod::AES256SHA256.id()
+                })
+            });
             reader
                 .for_each_entries(|entry, _| {
                     let name = entry.name();
@@ -291,7 +339,7 @@ impl SSMTCompressUtils {
                     file_count += 1;
                     Ok(true)
                 })
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| seven_zip_error(e, encrypted))?;
         } else if ext == "rar" {
             let path_string = path.to_string_lossy().to_string();
             let archive = match password.filter(|value| !value.is_empty()) {
@@ -299,10 +347,10 @@ impl SSMTCompressUtils {
                 None => unrar::Archive::new(path_string),
             }
             .list()
-            .map_err(|e| format!("Failed to open RAR archive: {}", e))?;
+            .map_err(rar_error)?;
 
             for entry in archive {
-                let entry = entry.map_err(|e| format!("Failed to read RAR entry: {}", e))?;
+                let entry = entry.map_err(rar_error)?;
                 let entry_name = entry.filename;
                 file_count += 1;
                 if entry_name.to_lowercase().ends_with(".ini") {
@@ -342,11 +390,30 @@ impl SSMTCompressUtils {
         archive_path: &Path,
         dest_dir: &Path,
         excluded_files: &[&str],
-        mut on_progress: F,
+        on_progress: F,
     ) -> Result<ExtractResult, String>
     where
         F: FnMut(u64, u64),
     {
+        Self::extract_zip_archive_options(archive_path, dest_dir, excluded_files, None, on_progress)
+    }
+
+    pub fn extract_zip_archive_with_password<F: FnMut(u64, u64)>(
+        archive_path: &Path,
+        dest_dir: &Path,
+        password: Option<&str>,
+        on_progress: F,
+    ) -> Result<ExtractResult, String> {
+        Self::extract_zip_archive_options(archive_path, dest_dir, &[], password, on_progress)
+    }
+
+    fn extract_zip_archive_options<F: FnMut(u64, u64)>(
+        archive_path: &Path,
+        dest_dir: &Path,
+        excluded_files: &[&str],
+        password: Option<&str>,
+        mut on_progress: F,
+    ) -> Result<ExtractResult, String> {
         let file = fs::File::open(archive_path).map_err(|e| e.to_string())?;
         let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
@@ -382,7 +449,13 @@ impl SSMTCompressUtils {
         let prefix_to_strip = Self::resolve_single_root_dir(&root_dirs, &root_files);
 
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+            let encrypted = matches!(
+                archive.by_index(i),
+                Err(zip::result::ZipError::UnsupportedArchive(
+                    zip::result::ZipError::PASSWORD_REQUIRED
+                ))
+            );
+            let mut file = zip_entry(&mut archive, i, password)?;
             let name = Self::decode_zip_name(&file);
             if Self::is_ignorable_archive_entry(&name) {
                 continue;
@@ -428,8 +501,24 @@ impl SSMTCompressUtils {
                         fs::create_dir_all(p).map_err(|e| e.to_string())?;
                     }
                 }
-                let mut outfile = fs::File::create(&outpath).map_err(|e| e.to_string())?;
-                std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+                let mut outfile = fs::File::create(&outpath).map_err(|e| {
+                    format!(
+                        "创建解压文件 {}（条目 {}）失败: {e}",
+                        outpath.display(),
+                        name
+                    )
+                })?;
+                std::io::copy(&mut file, &mut outfile).map_err(|e| {
+                    if encrypted
+                        && (e.kind() == std::io::ErrorKind::InvalidData
+                            || e.to_string() == "Invalid checksum"
+                            || e.to_string().contains("deflate"))
+                    {
+                        ARCHIVE_PASSWORD_INVALID.into()
+                    } else {
+                        e.to_string()
+                    }
+                })?;
             }
 
             processed_entries += 1;
@@ -445,21 +534,35 @@ impl SSMTCompressUtils {
     pub fn extract_7z_archive<F>(
         archive_path: &Path,
         dest_dir: &Path,
-        mut on_progress: F,
+        on_progress: F,
     ) -> Result<ExtractResult, String>
     where
         F: FnMut(u64, u64),
     {
+        Self::extract_7z_archive_with_password(archive_path, dest_dir, None, on_progress)
+    }
+
+    pub fn extract_7z_archive_with_password<F: FnMut(u64, u64)>(
+        archive_path: &Path,
+        dest_dir: &Path,
+        password: Option<&str>,
+        mut on_progress: F,
+    ) -> Result<ExtractResult, String> {
         let file = fs::File::open(archive_path).map_err(|e| e.to_string())?;
         let len = file.metadata().map_err(|e| e.to_string())?.len();
-        let password = sevenz_rust::Password::from("");
-        let mut reader =
-            sevenz_rust::SevenZReader::new(file, len, password).map_err(|e| e.to_string())?;
+        let archive_password = sevenz_rust::Password::from(password.unwrap_or_default());
+        let mut reader = sevenz_rust::SevenZReader::new(file, len, archive_password)
+            .map_err(|e| seven_zip_error(e, password.is_some()))?;
 
         let mut root_dirs = HashSet::new();
         let mut root_files = HashSet::new();
         let mut total_entries: u64 = 0;
 
+        let encrypted = reader.archive().folders.iter().any(|folder| {
+            folder.coders.iter().any(|coder| {
+                coder.decompression_method_id() == sevenz_rust::SevenZMethod::AES256SHA256.id()
+            })
+        });
         reader
             .for_each_entries(|entry, _| {
                 let name = entry.name();
@@ -481,17 +584,26 @@ impl SSMTCompressUtils {
                 total_entries += 1;
                 Ok(true)
             })
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| seven_zip_error(e, encrypted))?;
 
         let prefix_to_strip = Self::resolve_single_root_dir(&root_dirs, &root_files);
 
         let file = fs::File::open(archive_path).map_err(|e| e.to_string())?;
-        let mut reader = sevenz_rust::SevenZReader::new(file, len, sevenz_rust::Password::from(""))
-            .map_err(|e| e.to_string())?;
+        let mut reader = sevenz_rust::SevenZReader::new(
+            file,
+            len,
+            sevenz_rust::Password::from(password.unwrap_or_default()),
+        )
+        .map_err(|e| seven_zip_error(e, password.is_some()))?;
 
         let mut processed_entries: u64 = 0;
         on_progress(processed_entries, total_entries);
 
+        let encrypted = reader.archive().folders.iter().any(|folder| {
+            folder.coders.iter().any(|coder| {
+                coder.decompression_method_id() == sevenz_rust::SevenZMethod::AES256SHA256.id()
+            })
+        });
         reader
             .for_each_entries(|entry, reader| {
                 let name = entry.name();
@@ -547,7 +659,7 @@ impl SSMTCompressUtils {
                 on_progress(processed_entries, total_entries);
                 Ok(true)
             })
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| seven_zip_error(e, encrypted))?;
 
         Ok(ExtractResult {
             processed: processed_entries,
@@ -586,8 +698,11 @@ impl SSMTCompressUtils {
                 None => unrar::Archive::new(archive_path_string.clone()),
             }
             .list()
-            .map_err(|e| format!("Failed to open RAR archive: {}", e))?;
-            archive.count() as u64
+            .map_err(rar_error)?;
+            archive
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(rar_error)?
+                .len() as u64
         };
 
         on_progress(0, total_entries);
@@ -606,11 +721,11 @@ impl SSMTCompressUtils {
             None => unrar::Archive::new(archive_path_string),
         }
         .extract_to(temp_dir.to_string_lossy().to_string())
-        .map_err(|e| format!("RAR extraction failed: {}", e))?;
+        .map_err(rar_error)?;
 
         // Consume the iterator to trigger extraction for every entry
         for entry in archive {
-            entry.map_err(|e| format!("RAR extraction entry error: {}", e))?;
+            entry.map_err(rar_error)?;
         }
 
         Self::move_extracted_temp_contents(&temp_dir, dest_dir)?;
@@ -826,6 +941,204 @@ impl SSMTCompressUtils {
 mod tests {
     use super::SSMTCompressUtils;
     use std::path::PathBuf;
+
+    struct ArchiveTestRoot(PathBuf);
+    impl ArchiveTestRoot {
+        fn new() -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "ssmt-archive-password-{}-{nonce}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for ArchiveTestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    #[ignore = "通过 SSMT_ARCHIVE_PROBE 指定需诊断的 ZIP，仅解压到临时目录"]
+    fn diagnose_local_zip_import() {
+        let input = std::env::var_os("SSMT_ARCHIVE_PROBE").expect("需要设置 SSMT_ARCHIVE_PROBE");
+        let root = ArchiveTestRoot::new();
+        let result = SSMTCompressUtils::extract_zip_archive_with_password(
+            std::path::Path::new(&input),
+            &root.0.join("output"),
+            None,
+            |_, _| {},
+        );
+        assert!(result.is_ok(), "本地压缩包解压失败：{:?}", result.err());
+    }
+
+    #[test]
+    fn encrypted_seven_zip_preview_and_extraction_use_password() {
+        let root = ArchiveTestRoot::new();
+        let source = root.0.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("mod.ini"),
+            b"[TextureOverrideTest]\nhash=abcd\n",
+        )
+        .unwrap();
+        let archive = root.0.join("encrypted.7z");
+        sevenz_rust::compress_to_path_encrypted(&source, &archive, "secret-a".into()).unwrap();
+        assert_eq!(
+            SSMTCompressUtils::preview_archive(&archive).unwrap_err(),
+            super::ARCHIVE_PASSWORD_REQUIRED
+        );
+        assert_eq!(
+            SSMTCompressUtils::preview_archive_with_password(&archive, Some("wrong")).unwrap_err(),
+            super::ARCHIVE_PASSWORD_INVALID
+        );
+        assert!(
+            SSMTCompressUtils::preview_archive_with_password(&archive, Some("secret-a"))
+                .unwrap()
+                .has_ini
+        );
+        assert!(SSMTCompressUtils::extract_7z_archive_with_password(
+            &archive,
+            &root.0.join("wrong"),
+            Some("wrong"),
+            |_, _| {}
+        )
+        .is_err());
+        let output = root.0.join("output");
+        SSMTCompressUtils::extract_7z_archive_with_password(
+            &archive,
+            &output,
+            Some("secret-a"),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(output.join("mod.ini")).unwrap(),
+            b"[TextureOverrideTest]\nhash=abcd\n"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn encrypted_zip_aes_and_zipcrypto_require_and_validate_passwords() {
+        let tool = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/7za.exe");
+        assert!(
+            tool.is_file(),
+            "ZIP 加密回归需要仓库附带的 resources/7za.exe"
+        );
+        for encryption in ["AES256", "ZipCrypto"] {
+            let root = ArchiveTestRoot::new();
+            let source = root.0.join("mod.ini");
+            std::fs::write(&source, b"[TextureOverrideTest]\nhash=abcd\n").unwrap();
+            let archive = root.0.join("encrypted.zip");
+            SSMTCompressUtils::run_cli(
+                &tool,
+                &[
+                    "a".into(),
+                    "-tzip".into(),
+                    "-psecret-a".into(),
+                    format!("-mem={encryption}"),
+                    archive.to_string_lossy().into_owned(),
+                    source.to_string_lossy().into_owned(),
+                ],
+            )
+            .unwrap();
+            assert_eq!(
+                SSMTCompressUtils::preview_archive(&archive).unwrap_err(),
+                super::ARCHIVE_PASSWORD_REQUIRED
+            );
+            assert_eq!(
+                SSMTCompressUtils::preview_archive_with_password(&archive, Some("wrong"))
+                    .unwrap_err(),
+                super::ARCHIVE_PASSWORD_INVALID
+            );
+            assert!(
+                SSMTCompressUtils::preview_archive_with_password(&archive, Some("secret-a"))
+                    .unwrap()
+                    .has_ini
+            );
+            assert_eq!(
+                SSMTCompressUtils::extract_zip_archive_with_password(
+                    &archive,
+                    &root.0.join("wrong"),
+                    Some("wrong"),
+                    |_, _| {}
+                )
+                .unwrap_err(),
+                super::ARCHIVE_PASSWORD_INVALID
+            );
+            let output = root.0.join("output");
+            SSMTCompressUtils::extract_zip_archive_with_password(
+                &archive,
+                &output,
+                Some("secret-a"),
+                |_, _| {},
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read(output.join("mod.ini")).unwrap(),
+                b"[TextureOverrideTest]\nhash=abcd\n"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_password_does_not_turn_plain_zip_corruption_into_password_error() {
+        use std::io::Write;
+        let root = ArchiveTestRoot::new();
+        let path = root.0.join("plain.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        writer
+            .start_file(
+                "mod.ini",
+                zip::write::FileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"known data").unwrap();
+        writer.finish().unwrap();
+        let offset = {
+            let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+            let offset = archive.by_index(0).unwrap().data_start() as usize;
+            offset
+        };
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[offset] ^= 1;
+        std::fs::write(&path, bytes).unwrap();
+        let error = SSMTCompressUtils::extract_zip_archive_with_password(
+            &path,
+            &root.0.join("output"),
+            Some("cached"),
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert!(!error.starts_with("ARCHIVE_PASSWORD_"), "{error}");
+    }
+
+    #[test]
+    fn rar_password_errors_are_distinct_from_io_and_corruption_errors() {
+        use unrar::error::{Code, UnrarError, When};
+        let error = |code| UnrarError {
+            code,
+            when: When::Open,
+            data: None::<()>,
+        };
+        assert_eq!(
+            super::rar_error(error(Code::MissingPassword)),
+            super::ARCHIVE_PASSWORD_REQUIRED
+        );
+        assert_eq!(
+            super::rar_error(error(Code::BadPassword)),
+            super::ARCHIVE_PASSWORD_INVALID
+        );
+        assert!(!super::rar_error(error(Code::EWrite)).starts_with("ARCHIVE_PASSWORD_"));
+        assert!(!super::rar_error(error(Code::BadArchive)).starts_with("ARCHIVE_PASSWORD_"));
+    }
 
     #[test]
     fn archive_entry_output_path_allows_normal_relative_paths() {

@@ -1,0 +1,76 @@
+.el-message-box.mod-import-conflict {
+  width: 520px;
+  max-width: calc(100vw - 32px);
+}
+
+.mod-import-conflict__body {
+  display: grid;
+  gap: 12px;
+}
+
+.mod-import-conflict__intro {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
+
+.mod-import-conflict__name {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.mod-import-conflict__options {
+  display: grid;
+  gap: 8px;
+}
+
+.mod-import-conflict__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 160ms, background-color 160ms;
+}
+
+.mod-import-conflict__option:hover,
+.mod-import-conflict__option:focus-within {
+  border-color: var(--el-color-primary);
+}
+
+.mod-import-conflict__option.is-selected {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.mod-import-conflict__option input {
+  margin: 3px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--el-color-primary);
+}
+
+.mod-import-conflict__copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mod-import-conflict__label {
+  color: var(--el-text-color-primary);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.mod-import-conflict__hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}

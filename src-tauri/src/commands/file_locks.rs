@@ -78,6 +78,50 @@ fn scan(paths: Vec<String>) -> Result<LockReport, String> {
     Ok(report)
 }
 
+// 仅在安装失败时按需诊断，不自动终止占用者，也不修改 ACL。
+pub(crate) fn describe_install_access(paths: &[PathBuf]) -> String {
+    let mut details = Vec::new();
+    for path in paths {
+        match std::fs::metadata(path) {
+            Ok(metadata) => details.push(format!(
+                "{}：{}，只读={}",
+                path.display(),
+                if metadata.is_dir() {
+                    "目录"
+                } else {
+                    "文件"
+                },
+                metadata.permissions().readonly()
+            )),
+            Err(error) => details.push(format!("{}：无法读取属性：{error}", path.display())),
+        }
+    }
+    match scan(
+        paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+    ) {
+        Ok(report) => {
+            if report.owners.is_empty() {
+                details.push(
+                    "未发现文件占用进程；仍可能存在目录句柄占用、短暂扫描或目录权限限制。".into(),
+                );
+            } else {
+                for owner in report.owners {
+                    details.push(format!(
+                        "占用进程：{} (PID {}) {}",
+                        owner.name, owner.pid, owner.executable
+                    ));
+                }
+            }
+            details.extend(report.warnings.into_iter().take(3));
+        }
+        Err(error) => details.push(format!("占用检查失败：{error}")),
+    }
+    details.join("\n")
+}
+
 #[tauri::command]
 pub async fn query_file_locks(paths: Vec<String>) -> Result<LockReport, String> {
     tauri::async_runtime::spawn_blocking(move || scan(paths))

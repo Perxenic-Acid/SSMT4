@@ -1093,6 +1093,100 @@ fn remove_install_staging_dir(staging_dir: &Path) {
     }
 }
 
+fn rename_install_path(source: &Path, destination: &Path) -> std::io::Result<()> {
+    for attempt in 0..4 {
+        match fs::rename(source, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < 3 && matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
+                std::thread::sleep(Duration::from_millis(120 * (attempt + 1)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!()
+}
+
+fn finalize_install_directory(staging: &Path, destination: &Path) -> Result<(), String> {
+    if destination.try_exists().map_err(|e| e.to_string())? {
+        return Err("MOD_IMPORT_CONFLICT".into());
+    }
+    match rename_install_path(staging, destination) {
+        Ok(()) => return Ok(()),
+        Err(error)
+            if matches!(error.raw_os_error(), Some(5 | 32 | 33)) && !destination.exists() =>
+        {
+            // Windows 允许读取但不允许重命名被占用的目录；仅向本次独占创建的空目标复制。
+            // 目标已存在时绝不借此绕过冲突确认。
+            let diagnostic = super::file_locks::describe_install_access(&[staging.to_path_buf()]);
+            eprintln!("[ModImport] 目录移动受阻，尝试复制回退：{error}\n{diagnostic}");
+            fs::create_dir(destination).map_err(|copy_error| {
+                format!(
+                    "移动目录失败：{error}；创建复制目标 {} 也失败：{copy_error}",
+                    destination.display()
+                )
+            })?;
+            if let Err(copy_error) = merge_install_tree(staging, destination) {
+                let diagnostic = super::file_locks::describe_install_access(&[
+                    staging.to_path_buf(),
+                    destination.to_path_buf(),
+                ]);
+                let cleanup = fs::remove_dir_all(destination);
+                return Err(format!("移动目录失败：{error}；复制回退失败：{copy_error}\n{diagnostic}\n目标清理结果：{cleanup:?}"));
+            }
+            remove_install_staging_dir(staging);
+            return Ok(());
+        }
+        Err(error) => Err(format!(
+            "移动目录 {} -> {} 失败：{error}",
+            staging.display(),
+            destination.display()
+        )),
+    }
+}
+
+// 直接写入只在完整解压成功后执行；禁止沿目标目录中的链接写出 Mod 目录。
+fn merge_install_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    if fs::symlink_metadata(destination)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(format!("不能直接写入链接路径：{}", destination.display()));
+    }
+    fs::create_dir_all(destination)
+        .map_err(|e| format!("无法创建目录 {}: {e}", destination.display()))?;
+    for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let target = destination.join(entry.file_name());
+        if fs::symlink_metadata(&target)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(format!("不能覆盖链接路径：{}", target.display()));
+        }
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            merge_install_tree(&entry.path(), &target)?;
+        } else {
+            #[cfg(windows)]
+            if target.is_file() {
+                let mut permissions = fs::metadata(&target)
+                    .map_err(|e| e.to_string())?
+                    .permissions();
+                if permissions.readonly() {
+                    permissions.set_readonly(false);
+                    fs::set_permissions(&target, permissions).map_err(|e| e.to_string())?;
+                }
+            }
+            fs::copy(entry.path(), &target).map_err(|e| {
+                format!(
+                    "无法写入 {}: {e}；请检查文件占用或目录权限",
+                    target.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn backup_existing_install_dir(dest_dir: &Path) -> Result<PathBuf, String> {
     let parent = dest_dir
         .parent()
@@ -1122,7 +1216,7 @@ fn backup_existing_install_dir(dest_dir: &Path) -> Result<PathBuf, String> {
         if backup.exists() {
             continue;
         }
-        fs::rename(dest_dir, &backup).map_err(|error| {
+        rename_install_path(dest_dir, &backup).map_err(|error| {
             format!(
                 "Failed to move existing Mod into the 3Dmigoto-safe backup {}: {}",
                 backup.to_string_lossy(),
@@ -1382,6 +1476,90 @@ mod install_path_tests {
     use super::normalize_install_relative_path;
     use std::path::PathBuf;
 
+    #[cfg(windows)]
+    #[test]
+    fn finalize_falls_back_to_copy_when_open_file_prevents_directory_rename() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-locked-install-{}-{}",
+            std::process::id(),
+            super::SystemTime::now()
+                .duration_since(super::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("source");
+        let target = root.join("target");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("mod.ini"), b"content").unwrap();
+        // 允许其他读取、写入，但不共享删除权，模拟索引器或扫描器的短暂句柄。
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(source.join("mod.ini"))
+            .unwrap();
+        assert!(std::fs::rename(&source, &target).is_err());
+        super::finalize_install_directory(&source, &target).unwrap();
+        assert_eq!(std::fs::read(target.join("mod.ini")).unwrap(), b"content");
+        drop(handle);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finalize_does_not_overwrite_existing_destination() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-conflict-install-{}-{}",
+            std::process::id(),
+            super::SystemTime::now()
+                .duration_since(super::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("source");
+        let target = root.join("target");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.ini"), b"keep").unwrap();
+        assert!(super::finalize_install_directory(&source, &target).is_err());
+        assert_eq!(std::fs::read(target.join("keep.ini")).unwrap(), b"keep");
+        assert!(source.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn merge_install_preserves_other_files_and_overwrites_matching_files() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-merge-{}-{}",
+            std::process::id(),
+            super::SystemTime::now()
+                .duration_since(super::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("source");
+        let target = root.join("target");
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::create_dir_all(target.join("nested")).unwrap();
+        std::fs::write(source.join("nested/mod.ini"), b"new").unwrap();
+        std::fs::write(target.join("nested/mod.ini"), b"old").unwrap();
+        std::fs::write(target.join("keep.ini"), b"keep").unwrap();
+        #[cfg(windows)]
+        {
+            let mut permissions = std::fs::metadata(target.join("nested/mod.ini"))
+                .unwrap()
+                .permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(target.join("nested/mod.ini"), permissions).unwrap();
+        }
+        super::merge_install_tree(&source, &target).unwrap();
+        assert_eq!(
+            std::fs::read(target.join("nested/mod.ini")).unwrap(),
+            b"new"
+        );
+        assert_eq!(std::fs::read(target.join("keep.ini")).unwrap(), b"keep");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn install_group_path_allows_nested_relative_groups() {
         let path = normalize_install_relative_path("Characters/Ayaka", "Target group", true, false)
@@ -1399,14 +1577,17 @@ mod install_path_tests {
 }
 
 #[tauri::command]
-pub async fn preview_mod_archive(path: String) -> Result<ArchivePreview, String> {
+pub async fn preview_mod_archive(
+    path: String,
+    password: Option<String>,
+) -> Result<ArchivePreview, String> {
     let path_buf = PathBuf::from(&path);
 
     if path_buf.is_dir() {
         return preview_mod_folder(&path_buf);
     }
 
-    SSMTCompressUtils::preview_archive(&path_buf)
+    SSMTCompressUtils::preview_archive_with_password(&path_buf, password.as_deref())
 }
 
 #[tauri::command]
@@ -1439,6 +1620,7 @@ pub async fn install_mod_archive(
     target_group: String, // E.g. "Ayaka", or "Root"
     password: Option<String>,
     backup_existing: Option<bool>,
+    conflict_action: Option<String>,
 ) -> Result<(), String> {
     let mods_dir = mods_root(&install_dir);
     let target_name_path = normalize_install_relative_path(&target_name, "Mod name", false, false)?;
@@ -1452,8 +1634,12 @@ pub async fn install_mod_archive(
     let target_parent = resolve_physical_install_group_path(&mods_dir, &target_group_path);
     let dest_dir = target_parent.join(&target_name_path);
 
-    if dest_dir.exists() && !backup_existing.unwrap_or(false) {
-        return Err("该分类下已存在同名 Mod，请更改名称后重试".to_string());
+    let action = conflict_action.as_deref().unwrap_or("ask");
+    if !matches!(action, "ask" | "replace" | "merge") {
+        return Err("无效的同名目标处理方式".into());
+    }
+    if dest_dir.exists() && action == "ask" && !backup_existing.unwrap_or(false) {
+        return Err("MOD_IMPORT_CONFLICT".into());
     }
 
     let path_buf = PathBuf::from(&archive_path);
@@ -1503,31 +1689,41 @@ pub async fn install_mod_archive(
                 },
             )
         } else if archive_format == Some(ModArchiveFormat::Zip) {
-            SSMTCompressUtils::extract_zip_archive(&path_buf, &staging_dir, |current, total| {
-                emit_install_progress(
-                    &app,
-                    InstallProgressPayload {
-                        game_name: game_name.clone(),
-                        mod_name: target_name.clone(),
-                        stage: "extracting".to_string(),
-                        current,
-                        total,
-                    },
-                );
-            })
+            SSMTCompressUtils::extract_zip_archive_with_password(
+                &path_buf,
+                &staging_dir,
+                password.as_deref(),
+                |current, total| {
+                    emit_install_progress(
+                        &app,
+                        InstallProgressPayload {
+                            game_name: game_name.clone(),
+                            mod_name: target_name.clone(),
+                            stage: "extracting".to_string(),
+                            current,
+                            total,
+                        },
+                    );
+                },
+            )
         } else if archive_format == Some(ModArchiveFormat::SevenZip) {
-            SSMTCompressUtils::extract_7z_archive(&path_buf, &staging_dir, |current, total| {
-                emit_install_progress(
-                    &app,
-                    InstallProgressPayload {
-                        game_name: game_name.clone(),
-                        mod_name: target_name.clone(),
-                        stage: "extracting".to_string(),
-                        current,
-                        total,
-                    },
-                );
-            })
+            SSMTCompressUtils::extract_7z_archive_with_password(
+                &path_buf,
+                &staging_dir,
+                password.as_deref(),
+                |current, total| {
+                    emit_install_progress(
+                        &app,
+                        InstallProgressPayload {
+                            game_name: game_name.clone(),
+                            mod_name: target_name.clone(),
+                            stage: "extracting".to_string(),
+                            current,
+                            total,
+                        },
+                    );
+                },
+            )
         } else if archive_format == Some(ModArchiveFormat::Rar) {
             SSMTCompressUtils::extract_rar_archive_with_password(
                 &path_buf,
@@ -1577,8 +1773,21 @@ pub async fn install_mod_archive(
     let extract_result = match extract_result {
         Ok(value) => value,
         Err(error) => {
+            let diagnostic = if error.contains("os error 5")
+                || error.contains("os error 32")
+                || error.contains("拒绝访问")
+                || error.to_lowercase().contains("access is denied")
+            {
+                super::file_locks::describe_install_access(&[path_buf.clone(), staging_dir.clone()])
+            } else {
+                String::new()
+            };
             remove_install_staging_dir(&staging_dir);
-            return Err(error);
+            return Err(format!(
+                "解压 {} 到 {} 失败：{error}\n{diagnostic}",
+                path_buf.display(),
+                staging_dir.display()
+            ));
         }
     };
 
@@ -1591,8 +1800,25 @@ pub async fn install_mod_archive(
         )
     })?;
 
+    if dest_dir.exists() && action == "merge" {
+        let result = merge_install_tree(&staging_dir, &dest_dir);
+        remove_install_staging_dir(&staging_dir);
+        result.map_err(|error| format!("直接写入未完成，部分文件可能已更新：{error}"))?;
+        emit_install_progress(
+            &app,
+            InstallProgressPayload {
+                game_name,
+                mod_name: target_name,
+                stage: "done".into(),
+                current: extract_result.total.max(1),
+                total: extract_result.total.max(1),
+            },
+        );
+        return Ok(());
+    }
+
     let backup_path = if dest_dir.exists() {
-        match backup_existing.unwrap_or(false) {
+        match backup_existing.unwrap_or(false) || action == "replace" {
             true => match backup_existing_install_dir(&dest_dir) {
                 Ok(path) => Some(path),
                 Err(error) => {
@@ -1602,23 +1828,37 @@ pub async fn install_mod_archive(
             },
             false => {
                 remove_install_staging_dir(&staging_dir);
-                return Err("该分类下已存在同名 Mod，请更改名称后重试".to_string());
+                return Err("MOD_IMPORT_CONFLICT".into());
             }
         }
     } else {
         None
     };
 
-    fs::rename(&staging_dir, &dest_dir).map_err(|e| {
+    finalize_install_directory(&staging_dir, &dest_dir).map_err(|e| {
+        let diagnostic = super::file_locks::describe_install_access(&[
+            staging_dir.clone(),
+            target_parent.clone(),
+        ]);
         remove_install_staging_dir(&staging_dir);
-        if let Some(backup) = backup_path.as_ref() {
-            let _ = fs::rename(backup, &dest_dir);
-        }
+        let recovery = if let Some(backup) = backup_path.as_ref() {
+            match rename_install_path(backup, &dest_dir) {
+                Ok(()) => "原目录已恢复。".to_string(),
+                Err(restore_error) => format!(
+                    "恢复原目录失败，原内容仍保留在 {}：{restore_error}",
+                    backup.display()
+                ),
+            }
+        } else {
+            String::new()
+        };
         format!(
-            "Failed to finalize install {} -> {}: {}",
+            "Failed to finalize install {} -> {}: {}\n{}\n{}",
             staging_dir.to_string_lossy(),
             dest_dir.to_string_lossy(),
-            e
+            e,
+            diagnostic,
+            recovery
         )
     })?;
 
@@ -1846,6 +2086,7 @@ pub async fn gamebanana_download_and_install_mod(
         target_group,
         password,
         Some(true),
+        None,
     )
     .await;
     let _ = tokio::fs::remove_file(&archive_path).await;
