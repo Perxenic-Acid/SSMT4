@@ -82,6 +82,19 @@ fn key(name: &str) -> String {
     name.replace('\\', "/").to_lowercase()
 }
 
+// 预下载只规划版本差异，不承担本地客户端的完整性修复；实际更新仍校验所有文件。
+fn preload_candidates<'a>(files: &'a Resources, old_files: &Resources) -> Vec<&'a Resource> {
+    files
+        .iter()
+        .filter_map(|(name, resource)| {
+            let unchanged = old_files.get(name).is_some_and(|old| {
+                old.asset.md5 == resource.asset.md5 && old.asset.size == resource.asset.size
+            });
+            (!unchanged).then_some(resource)
+        })
+        .collect()
+}
+
 fn resources(
     http: &Client,
     server: &Server,
@@ -588,22 +601,31 @@ pub fn run(request: Request, task: &Task) -> Result<(), String> {
     }
     let cache = transaction::safe(&work.work, "cache")?;
     fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let candidates: Vec<_> = if preload {
+        preload_candidates(&files, &old_files)
+    } else {
+        files.values().collect()
+    };
     task.phase(
         if preload { "preload" } else { "verify" },
-        "校验现有文件和可恢复缓存",
+        if preload {
+            "已比较版本清单，校验变更资源和预下载缓存"
+        } else {
+            "校验现有文件和可恢复缓存"
+        },
     );
     let mut changes = BTreeMap::new();
     let mut pending = vec![];
     let mut stage_bytes_needed = 0u64;
     let mut missing_cache = HashMap::new();
-    for (index, resource) in files.values().enumerate() {
+    for (index, resource) in candidates.iter().copied().enumerate() {
         task.check()?;
         task.phase(
             if preload { "preload" } else { "verify" },
             format!(
                 "检查资源 {}/{}：{}",
                 index + 1,
-                files.len(),
+                candidates.len(),
                 resource.asset.name
             ),
         );
@@ -902,6 +924,44 @@ mod tests {
             },
         }
     }
+    #[test]
+    fn preload_compares_manifests_and_only_checks_new_or_changed_resources() {
+        let unchanged = resource("same.bin", &[b"same"]);
+        let changed = resource("changed.bin", &[b"new"]);
+        let added = resource("added.bin", &[b"added"]);
+        let mut size_changed = resource("size.bin", &[b"same"]);
+        size_changed.asset.size += 1;
+        let files: Resources = [
+            unchanged.clone(),
+            changed.clone(),
+            added.clone(),
+            size_changed,
+        ]
+        .into_iter()
+        .map(|r| (key(&r.asset.name), r))
+        .collect();
+        let old: Resources = [
+            unchanged,
+            resource("changed.bin", &[b"old"]),
+            resource("size.bin", &[b"same"]),
+            resource("deleted.bin", &[b"deleted"]),
+        ]
+        .into_iter()
+        .map(|r| (key(&r.asset.name), r))
+        .collect();
+        let names: Vec<_> = preload_candidates(&files, &old)
+            .iter()
+            .map(|r| r.asset.name.as_str())
+            .collect();
+        assert_eq!(names, ["added.bin", "changed.bin", "size.bin"]);
+        // 旧清单不可用时不根据本地版本号猜测内容，退回检查全部目标资源。
+        assert_eq!(
+            preload_candidates(&files, &Resources::new()).len(),
+            files.len()
+        );
+        assert!(preload_candidates(&files, &files).is_empty());
+    }
+
     #[test]
     fn shifted_chunks_are_reused_and_cross_region_source_stays_intact() {
         let temp = Temp::new();

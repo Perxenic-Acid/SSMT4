@@ -337,8 +337,11 @@ fn json(client: &Client, url: reqwest::Url) -> Result<Value, String> {
         serde_json::from_slice(&bytes).map_err(|e| format!("官方接口响应无法解析：{e}"))?;
     if value["retcode"].as_i64() != Some(0) {
         return Err(format!(
-            "官方接口拒绝请求：{} {}",
-            value["retcode"], value["message"]
+            "官方接口拒绝请求 [{}{}]：{} {}",
+            url.host_str().unwrap_or_default(),
+            url.path(),
+            value["retcode"],
+            value["message"]
         ));
     }
     value
@@ -445,19 +448,24 @@ pub struct ManifestInfo {
     pub install_size: u64,
 }
 
+pub(super) fn build_endpoint(server: &Server, branch: &Branch) -> Result<reqwest::Url, String> {
+    let mut url = validate_url(server.downloader())?;
+    // getBuild 的 tag 是服务端构建筛选条件，不能直接传分支展示版本。
+    // 预下载曾因此返回 -202；使用分支凭据查询，再校验响应 tag 防止版本漂移。
+    url.query_pairs_mut()
+        .append_pair("branch", &branch.branch)
+        .append_pair("package_id", &branch.package_id)
+        .append_pair("password", &branch.password);
+    Ok(url)
+}
+
 pub fn build(
     client: &Client,
     server: &Server,
     branch: &Branch,
     languages: &[String],
 ) -> Result<Vec<ManifestInfo>, String> {
-    let mut url = validate_url(server.downloader())?;
-    url.query_pairs_mut()
-        .append_pair("branch", &branch.branch)
-        .append_pair("package_id", &branch.package_id)
-        .append_pair("password", &branch.password)
-        .append_pair("tag", &branch.tag);
-    let data = json(client, url)?;
+    let data = json(client, build_endpoint(server, branch)?)?;
     if data["tag"] != branch.tag {
         return Err("官方 Build 与所选分支版本不一致".into());
     }

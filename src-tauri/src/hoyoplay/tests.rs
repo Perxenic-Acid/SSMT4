@@ -645,3 +645,51 @@ fn live_manifest_checksum_and_schema_match_the_current_game() {
         );
     }
 }
+
+#[test]
+fn build_request_uses_branch_credentials_without_display_version_filter() {
+    for preset in ["GIMI", "SRMI", "ZZMI"] {
+        for server in client::servers(preset) {
+            for name in ["main", "predownload"] {
+                let branch = client::Branch {
+                    tag: "99.0.0".into(),
+                    branch: name.into(),
+                    package_id: "package".into(),
+                    password: "a+b&c".into(),
+                };
+                let url = client::build_endpoint(&server, &branch).unwrap();
+                let pairs: std::collections::HashMap<_, _> =
+                    url.query_pairs().into_owned().collect();
+                assert_eq!(pairs.len(), 3);
+                assert_eq!(pairs["branch"], name);
+                assert_eq!(pairs["package_id"], branch.package_id);
+                assert_eq!(pairs["password"], branch.password);
+                assert!(!pairs.contains_key("tag"));
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "只查询正式及预下载 Build 元数据，不下载游戏或写入客户端"]
+fn live_current_and_pre_download_builds_match_branches() {
+    let http = client::http().unwrap();
+    for preset in ["GIMI", "SRMI", "ZZMI"] {
+        for server in client::servers(preset) {
+            let (main, pre) = client::branches(&http, &server).unwrap();
+            for branch in std::iter::once(main).chain(pre) {
+                let info = client::build(&http, &server, &branch, &["zh-cn".into()]).unwrap();
+                assert!(info.iter().any(|m| m.matching_field == "game"));
+                eprintln!(
+                    "{preset}/{} {} {} Build 校验通过",
+                    server.id, branch.branch, branch.tag
+                );
+                let mut mismatch = branch.clone();
+                mismatch.tag = "0.0.0".into();
+                assert!(client::build(&http, &server, &mismatch, &["zh-cn".into()])
+                    .unwrap_err()
+                    .contains("版本不一致"));
+            }
+        }
+    }
+}
