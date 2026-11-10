@@ -423,6 +423,7 @@ export class LaunchGame {
     ): Promise<'native' | 'direct' | false> {
         let launchSubmitted = false;
         let pluginBackendsStarted = false;
+        let pluginBackendBridgeAvailable = true;
         let runtimeDirectory: string | undefined;
         let launchExecutable: string | undefined;
         try {
@@ -444,8 +445,8 @@ export class LaunchGame {
             const launchTargetProgram = config.launchTargetProgram !== false;
             const pureDirectTarget = pureMode && launchTargetProgram;
             if (!pureDirectTarget) {
-                pluginBackendsStarted = true;
-                await this.preparePluginBackends(gameName, migotoDir);
+                pluginBackendBridgeAvailable = await this.preparePluginBackends(gameName, migotoDir);
+                pluginBackendsStarted = pluginBackendBridgeAvailable;
             }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
@@ -489,9 +490,15 @@ export class LaunchGame {
             const configuredExtraDlls = Array.isArray(config.extraDlls)
                 ? config.extraDlls.filter((dll): dll is string => typeof dll === "string").map(dll => dll.trim()).filter(Boolean)
                 : [];
+            const extraDllsEnabled = Array.isArray(config.extraDllsEnabled) ? config.extraDllsEnabled : [];
+            const enabledConfiguredExtraDlls = configuredExtraDlls.filter(
+                (_, index) => extraDllsEnabled[index] !== false,
+            );
             const legacyExtraDll = typeof config.extraDll === "string" ? config.extraDll.trim() : "";
             const launchExtraDlls = this.dedupeDllPaths([
-                ...(configuredExtraDlls.length ? configuredExtraDlls : legacyExtraDll ? [legacyExtraDll] : []),
+                ...(configuredExtraDlls.length
+                    ? enabledConfiguredExtraDlls
+                    : legacyExtraDll ? [legacyExtraDll] : []),
                 ...pluginInjectedDlls,
             ]);
             const useEfmiDirectWait = useRunInjector &&
@@ -555,7 +562,7 @@ export class LaunchGame {
 
             if (!pureDirectTarget) {
                 await MigotoManager.patchD3dxForLaunch(gameName, {
-                    ...(launchExtraDlls.length ? { extraDlls: launchExtraDlls } : {}),
+                    extraDlls: launchExtraDlls,
                     overlayLanguage: appSettings.runtimeOverlayLanguage ?? 'auto',
                 });
             }
@@ -582,7 +589,7 @@ export class LaunchGame {
             let backendPlan: BackendRuntimePlan | null = null;
             let backendDlls: string[] = [];
             let backendLaunchArgs = config.launchArgs || "";
-            if (!pureDirectTarget && useRunInjector && targetExe) {
+            if (!pureDirectTarget && pluginBackendBridgeAvailable && useRunInjector && targetExe) {
                 const comparablePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").toLowerCase();
                 const allowPreload = launchTargetProgram && !useEfmiDirectWait &&
                     (!useShell || comparablePath(await join(launcherExePath)) === comparablePath(await join(targetExe)));
@@ -616,7 +623,8 @@ export class LaunchGame {
                     }
                 } catch (error) {
                     // 已提交的后台可能修改了自己的状态，撤回后继续普通启动。
-                    await invoke("plugin_backend_lifecycle", { gameName, event: "launch.cancel", launchContext: { gameExecutable: targetExe } });
+                    await invoke("plugin_backend_lifecycle", { gameName, event: "launch.cancel", launchContext: { gameExecutable: targetExe } }).catch(cancelError =>
+                        console.warn("插件后台启动取消失败，继续普通启动：", cancelError));
                     ElMessage.warning({ message: t("launchGame.messages.pluginBackendPrepareFailed", { error: String(error) }), showClose: true, duration: 12000 });
                 }
             }
@@ -753,15 +761,23 @@ export class LaunchGame {
     private static async preparePluginBackends(
         gameName: string,
         runtimeDirectory: string,
-    ): Promise<void> {
+    ): Promise<boolean> {
         try {
             const warnings = await invoke<string[]>("plugin_backend_lifecycle", { gameName, event: "prepare", launchContext: { runtimeDirectory } });
             for (const warning of warnings) {
                 ElMessage.warning({ message: warning, showClose: true, duration: 12000 });
             }
+            return true;
         } catch (error) {
             ElMessage.warning({ message: t("launchGame.messages.pluginBackendPrepareFailed", { error: String(error) }), showClose: true, duration: 12000 });
+            return !this.isPluginBackendCommandUnavailable(error);
         }
+    }
+
+    private static isPluginBackendCommandUnavailable(error: unknown): boolean {
+        const message = String(error);
+        return message.includes("Command plugin_backend_lifecycle not found")
+            || message.includes("Command prepare_plugin_backend_launch not found");
     }
 
     private static async ensureSSMTPluginHostFile(migotoDir: string): Promise<void> {

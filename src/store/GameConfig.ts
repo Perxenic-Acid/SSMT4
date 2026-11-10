@@ -60,20 +60,37 @@ const normalizeExtraDll = (value: unknown): string => {
     return value.trim()
 }
 
-const normalizeExtraDlls = (value: unknown, legacyExtraDll?: unknown): string[] => {
-    const normalized = Array.isArray(value)
-        ? value
-            .filter((item): item is string => typeof item === 'string')
-            .map(item => item.trim())
-            .filter(Boolean)
-        : []
+const normalizeExtraDllEntries = (
+    value: unknown,
+    enabledValue: unknown,
+    legacyExtraDll?: unknown,
+): { dlls: string[]; enabled: boolean[] } => {
+    const dlls: string[] = []
+    const enabled: boolean[] = []
+    const source = Array.isArray(value) ? value : []
+    const enabledSource = Array.isArray(enabledValue) ? enabledValue : []
 
-    if (normalized.length > 0) {
-        return normalized
+    source.forEach((item, index) => {
+        const dll = normalizeExtraDll(item)
+        if (!dll) {
+            return
+        }
+        dlls.push(dll)
+        enabled.push(enabledSource[index] !== false)
+    })
+
+    if (dlls.length > 0) {
+        return { dlls, enabled }
     }
 
     const legacy = normalizeExtraDll(legacyExtraDll)
-    return legacy ? [legacy] : []
+    return legacy
+        ? { dlls: [legacy], enabled: [true] }
+        : { dlls: [], enabled: [] }
+}
+
+export const normalizeExtraDlls = (value: unknown, legacyExtraDll?: unknown): string[] => {
+    return normalizeExtraDllEntries(value, undefined, legacyExtraDll).dlls
 }
 
 export type GameConfig = {
@@ -108,6 +125,8 @@ export type GameConfig = {
     autoExitSeconds?: number;
     extraDll?: string;
     extraDlls?: string[];
+    /** 与 extraDlls 逐项对应；旧配置缺省时保持全部启用。 */
+    extraDllsEnabled?: boolean[];
     useSpecificIbDump?: boolean;
     specificIbDumpRestoreAnalyseOptions?: string;
     configureGame?: boolean;
@@ -195,7 +214,11 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
         // 旧版本的 DLL 来源与更新开关不再参与启动，也不写回新配置。
         const { d3d11Mode: _legacyMode, allowDllUpdates: _legacyUpdates,
             checkDllUpdateBeforeLaunch: _legacyCheck, ...currentConfig } = config
-        const extraDlls = normalizeExtraDlls(config.extraDlls, config.extraDll)
+        const { dlls: extraDlls, enabled: extraDllsEnabled } = normalizeExtraDllEntries(
+            config.extraDlls,
+            config.extraDllsEnabled,
+            config.extraDll,
+        )
         const extraDll = extraDlls[0] || ''
         const useUpxManuallySet = config.useUpxManuallySet === true
         const useUpx = getEffectiveUseUpx(config)
@@ -209,6 +232,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             lockRuntimeUpdates: config.lockRuntimeUpdates === true,
             extraDll,
             extraDlls,
+            extraDllsEnabled,
             useShell: extraDlls.length > 0 ? false : !!config.useShell,
             preLaunchPrograms: normalizeLaunchProgramList(config.preLaunchPrograms),
             postLaunchPrograms: normalizeLaunchProgramList(config.postLaunchPrograms),
@@ -256,6 +280,7 @@ export const useGameConfigStore = defineStore('gameConfig', () => {
             autoExitSeconds: 5,
             extraDll: '',
             extraDlls: [],
+            extraDllsEnabled: [],
             configureGame: true,
             applyPerfTweaks: false,
             unlockFps: false,

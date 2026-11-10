@@ -331,11 +331,18 @@ export class MigotoManager {
       lines = D3dxIniManager.setIniValue(lines, 'Loader', 'delay', String(cfg.autoExitSeconds))
     }
 
+    const extraDllsEnabled = Array.isArray(cfg.extraDllsEnabled) ? cfg.extraDllsEnabled : []
     const extraDlls = Array.isArray(cfg.extraDlls)
-      ? cfg.extraDlls.filter((dll): dll is string => typeof dll === 'string').map(dll => dll.trim()).filter(Boolean)
+      ? cfg.extraDlls
+        .filter((dll, index): dll is string => typeof dll === 'string' && extraDllsEnabled[index] !== false)
+        .map(dll => dll.trim())
+        .filter(Boolean)
       : []
+    const hasConfiguredExtraDlls = Array.isArray(cfg.extraDlls)
+      && cfg.extraDlls.some(dll => typeof dll === 'string' && dll.trim())
     const legacyExtraDll = typeof cfg.extraDll === 'string' ? cfg.extraDll.trim() : ''
-    const dllsToInject = options.extraDlls ?? (extraDlls.length > 0 ? extraDlls : (legacyExtraDll ? [legacyExtraDll] : []))
+    const dllsToInject = options.extraDlls
+      ?? (hasConfiguredExtraDlls ? extraDlls : (legacyExtraDll ? [legacyExtraDll] : []))
 
     if (dllsToInject.length > 0) {
       lines = D3dxIniManager.setIniValue(lines, 'Loader', 'inject_dlls', dllsToInject.join('|'))

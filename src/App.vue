@@ -134,6 +134,7 @@ const confirmFirstRunRole = async () => {
     if (firstRunUseShell.value) {
       config.extraDll = '';
       config.extraDlls = [];
+      config.extraDllsEnabled = [];
     }
     if (selectedFirstRunRole.value !== 'player') config.huntingMode = firstRunHuntingMode.value;
     config.showErrorPopup = firstRunShowWarnings.value;
