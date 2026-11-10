@@ -1259,6 +1259,8 @@
       "workspaceList": "Workspace list",
       "sortByNewest": "Date (newest)",
       "sortByName": "Name",
+      "searchCurrentGameWorkspaces": "Search workspaces in this game",
+      "noMatchingWorkspace": "No matching workspaces",
       "sortWorkspaces": "Workspace sorting",
       "dragRow": "Drag to reorder",
       "defaultTabNamePrefix": "LOD",

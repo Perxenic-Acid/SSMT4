@@ -1258,6 +1258,8 @@
       "workspaceList": "工作空间列表",
       "sortByNewest": "日期（新到旧）",
       "sortByName": "名称",
+      "searchCurrentGameWorkspaces": "搜索当前游戏的工作空间",
+      "noMatchingWorkspace": "没有匹配的工作空间",
       "sortWorkspaces": "工作空间排序方式",
       "dragRow": "拖动以重新排序",
       "defaultTabNamePrefix": "LOD",

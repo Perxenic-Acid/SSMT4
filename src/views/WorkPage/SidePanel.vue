@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { ArrowDown, Edit, Plus, FolderAdd, FolderOpened, BrushFilled, Delete, UploadFilled, Download, Connection } from '@element-plus/icons-vue';
+import { computed, ref, watch } from 'vue';
+import { ArrowDown, Search, Edit, Plus, FolderAdd, FolderOpened, BrushFilled, Delete, UploadFilled, Download, Connection } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import type { DrawerCollapsedState } from './WorkPage.types';
 
@@ -11,6 +11,7 @@ const drawerCollapsed = defineModel<DrawerCollapsedState>('drawerCollapsed', { r
 const useSpecificIbDump = defineModel<boolean>('useSpecificIbDump', { default: false });
 
 const props = defineProps<{
+  gameKey: string;
   workspaceName: string;
   workspaceOptions: string[];
   workspaceModifiedTimes: Record<string, number>;
@@ -21,8 +22,10 @@ const props = defineProps<{
 }>();
 
 type WorkspaceSortMode = 'date' | 'name';
+const workspaceSearch = ref('');
+watch(() => props.gameKey, () => { workspaceSearch.value = ''; });
 const workspaceSortMode = ref<WorkspaceSortMode>('date');
-const sortedWorkspaceOptions = computed(() => [...props.workspaceOptions].sort((a, b) => {
+const sortedWorkspaceOptions = computed(() => props.workspaceOptions.filter(name => name.toLocaleLowerCase().includes(workspaceSearch.value.trim().toLocaleLowerCase())).sort((a, b) => {
   if (workspaceSortMode.value === 'date') {
     const dateDifference = (props.workspaceModifiedTimes[b] ?? 0) - (props.workspaceModifiedTimes[a] ?? 0);
     if (dateDifference !== 0) return dateDifference;
@@ -179,6 +182,14 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
           <span>选择工作空间</span>
         </button>
         <div v-show="!drawerCollapsed.workspaceSelector" class="side-drawer-body">
+          <el-input
+            v-model="workspaceSearch"
+            class="workspace-search"
+            :placeholder="t('workPage.ui.searchCurrentGameWorkspaces')"
+            :aria-label="t('workPage.ui.searchCurrentGameWorkspaces')"
+            :prefix-icon="Search"
+            clearable
+          />
           <div class="workspace-sort-control" role="group" :aria-label="t('workPage.ui.sortWorkspaces')">
             <button
               type="button"
@@ -198,6 +209,9 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
             </button>
           </div>
           <div class="workspace-list glass-scrollbar">
+            <p v-if="workspaceSearch.trim() && !sortedWorkspaceOptions.length" class="workspace-search-empty" role="status">
+              {{ t('workPage.ui.noMatchingWorkspace') }}
+            </p>
             <button
               v-for="name in sortedWorkspaceOptions"
               :key="name"
@@ -291,6 +305,14 @@ const toggleDrawer = (key: keyof DrawerCollapsedState) => {
 </template>
 
 <style scoped>
+.workspace-search-empty {
+  margin: 0;
+  padding: 12px 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
 .side-column {
   min-width: 0;
   min-height: 0;

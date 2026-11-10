@@ -3144,10 +3144,12 @@ watch(() => appSettings.CurrentGameName, () => {
 
 const refreshWorkspaces = async () => {
     const scannedGameKey = getCurrentWorkspaceMemoryGameKey();
+    const scannedContext = workspaceContextRevision;
+    const isCurrent = () => scannedContext === workspaceContextRevision && scannedGameKey === getCurrentWorkspaceMemoryGameKey();
     isScanningWorkspaces.value = true;
     try {
-        const baseDir = await getWorkspaceBaseDir();
-        if(!baseDir) return;
+        const baseDir = await getWorkspaceBaseDir(scannedGameKey);
+        if(!baseDir || !isCurrent()) return;
     debugLog('WorkPage', 'refreshWorkspaces - baseDir', baseDir);
 
         // Ensure base directory exists
@@ -3168,7 +3170,7 @@ const refreshWorkspaces = async () => {
             }
           })
         ));
-        if (scannedGameKey !== getCurrentWorkspaceMemoryGameKey()) return;
+        if (!isCurrent()) return;
         workspaceModifiedTimes.value = modifiedTimes;
         workspaceOptions.value = folders;
         debugLog('WorkPage', 'refreshWorkspaces - found folders', folders);
@@ -3201,7 +3203,7 @@ const refreshWorkspaces = async () => {
     } catch (err) {
         console.error('Failed to refresh workspaces', err);
     } finally {
-        isScanningWorkspaces.value = false;
+        if (isCurrent()) isScanningWorkspaces.value = false;
     }
 };
 
@@ -3635,6 +3637,7 @@ const handleDeleteWorkspace = async (targetWorkspaceName = workspaceName.value) 
       </div>
 
       <SidePanel
+        :game-key="normalizeWorkspaceGameKey(appSettings.CurrentGameName)"
         v-model:workspaceDraftName="workspaceDraftName"
         v-model:drawerCollapsed="workPageDrawerCollapsed"
         v-model:useSpecificIbDump="useSpecificIbDump"
