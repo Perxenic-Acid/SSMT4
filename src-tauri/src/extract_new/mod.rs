@@ -16,6 +16,7 @@ pub mod srmi;
 pub mod wwmi;
 pub mod yysls;
 pub mod zzmi;
+mod zzmi_skeleton_source;
 pub mod zzmi_dx12;
 
 pub(crate) fn can_match_gametype(pointlist_index: &str, is_gpu_pre_skinning: bool) -> bool {
