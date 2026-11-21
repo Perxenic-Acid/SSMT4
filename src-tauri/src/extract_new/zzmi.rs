@@ -954,6 +954,12 @@ impl ZZMINewExtractor {
         }
 
         self.sync_zzmi_textures_and_json(draw_ib_list, !self.specify_drawib_extract)?;
+        super::zzmi_skeleton_source::write(
+            Path::new(&self.workspace_path),
+            &self.fa.log.lines,
+            |file| self.fa.log.resolve_dump_filepath(file).ok(),
+        )
+        .map_err(|error| format!("保存 ZZMI 工作空间骨骼数据失败: {error}"))?;
         Ok(())
     }
 
