@@ -28,7 +28,6 @@ fn resolve_lod_workspace_path(workspace_root_path: &str, lod_name: &str) -> Resu
 
 #[tauri::command]
 pub async fn extract_deduped_textures(
-    _app: AppHandle,
     frame_analysis_folder: String,
     game_preset: String,
     workspace_root_path: String,
@@ -51,7 +50,6 @@ pub async fn extract_deduped_textures(
 
 #[tauri::command]
 pub async fn extract_trianglelist_textures(
-    _app: AppHandle,
     frame_analysis_folder: String,
     game_preset: String,
     workspace_root_path: String,

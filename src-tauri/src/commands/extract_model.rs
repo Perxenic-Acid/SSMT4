@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
-use tauri::AppHandle;
 
 use crate::common::frame_analysis::frameanalysis::FrameAnalysis;
 use crate::common::index_buffer_txt_file::IndexBufferTxtFile;
@@ -308,7 +307,6 @@ pub struct DrawIBSubmeshRange {
 
 #[tauri::command]
 pub async fn extract_models_new(
-    _app: AppHandle,
     frame_analysis_folder: String,
     game_preset: String,
     workspace_root_path: String,
@@ -366,7 +364,6 @@ pub async fn extract_models_new(
 
 #[tauri::command]
 pub async fn full_extract(
-    _app: AppHandle,
     frame_analysis_folder: String,
     game_preset: String,
     workspace_root_path: String,
