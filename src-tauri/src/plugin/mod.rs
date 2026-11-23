@@ -130,6 +130,28 @@ pub struct PluginContributions {
     pub data_directories: Vec<PluginDataDirectoryContribution>,
     #[serde(default)]
     pub migrations: Vec<PluginMigrationContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub game_type_providers: Vec<GameTypeProviderContribution>,
+    /// 插件声明的游戏预设；宿主把它并入可选预设列表。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub game_presets: Vec<GamePresetContribution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GamePresetContribution {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GameTypeProviderContribution {
+    pub game_preset: String,
+    pub path: String,
+    pub format_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -544,6 +566,8 @@ impl PluginManifest {
             && self.contributions.launch_hooks.is_empty()
             && self.contributions.data_directories.is_empty()
             && self.contributions.migrations.is_empty()
+            && self.contributions.game_type_providers.is_empty()
+            && self.contributions.game_presets.is_empty()
     }
 
     pub fn supports_current_plugin_api(&self) -> bool {
@@ -572,6 +596,16 @@ impl PluginManifest {
         if self.schema_version >= 2 && self.compatibility.plugin_api.as_deref().is_none() {
             return Err(PluginManifestError::InvalidCompatibility(
                 "schemaVersion 2 requires compatibility.pluginApi".to_string(),
+            ));
+        }
+        if self.schema_version < 2 && !self.contributions.game_type_providers.is_empty() {
+            return Err(PluginManifestError::InvalidContribution(
+                "gameTypeProviders require schemaVersion 2".to_string(),
+            ));
+        }
+        if self.schema_version < 2 && !self.contributions.game_presets.is_empty() {
+            return Err(PluginManifestError::InvalidContribution(
+                "gamePresets require schemaVersion 2".to_string(),
             ));
         }
         if self.schema_version < 2 && !self.contributions.launch_hooks.is_empty() {
@@ -717,6 +751,52 @@ fn validate_contributions(
     contributions: &PluginContributions,
     dependencies: &[ExternalDependency],
 ) -> Result<(), PluginManifestError> {
+    let mut presets = HashSet::new();
+    let mut provider_paths = HashSet::new();
+    for provider in &contributions.game_type_providers {
+        validate_plugin_id(&provider.game_preset)?;
+        validate_package_path("game type provider", &provider.path)?;
+        if provider.format_version != 1 {
+            return Err(PluginManifestError::InvalidContribution(format!(
+                "unsupported game type provider format version: {}", provider.format_version
+            )));
+        }
+        if !presets.insert(provider.game_preset.to_ascii_lowercase()) {
+            return Err(PluginManifestError::DuplicateValue {
+                field: "game type provider preset",
+                value: provider.game_preset.clone(),
+            });
+        }
+        if !provider_paths.insert(provider.path.replace('\\', "/").to_lowercase()) {
+            return Err(PluginManifestError::DuplicateValue {
+                field: "game type provider path",
+                value: provider.path.clone(),
+            });
+        }
+    }
+    let mut preset_ids = HashSet::new();
+    for preset in &contributions.game_presets {
+        validate_plugin_id(&preset.id)?;
+        validate_non_empty("game preset display name", &preset.display_name)?;
+        if let Some(icon) = preset.icon.as_deref() {
+            validate_package_path("game preset icon", icon)?;
+        }
+        if !preset_ids.insert(preset.id.to_ascii_lowercase()) {
+            return Err(PluginManifestError::DuplicateValue {
+                field: "game preset id",
+                value: preset.id.clone(),
+            });
+        }
+        if crate::workspace_access::validate::builtin_game_presets()
+            .iter()
+            .any(|builtin| builtin.eq_ignore_ascii_case(&preset.id))
+        {
+            return Err(PluginManifestError::InvalidContribution(format!(
+                "game preset id conflicts with a built-in preset: {}",
+                preset.id
+            )));
+        }
+    }
     let mut extension_ids = HashSet::new();
     for extension in &contributions.host_extensions {
         extension.validate()?;
@@ -1516,6 +1596,57 @@ fn parse_plugin_api_requirement(requirement: &str) -> Result<VersionReq, semver:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_type_provider_manifest_validation() {
+        let mut manifest = valid_manifest();
+        assert!(manifest.contributions.game_type_providers.is_empty());
+        let provider = GameTypeProviderContribution {
+            game_preset: "ExampleGame".into(),
+            path: "types/example.json".into(),
+            format_version: 1,
+        };
+        manifest.contributions.game_type_providers.push(provider.clone());
+        assert!(manifest.validate().is_err());
+        manifest.schema_version = 2;
+        manifest.compatibility.plugin_api = Some(">=1.0.0 <2.0.0".into());
+        let json = serde_json::to_string(&manifest).unwrap();
+        assert_eq!(PluginManifest::from_json_str(&json).unwrap(), manifest);
+        for path in ["../example.json", "/absolute.json", "C:\\outside.json", "types/CON.json"] {
+            manifest.contributions.game_type_providers[0].path = path.into();
+            assert!(manifest.validate().is_err(), "{path}");
+        }
+        manifest.contributions.game_type_providers[0] = provider.clone();
+        manifest.contributions.game_type_providers[0].format_version = 2;
+        assert!(manifest.validate().is_err());
+        manifest.contributions.game_type_providers[0] = provider.clone();
+        let mut duplicate = provider.clone();
+        duplicate.game_preset = "examplegame".into();
+        duplicate.path = "types/other.json".into();
+        manifest.contributions.game_type_providers.push(duplicate);
+        assert!(manifest.validate().is_err());
+        manifest.contributions.game_type_providers[1].game_preset = "OtherGame".into();
+        manifest.contributions.game_type_providers[1].path = "TYPES\\EXAMPLE.JSON".into();
+        assert!(manifest.validate().is_err());
+        manifest.contributions.game_type_providers[1].path = "types/other.json".into();
+        assert!(manifest.validate().is_ok());
+        manifest.contributions.game_type_providers[1].game_preset = "../invalid".into();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn game_type_provider_is_not_app_scoped() {
+        let mut manifest = valid_manifest();
+        manifest.contributions.runtime_plugins.clear();
+        manifest.contributions.launcher_adapters.clear();
+        assert!(manifest.is_app_scoped());
+        manifest.contributions.game_type_providers.push(GameTypeProviderContribution {
+            game_preset: "ExampleGame".into(),
+            path: "types/example.json".into(),
+            format_version: 1,
+        });
+        assert!(!manifest.is_app_scoped());
+    }
 
     #[test]
     fn rejects_windows_aliases_in_package_paths() {

@@ -340,10 +340,13 @@ impl ExtractNewService {
                 Ok(())
             }
             "IdentityV" => {
-                let mut extractor = IdentityVNewExtractor::new(
+                let provider_types =
+                    crate::plugin::commands::game_type_provider_types("", "IdentityV")?;
+                let mut extractor = IdentityVNewExtractor::new_with_types(
                     &fa.folder_path,
                     &workspace_path_string,
                     is_full_extract,
+                    provider_types,
                 )?;
                 extractor.run_extract(effective_filter)?;
                 Ok(())

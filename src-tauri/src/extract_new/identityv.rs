@@ -294,13 +294,29 @@ impl IdentityVNewExtractor {
         workspace_path: &String,
         is_full_extract: bool,
     ) -> Result<Self, String> {
-        Self::new_internal(frame_analysis_folder, workspace_path, !is_full_extract)
+        Self::new_with_types(frame_analysis_folder, workspace_path, is_full_extract, None)
+    }
+
+    /// `provider_types` 为插件提供的类型列表；给出时只使用它，不读宿主内置类型。
+    pub fn new_with_types(
+        frame_analysis_folder: &String,
+        workspace_path: &String,
+        is_full_extract: bool,
+        provider_types: Option<Vec<D3D11GameType>>,
+    ) -> Result<Self, String> {
+        Self::new_internal(
+            frame_analysis_folder,
+            workspace_path,
+            !is_full_extract,
+            provider_types,
+        )
     }
 
     fn new_internal(
         frame_analysis_folder: &String,
         workspace_path: &String,
         specify_drawib_extract: bool,
+        provider_types: Option<Vec<D3D11GameType>>,
     ) -> Result<Self, String> {
         let frame_analysis_dir = PathBuf::from(frame_analysis_folder);
         if !frame_analysis_dir.exists() {
@@ -321,9 +337,13 @@ impl IdentityVNewExtractor {
             }
         };
 
-        let gametype_folder_path = PathManager::bundled_gametype_folder();
-        let current_gametype_folder_path = gametype_folder_path.join("IdentityV");
-        let d3d11_gametype_lv2 = D3D11GameTypeLv2::new(current_gametype_folder_path)?;
+        let d3d11_gametype_lv2 = match provider_types {
+            Some(list) => D3D11GameTypeLv2::from_type_list(list)?,
+            None => {
+                let gametype_folder_path = PathManager::bundled_gametype_folder();
+                D3D11GameTypeLv2::new(gametype_folder_path.join("IdentityV"))?
+            }
+        };
 
         Ok(Self {
             fa,

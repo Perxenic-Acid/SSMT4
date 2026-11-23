@@ -121,6 +121,7 @@ pub fn run() {
             app.manage(commands::mod_library::ModLibraryWatcher(Mutex::new(None)));
             app.manage(commands::launch_shortcut::LaunchConsoleShortcut::default());
             app.manage(plugin::page_runtime::PluginPageRuntime::default());
+            plugin::commands::set_host_version(app.package_info().version.to_string());
 
             if show_window_shortcut_enabled_on_launch(app) {
                 if let Err(error) = register_show_window_shortcut(app.handle()) {
@@ -144,6 +145,8 @@ pub fn run() {
             set_show_window_shortcut_enabled,
             commands::launch_shortcut::set_launch_console_shortcut,
             plugin::commands::plugin_registry_snapshot,
+            plugin::commands::plugin_game_type_provider_resolve,
+            plugin::commands::plugin_game_presets,
             plugin::backend::plugin_backend_lifecycle,
             plugin::backend_launch::prepare_plugin_backend_launch,
             plugin::commands::plugin_registry_snapshot_for_game,
