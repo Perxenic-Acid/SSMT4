@@ -4761,6 +4761,7 @@ dependencies = [
  "clipboard-win",
  "encoding_rs",
  "futures-util",
+ "half",
  "image 0.24.9",
  "md5",
  "notify",
