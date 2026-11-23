@@ -1,5 +1,5 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// SSMT4 is a Windows GUI application under every local build profile.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod native_texture_encoder;
 
