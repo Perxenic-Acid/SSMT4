@@ -21,8 +21,25 @@ pub(crate) fn game_preset(game_name: &str) -> Option<String> {
         .map(|value| value.trim().to_owned())
 }
 
-pub(crate) fn game_scope_preset(game_name: &str) -> String {
-    game_preset(game_name).unwrap_or_else(|| game_name.trim().to_owned())
+/// 当前生效的类型提供者信息，供前端展示与诊断。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameTypeProviderInfo {
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub game_preset: String,
+    pub format_version: u32,
+    pub path: String,
+}
+
+struct SelectedGameTypeProvider {
+    plugin_id: String,
+    plugin_version: String,
+    format_version: u32,
+    path: PathBuf,
+}
+
+pub(crate) fn game_scope_preset(game_name: &str) -> String {    game_preset(game_name).unwrap_or_else(|| game_name.trim().to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +337,98 @@ impl PluginRegistry {
         &self.installed
     }
 
+    /// 仅解析指定游戏已启用的唯一类型目录；没有提供者返回 `None`（沿用宿主内置），
+    /// 多个候选或路径非法返回错误。不回退宿主资源来掩盖冲突。
+    pub fn resolve_game_type_provider(
+        &self,
+        game_name: &str,
+        preset: &str,
+        ssmt_version: &str,
+    ) -> Result<Option<PathBuf>, PluginRegistryError> {
+        Ok(self
+            .select_game_type_provider(game_name, preset, ssmt_version)?
+            .map(|selected| selected.path))
+    }
+
+    /// 供前端展示与诊断：说明当前生效的提供者来自哪个插件。
+    pub fn describe_game_type_provider(
+        &self,
+        game_name: &str,
+        preset: &str,
+        ssmt_version: &str,
+    ) -> Result<Option<GameTypeProviderInfo>, PluginRegistryError> {
+        Ok(self
+            .select_game_type_provider(game_name, preset, ssmt_version)?
+            .map(|selected| GameTypeProviderInfo {
+                plugin_id: selected.plugin_id,
+                plugin_version: selected.plugin_version,
+                game_preset: preset.trim().to_owned(),
+                format_version: selected.format_version,
+                path: selected.path.to_string_lossy().into_owned(),
+            }))
+    }
+
+    fn select_game_type_provider(
+        &self,
+        game_name: &str,
+        preset: &str,
+        ssmt_version: &str,
+    ) -> Result<Option<SelectedGameTypeProvider>, PluginRegistryError> {
+        if preset.trim().is_empty() {
+            return Err(PluginRegistryError::State("game preset is required".into()));
+        }
+        let scoped = if game_name.trim().is_empty() {
+            self.for_preset_any_game(preset)
+        } else {
+            self.for_game_preset(game_name, preset)
+        };
+        let candidates: Vec<_> = scoped.selected_plugins()
+            .filter(|plugin| plugin.enabled && plugin.manifest.compatibility.supports(
+                ssmt_version, super::SUPPORTED_PLATFORM, Some(preset)))
+            .flat_map(|plugin| plugin.manifest.contributions.game_type_providers.iter()
+                .filter(move |provider| provider.game_preset.eq_ignore_ascii_case(preset.trim()))
+                .map(move |provider| (plugin, provider)))
+            .collect();
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        if candidates.len() > 1 {
+            return Err(PluginRegistryError::State(format!(
+                "expected at most one enabled game type provider for {preset}, found {}",
+                candidates.len()
+            )));
+        }
+        let (plugin, provider) = candidates[0];
+        super::validate_package_relative_path(&provider.path)?;
+        let relative_root = plugin.package_root.strip_prefix(&self.plugins_root).map_err(|_| {
+            PluginRegistryError::InvalidPackage("provider package is outside plugins root".into())
+        })?;
+        let mut current = self.plugins_root.clone();
+        check_provider_directory(&current)?;
+        for component in relative_root.components() {
+            match component {
+                std::path::Component::Normal(part) => current.push(part),
+                _ => return Err(PluginRegistryError::InvalidPackage("invalid package root".into())),
+            }
+            check_provider_directory(&current)?;
+        }
+        let canonical_root = fs::canonicalize(&current)?;
+        for segment in provider.path.split(['/', '\\']) {
+            current.push(segment);
+            check_provider_directory(&current)?;
+        }
+        let resolved = fs::canonicalize(&current)?;
+        if !resolved.starts_with(&canonical_root) || resolved == canonical_root {
+            return Err(PluginRegistryError::InvalidPackage("provider directory escapes package".into()));
+        }
+        Ok(Some(SelectedGameTypeProvider {
+            plugin_id: plugin.id().to_owned(),
+            plugin_version: plugin.version().to_owned(),
+            format_version: provider.format_version,
+            path: resolved,
+        }))
+    }
+
     /// 安装记录保留旧包；执行贡献时与 find 一样，只选择每个 ID 的最高版本。
     pub fn selected_plugins(&self) -> impl Iterator<Item = &InstalledPlugin> {
         self.installed.iter().filter(|plugin| {
@@ -365,6 +474,35 @@ impl PluginRegistry {
                 };
         }
         scoped
+    }
+
+    /// 已知预设但没有具体游戏实例时使用：只要任意一个该预设的游戏启用了插件即可。
+    pub(crate) fn for_preset_any_game(&self, preset: &str) -> Self {
+        let mut scoped = self.clone();
+        for plugin in &mut scoped.installed {
+            let selected = self
+                .find(plugin.id())
+                .is_some_and(|current| current.version() == plugin.version());
+            plugin.enabled = selected
+                && plugin.manifest.supports_current_plugin_api()
+                && if plugin.manifest.is_app_scoped() {
+                    self.state
+                        .plugins
+                        .get(&package_key(plugin.id(), plugin.version()))
+                        .is_some_and(|settings| settings.enabled)
+                } else {
+                    plugin.manifest.compatibility.supports_game(preset)
+                        && self.game_enabled_for_preset(plugin.id(), preset)
+                };
+        }
+        scoped
+    }
+
+    fn game_enabled_for_preset(&self, id: &str, preset: &str) -> bool {
+        self.state.game_plugins.iter().any(|(game, selections)| {
+            game_scope_preset(game).eq_ignore_ascii_case(preset.trim())
+                && selections.get(id).copied().unwrap_or(false)
+        })
     }
 
     pub fn game_enabled(&self, game_name: &str, id: &str) -> bool {
@@ -695,6 +833,23 @@ impl PluginRegistry {
     }
 }
 
+fn check_provider_directory(path: &Path) -> Result<(), PluginRegistryError> {
+    let metadata = fs::symlink_metadata(path)?;
+    #[cfg(windows)]
+    let reparse = {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    };
+    #[cfg(not(windows))]
+    let reparse = metadata.file_type().is_symlink();
+    if reparse || !metadata.is_dir() {
+        return Err(PluginRegistryError::InvalidPackage(format!(
+            "provider path is not a normal directory: {}", path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn package_key(id: &str, version: &str) -> String {
     format!("{id}@{version}")
 }
@@ -814,6 +969,50 @@ mod tests {
         )
         .unwrap();
         package
+    }
+
+    #[test]
+    fn game_type_provider_resolution_checks_selection_and_paths() {
+        let root = temp_root("provider-resolution");
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        for (id, version) in [("example.alpha", "1.0.0"), ("example.alpha", "2.0.0"), ("example.beta", "1.0.0")] {
+            let package = registry.plugins_root.join(id).join(version);
+            fs::create_dir_all(package.join("types/data")).unwrap();
+            let manifest = format!(r#"{{
+                "schemaVersion":2,"id":"{id}","name":"Fixture","version":"{version}","author":"Test",
+                "compatibility":{{"ssmt":">=4.0.0","pluginApi":">=1.0.0 <2.0.0","platforms":["windows-x64"],"games":["GIMI"]}},
+                "contributions":{{"gameTypeProviders":[{{"gamePreset":"GIMI","path":"types/data","formatVersion":1}}]}},"permissions":[]
+            }}"#);
+            fs::write(package.join(MANIFEST_FILE_NAME), manifest).unwrap();
+        }
+        registry.refresh().unwrap();
+        let resolve = |r: &PluginRegistry, game, preset, version| r.resolve_game_type_provider(game, preset, version);
+        assert_eq!(resolve(&registry, "Custom", "GIMI", "4.1.89").unwrap(), None);
+        registry.write_game_enabled("custom", "example.alpha", true).unwrap();
+        let expected = fs::canonicalize(registry.plugins_root.join("example.alpha/2.0.0/types/data")).unwrap();
+        assert_eq!(resolve(&registry, "Custom", "gimi", "4.1.89").unwrap(), Some(expected));
+        assert_eq!(resolve(&registry, "Other", "GIMI", "4.1.89").unwrap(), None);
+        assert_eq!(resolve(&registry, "Custom", "SRMI", "4.1.89").unwrap(), None);
+        assert_eq!(resolve(&registry, "Custom", "GIMI", "1.0.0").unwrap(), None);
+        registry.write_game_enabled("custom", "example.beta", true).unwrap();
+        assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
+        registry.write_game_enabled("custom", "example.beta", false).unwrap();
+        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        alpha.manifest.contributions.game_type_providers[0].path = "../outside".into();
+        assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
+        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        alpha.manifest.contributions.game_type_providers[0].path = "types/missing".into();
+        assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
+        let outside = root.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let link = registry.plugins_root.join("example.alpha").join("2.0.0").join("types").join("link");
+        #[cfg(windows)]
+        assert!(std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).status().unwrap().success());
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        alpha.manifest.contributions.game_type_providers[0].path = "types/link".into();
+        assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
     }
 
     #[test]

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use crate::common::d3d11_gametype::D3D11GameType;
 use crate::config::path_manager::PathManager;
 
+pub mod provider;
+
 /// 数据类型库根目录：`resources/GameType`，随程序一起发布、一起被覆盖安装与卸载。
 ///
 /// 这是运行时**唯一**的数据类型来源。历史版本还会把它复制一份到用户配置目录，并且只读
@@ -92,9 +94,20 @@ fn load_game_type_list_from_folder(
     Ok(game_type_list)
 }
 
+/// 插件提供者优先：给了目录就只读该目录，缺失或多义由调用方先判定；
+/// 没有插件提供者时保持原有内置类型行为。
+pub fn get_game_type_list_with_provider(
+    game_name: &str,
+    provider_folder: Option<&Path>,
+) -> Result<Vec<D3D11GameType>, String> {
+    match provider_folder {
+        Some(folder) => provider::load_provider_types(folder),
+        None => get_game_type_list(game_name),
+    }
+}
+
 /// 读取一个游戏的数据类型列表（JSON 是唯一数据源，类型库随程序发布）。
-pub fn get_game_type_list(game_name: &str) -> Result<Vec<D3D11GameType>, String> {
-    let normalized_game_name = game_name.trim().to_ascii_uppercase();
+pub fn get_game_type_list(game_name: &str) -> Result<Vec<D3D11GameType>, String> {    let normalized_game_name = game_name.trim().to_ascii_uppercase();
     let root = bundled_gametype_folder();
     let Some(folder) = resolve_game_type_folder(&root, &normalized_game_name) else {
         return Err(format!(

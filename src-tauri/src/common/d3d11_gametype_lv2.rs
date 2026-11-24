@@ -37,6 +37,11 @@ impl D3D11GameTypeLv2 {
         Self::from_game_type_list(d3d11_game_type_list)
     }
 
+    /// 插件类型提供者已解析出列表时直接使用，不再走内置注册表。
+    pub fn from_type_list(d3d11_game_type_list: Vec<D3D11GameType>) -> Result<Self, String> {
+        Self::from_game_type_list(d3d11_game_type_list)
+    }
+
     /// 兼容旧接口：从路径最后一级目录名推断游戏名，再从外部/内部注册表读取。
     pub fn new(game_type_folder: impl AsRef<Path>) -> Result<Self, String> {
         let folder: PathBuf = game_type_folder.as_ref().to_path_buf();

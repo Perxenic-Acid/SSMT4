@@ -42,6 +42,93 @@ pub(crate) fn installed_plugin_registry() -> Result<Option<PluginRegistry>, Stri
     installed_plugin_registry_at(crate::config::path_manager::PathManager::ssmt_plugins_folder())
 }
 
+static HOST_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 启动时写入真实应用版本，供没有 `AppHandle` 的后端路径做插件兼容判断。
+pub(crate) fn set_host_version(version: String) {
+    let _ = HOST_VERSION.set(version);
+}
+
+fn host_version() -> String {
+    HOST_VERSION
+        .get()
+        .cloned()
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
+/// 读取指定游戏预设的插件类型列表。
+/// 没有任何启用提供者时返回 `Ok(None)`，调用方沿用宿主内置类型；
+/// 冲突或数据损坏返回错误，不回退宿主资源。
+pub(crate) fn game_type_provider_types(
+    game_name: &str,
+    preset: &str,
+) -> Result<Option<Vec<crate::common::d3d11_gametype::D3D11GameType>>, String> {
+    let Some(registry) = installed_plugin_registry()? else {
+        return Ok(None);
+    };
+    let folder = registry
+        .resolve_game_type_provider(game_name, preset, &host_version())
+        .map_err(|error| error.to_string())?;
+    match folder {
+        Some(folder) => crate::gametype::provider::load_provider_types(&folder).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// 前端可选的插件预设；内置预设仍由前端常量表提供。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginGamePreset {
+    pub id: String,
+    pub display_name: String,
+    pub icon: Option<String>,
+    pub plugin_id: String,
+    pub plugin_version: String,
+}
+
+#[tauri::command]
+pub fn plugin_game_presets() -> Result<Vec<PluginGamePreset>, String> {
+    let Some(registry) = installed_plugin_registry()? else {
+        return Ok(Vec::new());
+    };
+    let mut presets: Vec<PluginGamePreset> = Vec::new();
+    for plugin in registry.selected_plugins() {
+        if !plugin.enabled || !plugin.manifest.supports_current_plugin_api() {
+            continue;
+        }
+        for preset in &plugin.manifest.contributions.game_presets {
+            if presets
+                .iter()
+                .any(|existing| existing.id.eq_ignore_ascii_case(&preset.id))
+            {
+                continue;
+            }
+            presets.push(PluginGamePreset {
+                id: preset.id.clone(),
+                display_name: preset.display_name.clone(),
+                icon: preset.icon.clone(),
+                plugin_id: plugin.id().to_owned(),
+                plugin_version: plugin.version().to_owned(),
+            });
+        }
+    }
+    Ok(presets)
+}
+
+/// 前端查询当前游戏使用哪个插件提供类型，供类型列表展示与诊断。
+#[tauri::command]
+pub fn plugin_game_type_provider_resolve(
+    game_name: String,
+    preset: String,
+) -> Result<Option<crate::plugin::registry::GameTypeProviderInfo>, String> {
+    let Some(registry) = installed_plugin_registry()? else {
+        return Ok(None);
+    };
+    registry
+        .describe_game_type_provider(&game_name, &preset, &host_version())
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginLifecycleStatus {
