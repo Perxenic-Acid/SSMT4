@@ -80,6 +80,7 @@ unrar = "0.4"
 encoding_rs = "0.8.35"
 chrono = "0.4"
 base64 = "0.22"
+half = "2.7.1"
 trash = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 image = "0.24"
