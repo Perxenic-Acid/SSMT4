@@ -876,7 +876,18 @@ export class LaunchGame {
     private static async deployPluginMainRuntime(
         migotoPath: string,
         runtime: PluginMainRuntime,
+        config: GameConfig,
     ): Promise<void> {
+        // 插件运行时固定是 DX11 的 d3d11.dll；DX12 预设的 Loader/module 指向 d3d12.dll，
+        // 部署插件运行时会与 d3dx.ini 的模块名不一致，直接拒绝而不是留下半套文件。
+        if ((config.gamePreset || "").trim().toUpperCase() === "ZZMIDX12") {
+            throw new Error(t("launchGame.messages.pluginMainRuntimeDx11Only"));
+        }
+        const dllTarget = await join(migotoPath, "d3d11.dll");
+        if (config.lockRuntimeUpdates === true && (await exists(dllTarget))) {
+            // 用户锁定运行时时不能用插件文件覆盖，也不能悄悄回退到 SSMT Runtime。
+            throw new Error(t("launchGame.messages.pluginMainRuntimeLocked"));
+        }
         const pairs: Array<[string | undefined, string]> = [
             [runtime.dllPath, "d3d11.dll"],
             [runtime.compilerPath, "d3dcompiler_47.dll"],
@@ -915,7 +926,7 @@ export class LaunchGame {
                 if (!this.runtimeSyncReady(runResult, "Run.exe")) {
                     throw new Error(t("launchGame.messages.runExeMissing"));
                 }
-                await this.deployPluginMainRuntime(migotoPath, pluginRuntime);
+                await this.deployPluginMainRuntime(migotoPath, pluginRuntime, config);
                 return true;
             }
             const filesToCopy = ["d3dcompiler_47.dll"];
