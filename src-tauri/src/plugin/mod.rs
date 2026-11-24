@@ -144,6 +144,14 @@ pub struct GamePresetContribution {
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// 包体 Release 仓库（`owner/repo`）；为空表示该预设没有自动更新包源。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_repository: Option<String>,
+    /// 包体资产文件名匹配模式（前缀/后缀形式，避免正则跨目录字符）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_asset_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_asset_suffix: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -677,6 +685,24 @@ impl PluginManifest {
                     "backend requires process.spawn".into(),
                 ));
             }
+            if backend.provides_main_runtime {
+                if !backend
+                    .events
+                    .iter()
+                    .any(|event| event == "launch.runtime.resolve")
+                {
+                    return Err(PluginManifestError::InvalidContribution(
+                        "providesMainRuntime requires the launch.runtime.resolve event".into(),
+                    ));
+                }
+                for permission in [PluginPermission::GameLaunch, PluginPermission::FilesystemRead] {
+                    if !self.permissions.contains(&permission) {
+                        return Err(PluginManifestError::InvalidContribution(
+                            "providesMainRuntime requires game.launch and filesystem.read".into(),
+                        ));
+                    }
+                }
+            }
         }
         validate_launch_hook_permissions(&self.contributions.launch_hooks, &self.permissions)?;
         if !self.contributions.data_directories.is_empty()
@@ -780,6 +806,32 @@ fn validate_contributions(
         validate_non_empty("game preset display name", &preset.display_name)?;
         if let Some(icon) = preset.icon.as_deref() {
             validate_package_path("game preset icon", icon)?;
+        }
+        if let Some(repository) = preset.package_repository.as_deref() {
+            let parts: Vec<&str> = repository.split('/').collect();
+            let valid_part = |part: &str| {
+                !part.is_empty()
+                    && part.len() <= 100
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            };
+            if parts.len() != 2 || !parts.iter().all(|part| valid_part(part)) {
+                return Err(PluginManifestError::InvalidContribution(format!(
+                    "invalid game preset package repository: {repository}"
+                )));
+            }
+            for suffix in [&preset.package_asset_prefix, &preset.package_asset_suffix] {
+                if suffix.as_deref().is_some_and(|value| value.is_empty() || value.len() > 200 || value.contains(['/', '\\'])) {
+                    return Err(PluginManifestError::InvalidContribution(
+                        "invalid game preset asset pattern".into(),
+                    ));
+                }
+            }
+        } else if preset.package_asset_prefix.is_some() || preset.package_asset_suffix.is_some() {
+            return Err(PluginManifestError::InvalidContribution(
+                "game preset asset pattern requires packageRepository".into(),
+            ));
         }
         if !preset_ids.insert(preset.id.to_ascii_lowercase()) {
             return Err(PluginManifestError::DuplicateValue {
@@ -1646,6 +1698,65 @@ mod tests {
             format_version: 1,
         });
         assert!(!manifest.is_app_scoped());
+    }
+
+    #[test]
+    fn game_preset_contribution_validates_ids_repositories_and_conflicts() {
+        let mut manifest = valid_manifest();
+        manifest.schema_version = 2;
+        manifest.compatibility.plugin_api = Some(">=1.0.0 <2.0.0".into());
+        manifest.contributions.game_presets.push(GamePresetContribution {
+            id: "ExampleGame".into(),
+            display_name: "Example Game".into(),
+            icon: None,
+            package_repository: Some("example/packages".into()),
+            package_asset_prefix: Some("Example-Package-".into()),
+            package_asset_suffix: Some(".zip".into()),
+        });
+        assert!(manifest.validate().is_ok());
+
+        let mut builtin = manifest.clone();
+        builtin.contributions.game_presets[0].id = "GIMI".into();
+        assert!(builtin.validate().is_err());
+
+        let mut bad_repo = manifest.clone();
+        bad_repo.contributions.game_presets[0].package_repository = Some("example/packages/extra".into());
+        assert!(bad_repo.validate().is_err());
+
+        let mut pattern_without_repo = manifest.clone();
+        pattern_without_repo.contributions.game_presets[0].package_repository = None;
+        assert!(pattern_without_repo.validate().is_err());
+
+        let mut schema_one = manifest.clone();
+        schema_one.schema_version = 1;
+        schema_one.compatibility.plugin_api = None;
+        assert!(schema_one.validate().is_err());
+    }
+
+    #[test]
+    fn backend_declaring_main_runtime_requires_event_and_permissions() {
+        let mut manifest = valid_manifest();
+        manifest.schema_version = 2;
+        manifest.compatibility.plugin_api = Some(">=1.0.0 <2.0.0".into());
+        manifest.contributions.backend = Some(super::backend::BackendContribution {
+            executable: "backend/worker.exe".into(),
+            sha256: "a".repeat(64),
+            methods: vec![],
+            events: vec!["launch.runtime.resolve".into()],
+            provides_main_runtime: true,
+        });
+        manifest.permissions = vec![
+            PluginPermission::ProcessSpawn,
+            PluginPermission::GameLaunch,
+            PluginPermission::FilesystemRead,
+        ];
+        assert!(manifest.validate().is_ok());
+        manifest.contributions.backend.as_mut().unwrap().events.clear();
+        assert!(manifest.validate().is_err());
+        manifest.contributions.backend.as_mut().unwrap().events =
+            vec!["launch.runtime.resolve".into()];
+        manifest.permissions.retain(|permission| *permission != PluginPermission::GameLaunch);
+        assert!(manifest.validate().is_err());
     }
 
     #[test]

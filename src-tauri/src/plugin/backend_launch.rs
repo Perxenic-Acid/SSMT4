@@ -47,7 +47,28 @@ pub struct RuntimeLaunchPlan {
     pub excluded_launch_args: Vec<String>,
     #[serde(default)]
     pub log_sources: Vec<LaunchLogSource>,
+    /// 插件提供的注入器主运行时：d3d11.dll 与配套编译器必须成对。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_runtime: Option<MainRuntime>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MainRuntime {
+    pub dll: MainRuntimeFile,
+    pub compiler: MainRuntimeFile,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MainRuntimeFile {
+    pub path: PathBuf,
+    pub sha256: String,
+    pub target_file_name: String,
+}
+
+const MAIN_RUNTIME_DLL: &str = "d3d11.dll";
+const MAIN_RUNTIME_COMPILER: &str = "d3dcompiler_47.dll";
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,6 +292,39 @@ fn validate_plan(plugin: &InstalledPlugin, plan: &RuntimeLaunchPlan) -> Result<(
         }
         checked_owned_path(&log.path, &roots, false)?;
     }
+    if let Some(runtime) = &plan.main_runtime {
+        if !plugin
+            .manifest
+            .permissions
+            .contains(&PluginPermission::FilesystemRead)
+        {
+            return Err("main runtime requires filesystem.read".into());
+        }
+        if !runtime
+            .dll
+            .target_file_name
+            .eq_ignore_ascii_case(MAIN_RUNTIME_DLL)
+            || !runtime
+                .compiler
+                .target_file_name
+                .eq_ignore_ascii_case(MAIN_RUNTIME_COMPILER)
+        {
+            return Err("main runtime must target d3d11.dll and d3dcompiler_47.dll".into());
+        }
+        for file in [&runtime.dll, &runtime.compiler] {
+            let path = checked_owned_path(&file.path, &roots, true)?;
+            if !path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"))
+                || file.sha256.len() != 64
+                || !file.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err("invalid main runtime declaration".into());
+            }
+            super::marketplace::verify_package_sha256(&path, &file.sha256)
+                .map_err(|error| error.to_string())?;
+        }
+    }
     for (name, value) in &plan.environment {
         if name.is_empty()
             || name.len() > 128
@@ -372,6 +426,67 @@ fn check_plan_conflicts(
         }
     }
     Ok(())
+}
+
+/// 主运行时归属结果。`owned=false` 表示走宿主自带的 SSMT Runtime；
+/// `owned=true` 时调用方必须使用这里返回的成对文件，失败即停止启动。
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MainRuntimeResolution {
+    pub owned: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dll_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dll_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_sha256: Option<String>,
+}
+
+/// 启动前解析主运行时归属。归属由清单静态声明决定，因此插件后台失败时
+/// 调用方仍能知道“运行时应由插件提供”，从而阻断启动而不是回退。
+#[tauri::command]
+pub async fn resolve_plugin_main_runtime(game_name: String) -> Result<MainRuntimeResolution, String> {
+    let Some(registry) = super::commands::installed_plugin_registry()? else {
+        return Ok(MainRuntimeResolution::default());
+    };
+    let scoped = registry.for_game(&game_name);
+    let providers: Vec<_> = scoped
+        .selected_plugins()
+        .filter(|plugin| {
+            plugin.enabled
+                && plugin
+                    .manifest
+                    .contributions
+                    .backend
+                    .as_ref()
+                    .is_some_and(|backend| backend.provides_main_runtime)
+        })
+        .collect();
+    if providers.is_empty() {
+        return Ok(MainRuntimeResolution::default());
+    }
+    if providers.len() > 1 {
+        return Err("multiple enabled plugins declare a main runtime provider".into());
+    }
+    let plugin = providers[0];
+    let value = backend::request(plugin, &game_name, "launch.runtime.resolve", json!({}), true).await?;
+    let plan: RuntimeLaunchPlan = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    validate_plan(plugin, &plan).map_err(|error| format!("{}: {error}", plugin.manifest.name))?;
+    let runtime = plan
+        .main_runtime
+        .ok_or_else(|| format!("{}: provider returned no main runtime", plugin.manifest.name))?;
+    Ok(MainRuntimeResolution {
+        owned: true,
+        plugin_id: Some(plugin.id().to_owned()),
+        dll_path: Some(runtime.dll.path.to_string_lossy().into_owned()),
+        dll_sha256: Some(runtime.dll.sha256),
+        compiler_path: Some(runtime.compiler.path.to_string_lossy().into_owned()),
+        compiler_sha256: Some(runtime.compiler.sha256),
+    })
 }
 
 #[tauri::command]
@@ -798,6 +913,63 @@ mod tests {
             Box::pin(std::future::ready(response))
         }).await;
         assert!(result.unwrap_err().contains("rollback failed"));
+    }
+
+    #[test]
+    fn main_runtime_requires_paired_owned_dlls_and_exact_target_names() {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-main-runtime-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            std::fs::write(root.join("lib").join(name), bytes).unwrap();
+            format!("{:x}", Sha256::digest(bytes))
+        };
+        let dll_hash = write("d3d11.dll", b"runtime");
+        let compiler_hash = write("d3dcompiler_47.dll", b"compiler");
+        let plugin = InstalledPlugin {
+            manifest: super::super::PluginManifest::from_json_str(&json!({
+                "schemaVersion":2,"id":"example.runtime","name":"Runtime","version":"1.0.0","author":"Example",
+                "compatibility":{"ssmt":">=4.2.2","pluginApi":">=1.1.0 <2.0.0","platforms":["windows-x64"]},
+                "contributions":{"backend":{"executable":"backend.exe","sha256":"a".repeat(64),
+                    "events":["launch.runtime.resolve"],"providesMainRuntime":true}},
+                "permissions":["process.spawn","game.launch","filesystem.read"]
+            }).to_string()).unwrap(),
+            package_root: root.clone(),
+            enabled: true,
+            external_dependencies: BTreeMap::new(),
+            official: false,
+        };
+        let plan = |target: &str| RuntimeLaunchPlan {
+            main_runtime: Some(MainRuntime {
+                dll: MainRuntimeFile {
+                    path: root.join("lib/d3d11.dll"),
+                    sha256: dll_hash.clone(),
+                    target_file_name: target.into(),
+                },
+                compiler: MainRuntimeFile {
+                    path: root.join("lib/d3dcompiler_47.dll"),
+                    sha256: compiler_hash.clone(),
+                    target_file_name: "d3dcompiler_47.dll".into(),
+                },
+            }),
+            ..Default::default()
+        };
+        assert!(validate_plan(&plugin, &plan("d3d11.dll")).is_ok());
+        assert!(validate_plan(&plugin, &plan("dxgi.dll")).is_err());
+        let mut wrong_hash = plan("d3d11.dll");
+        wrong_hash.main_runtime.as_mut().unwrap().compiler.sha256 = "0".repeat(64);
+        assert!(validate_plan(&plugin, &wrong_hash).is_err());
+        let mut outside = plan("d3d11.dll");
+        outside.main_runtime.as_mut().unwrap().dll.path = root.join("../escape.dll");
+        assert!(validate_plan(&plugin, &outside).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

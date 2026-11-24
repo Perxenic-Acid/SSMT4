@@ -149,6 +149,7 @@ pub fn run() {
             plugin::commands::plugin_game_presets,
             plugin::backend::plugin_backend_lifecycle,
             plugin::backend_launch::prepare_plugin_backend_launch,
+            plugin::backend_launch::resolve_plugin_main_runtime,
             plugin::commands::plugin_registry_snapshot_for_game,
             plugin::page_runtime::plugin_page_catalog,
             plugin::page_runtime::plugin_config_form_request,

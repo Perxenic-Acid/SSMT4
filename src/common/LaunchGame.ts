@@ -51,6 +51,15 @@ interface BackendRuntimePlan {
     logSources?: Array<{ name: string; path: string }>;
 }
 
+interface PluginMainRuntime {
+    owned: boolean;
+    pluginId?: string;
+    dllPath?: string;
+    dllSha256?: string;
+    compilerPath?: string;
+    compilerSha256?: string;
+}
+
 type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
 
 export class LaunchGame {
@@ -395,11 +404,19 @@ export class LaunchGame {
         // 静默发现 Runtime 发布并临时部署；锁定时保留用户 DLL，未锁定时不回退旧目标。
         // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
         const useUpx = getEffectiveUseUpx(migotoCfg);
+        let pluginRuntime: PluginMainRuntime | null = null;
+        try {
+            pluginRuntime = await this.resolvePluginMainRuntime(gameName);
+        } catch (err: unknown) {
+            ElMessage.error(err instanceof Error ? err.message : String(err));
+            return null;
+        }
         const environmentReady = await this.prepareGameEnvironment(
             gameName,
             migotoDir,
             migotoCfg,
             useUpx,
+            pluginRuntime,
         );
         if (!environmentReady) return null;
 
@@ -836,11 +853,53 @@ export class LaunchGame {
         }
     }
 
+    /**
+     * 插件主运行时归属。只有清单声明 providesMainRuntime 的插件会返回 owned=true。
+     * 一旦归插件所有，任何失败都必须阻断启动，不能回退到 SSMT Runtime。
+     */
+    private static async resolvePluginMainRuntime(gameName: string): Promise<PluginMainRuntime | null> {
+        let resolution: PluginMainRuntime | null = null;
+        try {
+            resolution = await invoke<PluginMainRuntime | null>("resolve_plugin_main_runtime", { gameName });
+        } catch (error) {
+            throw new Error(
+                t("launchGame.messages.pluginMainRuntimeFailed", { error: String(error) }),
+            );
+        }
+        if (!resolution?.owned) return null;
+        if (!resolution.dllPath || !resolution.compilerPath) {
+            throw new Error(t("launchGame.messages.pluginMainRuntimeIncomplete"));
+        }
+        return resolution;
+    }
+
+    private static async deployPluginMainRuntime(
+        migotoPath: string,
+        runtime: PluginMainRuntime,
+    ): Promise<void> {
+        const pairs: Array<[string | undefined, string]> = [
+            [runtime.dllPath, "d3d11.dll"],
+            [runtime.compilerPath, "d3dcompiler_47.dll"],
+        ];
+        for (const [sourcePath, fileName] of pairs) {
+            if (!sourcePath) throw new Error(t("launchGame.messages.pluginMainRuntimeIncomplete"));
+            const targetPath = await join(migotoPath, fileName);
+            try {
+                await invoke<string>("deploy_runtime_for_launch", { sourcePath, targetPath });
+            } catch (error) {
+                throw new Error(
+                    t("launchGame.messages.pluginMainRuntimeFailed", { error: String(error) }),
+                );
+            }
+        }
+    }
+
     private static async prepareGameEnvironment(
         gameName: string,
         migotoPath: string,
         config: GameConfig,
         useUpx: boolean,
+        pluginRuntime: PluginMainRuntime | null = null,
     ): Promise<boolean> {
         try {
             if (!(await exists(migotoPath))) {
@@ -848,6 +907,17 @@ export class LaunchGame {
             }
 
             const resourceDir = await GlobalConfig.SSMTResourcesFolder();
+            if (pluginRuntime) {
+                // 插件提供的运行时成对部署；Run.exe 仍由宿主提供。
+                const runSourcePath = await join(resourceDir, "Run.exe");
+                const runDestPath = await join(migotoPath, "Run.exe");
+                const runResult = await MigotoManager.syncRuntimeFile(runSourcePath, runDestPath);
+                if (!this.runtimeSyncReady(runResult, "Run.exe")) {
+                    throw new Error(t("launchGame.messages.runExeMissing"));
+                }
+                await this.deployPluginMainRuntime(migotoPath, pluginRuntime);
+                return true;
+            }
             const filesToCopy = ["d3dcompiler_47.dll"];
 
             for (const file of filesToCopy) {
