@@ -773,11 +773,25 @@ where
     Ok(())
 }
 
+/// 当前宿主直接支持的预设（与前端 `GAME_PRESET_VALUES` 对应）。
+/// 插件预设不得与之重名；历史预设只在全量表里，允许插件重新启用。
+const SUPPORTED_GAME_PRESETS: &[&str] = &[
+    "GIMI",
+    "WWMI",
+    "SRMI",
+    "ZZMI",
+    "EFMI",
+    "NTEMI",
+    "HIMI",
+    "CAMI",
+    "ZZMIDX12",
+    "APMI",
+];
+
 fn validate_contributions(
     contributions: &PluginContributions,
     dependencies: &[ExternalDependency],
-) -> Result<(), PluginManifestError> {
-    let mut presets = HashSet::new();
+) -> Result<(), PluginManifestError> {    let mut presets = HashSet::new();
     let mut provider_paths = HashSet::new();
     for provider in &contributions.game_type_providers {
         validate_plugin_id(&provider.game_preset)?;
@@ -839,9 +853,9 @@ fn validate_contributions(
                 value: preset.id.clone(),
             });
         }
-        if crate::workspace_access::validate::builtin_game_presets()
+        if SUPPORTED_GAME_PRESETS
             .iter()
-            .any(|builtin| builtin.eq_ignore_ascii_case(&preset.id))
+            .any(|supported| supported.eq_ignore_ascii_case(&preset.id))
         {
             return Err(PluginManifestError::InvalidContribution(format!(
                 "game preset id conflicts with a built-in preset: {}",
@@ -1718,6 +1732,11 @@ mod tests {
         let mut builtin = manifest.clone();
         builtin.contributions.game_presets[0].id = "GIMI".into();
         assert!(builtin.validate().is_err());
+
+        // 历史预设不在当前支持表里，插件可以用它重新启用（例如 IdentityV）。
+        let mut historical = manifest.clone();
+        historical.contributions.game_presets[0].id = "IdentityV".into();
+        assert!(historical.validate().is_ok());
 
         let mut bad_repo = manifest.clone();
         bad_repo.contributions.game_presets[0].package_repository = Some("example/packages/extra".into());
