@@ -827,7 +827,12 @@ fn group_is_indexed(conn: &Connection, game_name: &str, group_path: &str) -> Res
     Ok(!has_missing_timestamps)
 }
 
-fn query_group(conn: &Connection, game_name: &str, group_path: &str, install_dir: &str) -> Result<ScanResult, String> {
+fn query_group(
+    conn: &Connection,
+    game_name: &str,
+    group_path: &str,
+    install_dir: &str,
+) -> Result<ScanResult, String> {
     let key = group_cache_key(group_path);
 
     let mut mods_stmt = conn
@@ -1520,7 +1525,10 @@ fn find_ini_recursive(dir: &Path, prefix: &str, results: &mut Vec<String>) -> st
 
 #[cfg(test)]
 mod group_dedupe_tests {
-    use super::{count_group_entries, has_child_groups, index_group, open_db, query_group, upsert_group, GroupInfo};
+    use super::{
+        count_group_entries, has_child_groups, index_group, open_db, query_group, upsert_group,
+        GroupInfo,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1581,19 +1589,44 @@ mod group_dedupe_tests {
 
     #[test]
     fn cached_groups_include_expandability_before_children_are_indexed() {
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let base = std::env::temp_dir().join(format!("ssmt-group-arrows-{}-{}", std::process::id(), unique));
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "ssmt-group-arrows-{}-{}",
+            std::process::id(),
+            unique
+        ));
         let root = base.join("Mods");
         fs::create_dir_all(root.join("Parent").join("Child")).unwrap();
         fs::create_dir_all(root.join("Leaf").join("Mod")).unwrap();
-        fs::write(root.join("Leaf").join("Mod").join("mod.ini"), "[TextureOverride_Test]").unwrap();
+        fs::write(
+            root.join("Leaf").join("Mod").join("mod.ini"),
+            "[TextureOverride_Test]",
+        )
+        .unwrap();
         let install_dir = base.to_string_lossy();
         let mut conn = open_db(&install_dir).unwrap();
         let scanned = index_group(&mut conn, "Game", &install_dir, "Root").unwrap();
         let cached = query_group(&conn, "Game", "Root", &install_dir).unwrap();
         for result in [scanned, cached] {
-            assert!(result.groups.iter().find(|g| g.id == "Parent").unwrap().has_child_groups);
-            assert!(!result.groups.iter().find(|g| g.id == "Leaf").unwrap().has_child_groups);
+            assert!(
+                result
+                    .groups
+                    .iter()
+                    .find(|g| g.id == "Parent")
+                    .unwrap()
+                    .has_child_groups
+            );
+            assert!(
+                !result
+                    .groups
+                    .iter()
+                    .find(|g| g.id == "Leaf")
+                    .unwrap()
+                    .has_child_groups
+            );
             assert_eq!(result.groups.len(), 2);
         }
         drop(conn);
@@ -1602,8 +1635,15 @@ mod group_dedupe_tests {
 
     #[test]
     fn expand_arrow_only_counts_real_child_groups() {
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("ssmt-child-groups-{}-{}", std::process::id(), unique));
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-child-groups-{}-{}",
+            std::process::id(),
+            unique
+        ));
         fs::create_dir_all(root.join("Mod").join("Textures")).unwrap();
         fs::write(root.join("Mod").join("mod.ini"), "[TextureOverride_Test]").unwrap();
         fs::create_dir_all(root.join(".hidden").join("Nested")).unwrap();

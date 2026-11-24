@@ -7,6 +7,7 @@ use crate::common::vertex_buffer_txt_file::VertexBufferTxtFile;
 use crate::config::drawib_config::{DrawIBConfig, DrawIBEntry};
 use crate::config::path_manager::PathManager;
 use crate::extract_new::extract_services::FullExtractDataTypeFilter;
+use crate::extract_new::zzmi_morph::{self, ZZMIMorphExtraction};
 use crate::helper::mark_texture_helper::{
     get_workspace_component_name_draw_call_index_list_json_path,
     get_workspace_trianglelist_deduped_filename_json_path, ComponentNameDrawCallIndexListJson,
@@ -185,6 +186,108 @@ impl ZZMINewExtractor {
         Ok(())
     }
 
+    fn prepare_zzmi_morph(
+        &self,
+        d3d11_game_type: &D3D11GameType,
+        pointlist_index: &str,
+        category_buf_filename_map: &HashMap<String, String>,
+    ) -> Option<ZZMIMorphExtraction> {
+        if !d3d11_game_type.gpu_pre_skinning || pointlist_index.is_empty() {
+            return None;
+        }
+        let position_buf_filename = category_buf_filename_map.get("Position")?;
+        let position_stride = usize::try_from(
+            *d3d11_game_type
+                .category_stride_dict
+                .get("Position")
+                .unwrap_or(&0),
+        )
+        .ok()?;
+        let position_buf_path = self.fa.log.get_deduped_filepath(position_buf_filename);
+        if position_buf_path.is_empty() {
+            return None;
+        }
+        let final_position_buf = fs::read(&position_buf_path).ok()?;
+        match zzmi_morph::extract(
+            &self.fa,
+            pointlist_index,
+            &final_position_buf,
+            position_stride,
+            d3d11_game_type,
+        ) {
+            Ok(morph) => {
+                if let Some(morph) = &morph {
+                    crate::extract_log!(
+                        "ZZMI morph 已恢复: pointlist={} shape_key_vertices={}",
+                        pointlist_index,
+                        morph.shape_keys_info.vertex_count
+                    );
+                }
+                morph
+            }
+            Err(error) => {
+                crate::extract_log!(
+                    "ZZMI morph 解析失败，保留静态 Position: pointlist={} error={}",
+                    pointlist_index,
+                    error
+                );
+                None
+            }
+        }
+    }
+
+    fn write_zzmi_shape_key_buffers(
+        &self,
+        game_type_output_path: &Path,
+        name_prefix: &str,
+        submesh_json: &mut SubMeshJson,
+        morph: &ZZMIMorphExtraction,
+    ) -> Result<(), String> {
+        let buffers = [
+            (
+                "ShapeKeyOffset",
+                &morph.shape_key_offset_buf,
+                morph.shape_keys_info.offsets_hash.clone(),
+            ),
+            (
+                "ShapeKeyVertexId",
+                &morph.shape_key_vertex_id_buf,
+                morph.shape_keys_info.vertex_ids_hash.clone(),
+            ),
+            (
+                "ShapeKeyVertexOffset",
+                &morph.shape_key_vertex_offset_buf,
+                morph.shape_keys_info.vertex_offsets_hash.clone(),
+            ),
+            (
+                "ShapeKeyVertexAttributeOffset",
+                &morph.shape_key_vertex_attribute_offset_buf,
+                morph.shape_keys_info.vertex_attribute_offsets_hash.clone(),
+            ),
+        ];
+        for (buffer_type, bytes, hash) in buffers {
+            let file_name = format!("{name_prefix}-{buffer_type}.buf");
+            fs::write(game_type_output_path.join(&file_name), bytes).map_err(|error| {
+                format!("Failed to write ZZMI shape key buffer {file_name}: {error}")
+            })?;
+            submesh_json
+                .category_hash_dict
+                .insert(buffer_type.to_string(), hash);
+            submesh_json
+                .category_draw_category_map
+                .insert(buffer_type.to_string(), buffer_type.to_string());
+            submesh_json
+                .category_buffer_list
+                .push(SubMeshCategoryBuffer {
+                    file_name,
+                    buffer_type: buffer_type.to_string(),
+                    d3d11_element_list: Vec::new(),
+                });
+        }
+        submesh_json.shape_keys_info = morph.shape_keys_info.clone();
+        Ok(())
+    }
+
     /// 把同一个 DrawIB 的 trianglelist drawcall 归组成「部件」列表。
     ///
     /// 与旧逻辑（只按 IB 的 `first_index` 去重）的区别：
@@ -326,6 +429,7 @@ impl ZZMINewExtractor {
         if possible_d3d11_game_type_list.is_empty() {
             return Ok(false);
         }
+        let mut morph_cache: HashMap<(String, usize), Option<ZZMIMorphExtraction>> = HashMap::new();
         for component in components {
             crate::extract_log!(
                 "DrawIB: {} Component: {} IBFileName: {} PointlistIndex: {}",
@@ -378,6 +482,26 @@ impl ZZMINewExtractor {
                         .filter_first_file(&filename_search_str, ".buf")?;
                     category_buf_filename_map.insert(category_name.clone(), category_buf_filename);
                 }
+                let position_stride = usize::try_from(
+                    *d3d11_game_type
+                        .category_stride_dict
+                        .get("Position")
+                        .unwrap_or(&0),
+                )
+                .unwrap_or(0);
+                let morph_cache_key = (pointlist_index.clone(), position_stride);
+                if d3d11_game_type.gpu_pre_skinning
+                    && !pointlist_index.is_empty()
+                    && !morph_cache.contains_key(&morph_cache_key)
+                {
+                    let morph = self.prepare_zzmi_morph(
+                        d3d11_game_type,
+                        pointlist_index,
+                        &category_buf_filename_map,
+                    );
+                    morph_cache.insert(morph_cache_key.clone(), morph);
+                }
+                let morph = morph_cache.get(&morph_cache_key).and_then(Option::as_ref);
                 let unique_str_folder_name = component.folder_name.clone();
                 let game_type_output_path = PathBuf::from(&self.workspace_path)
                     .join(&unique_str_folder_name)
@@ -400,6 +524,19 @@ impl ZZMINewExtractor {
                         .unwrap_or_default();
                     let category_output_buf_file_path = game_type_output_path
                         .join(format!("{}-{}.buf", name_prefix, category_name));
+                    if category_name == "Position" {
+                        if let Some(morph) = morph {
+                            fs::write(&category_output_buf_file_path, &morph.base_position_buf)
+                                .map_err(|error| {
+                                    format!(
+                                        "Failed to write reconstructed ZZMI Position buffer {}: {}",
+                                        category_output_buf_file_path.display(),
+                                        error
+                                    )
+                                })?;
+                            continue;
+                        }
+                    }
                     self.export_category_buffer(
                         category_name,
                         &category_buf_filename,
@@ -447,6 +584,14 @@ impl ZZMINewExtractor {
                                 category_name,
                             ),
                         });
+                }
+                if let Some(morph) = morph {
+                    self.write_zzmi_shape_key_buffers(
+                        &game_type_output_path,
+                        &name_prefix,
+                        &mut submesh_json,
+                        morph,
+                    )?;
                 }
                 submesh_json
                     .save_to_file(game_type_output_path.join(name_prefix.to_string() + ".json"))?;
@@ -954,6 +1099,12 @@ impl ZZMINewExtractor {
         }
 
         self.sync_zzmi_textures_and_json(draw_ib_list, !self.specify_drawib_extract)?;
+        super::zzmi_skeleton_source::write(
+            Path::new(&self.workspace_path),
+            &self.fa.log.lines,
+            |file| self.fa.log.resolve_dump_filepath(file).ok(),
+        )
+        .map_err(|error| format!("保存 ZZMI 工作空间骨骼数据失败: {error}"))?;
         Ok(())
     }
 
