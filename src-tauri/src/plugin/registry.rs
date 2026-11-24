@@ -231,6 +231,15 @@ pub struct PluginRegistry {
     state_path: PathBuf,
     state: RegistryState,
     installed: Vec<InstalledPlugin>,
+    /// 加载失败的包目录；只跳过它们，不影响其余插件。
+    broken: Vec<BrokenPackage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrokenPackage {
+    pub path: PathBuf,
+    pub reason: String,
 }
 
 impl PluginRegistry {
@@ -248,6 +257,7 @@ impl PluginRegistry {
             state_path,
             state,
             installed: Vec::new(),
+            broken: Vec::new(),
         };
         registry.refresh()?;
         Ok(registry)
@@ -259,6 +269,7 @@ impl PluginRegistry {
 
     pub fn refresh(&mut self) -> Result<(), PluginRegistryError> {
         self.installed.clear();
+        self.broken.clear();
         let mut packages = Vec::new();
         for id_entry in fs::read_dir(&self.plugins_root)? {
             let id_entry = id_entry?;
@@ -280,32 +291,48 @@ impl PluginRegistry {
         for (id_path, package_root) in packages {
             let manifest_path = package_root.join(MANIFEST_FILE_NAME);
             if !manifest_path.is_file() {
-                return Err(PluginRegistryError::InvalidPackage(format!(
-                    "missing manifest: {}",
-                    manifest_path.display()
-                )));
+                // 单个坏包不能拖垮整个插件子系统：跳过并继续加载其余插件。
+                self.broken.push(BrokenPackage {
+                    path: package_root.clone(),
+                    reason: format!("missing manifest: {}", manifest_path.display()),
+                });
+                continue;
             }
-            let raw = fs::read_to_string(&manifest_path)?;
-            let manifest = PluginManifest::from_json_str(&raw)?;
-            let directory_id = id_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    PluginRegistryError::InvalidPackage("invalid plugin directory name".to_string())
-                })?;
-            let directory_version = package_root
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    PluginRegistryError::InvalidPackage(
-                        "invalid plugin version directory name".to_string(),
-                    )
-                })?;
-            if directory_id != manifest.id || directory_version != manifest.version {
-                return Err(PluginRegistryError::InvalidPackage(format!(
-                    "directory does not match manifest: {}",
-                    package_root.display()
-                )));
+            let raw = match fs::read_to_string(&manifest_path) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    self.broken.push(BrokenPackage {
+                        path: package_root.clone(),
+                        reason: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let manifest = match PluginManifest::from_json_str(&raw) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    self.broken.push(BrokenPackage {
+                        path: package_root.clone(),
+                        reason: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let directory_id = id_path.file_name().and_then(|name| name.to_str());
+            let directory_version = package_root.file_name().and_then(|name| name.to_str());
+            let matches = matches!(
+                (directory_id, directory_version),
+                (Some(id), Some(version)) if id == manifest.id && version == manifest.version
+            );
+            if !matches {
+                self.broken.push(BrokenPackage {
+                    path: package_root.clone(),
+                    reason: format!(
+                        "directory does not match manifest: {}",
+                        package_root.display()
+                    ),
+                });
+                continue;
             }
 
             let key = package_key(&manifest.id, &manifest.version);
@@ -336,6 +363,11 @@ impl PluginRegistry {
 
     pub fn installed(&self) -> &[InstalledPlugin] {
         &self.installed
+    }
+
+    /// 加载失败的包目录；其余插件不受影响。
+    pub fn broken(&self) -> &[BrokenPackage] {
+        &self.broken
     }
 
     /// 仅解析指定游戏已启用的唯一类型目录；没有提供者返回 `None`（沿用宿主内置），
@@ -1045,6 +1077,23 @@ mod tests {
             .describe_game_type_provider("", "IdentityV", "4.2.2")
             .unwrap()
             .is_some_and(|info| info.plugin_id == "example.identityv"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_package_is_skipped_instead_of_breaking_the_registry() {
+        let root = temp_root("broken-package");
+        let plugins_root = root.join("Plugins");
+        let broken = plugins_root.join("bad.plugin").join("1.0.0");
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(broken.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
+        let good = fixture_package(&root, "example.good", "1.0.0");
+        let mut registry = PluginRegistry::new(&plugins_root).unwrap();
+        registry.install_directory_package(&good).unwrap();
+        registry.refresh().unwrap();
+        assert!(registry.find("example.good").is_some());
+        assert_eq!(registry.broken().len(), 1);
+        assert!(registry.broken()[0].path.ends_with("bad.plugin/1.0.0"));
         fs::remove_dir_all(root).unwrap();
     }
 

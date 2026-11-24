@@ -1,3 +1,5 @@
+import { ref } from 'vue'
+
 // ─────────────────────────────────────────────────────────────
 // 游戏预设定义
 // ─────────────────────────────────────────────────────────────
@@ -90,7 +92,8 @@ const GAME_PRESET_ALL_SET: ReadonlySet<string> = new Set(GAME_PRESET_ALL_VALUES)
 const GAME_PRESET_SET: ReadonlySet<string> = new Set(GAME_PRESET_VALUES)
 
 // 必须在任何模块级求值（如 GAME_PRESET_OPTIONS）之前初始化，否则会触发 TDZ。
-let pluginPresets: readonly PluginGamePreset[] = []
+// 用 ref 保存，安装/启用插件后刷新能触发依赖它的 computed 重新计算。
+const pluginPresets = ref<readonly PluginGamePreset[]>([])
 
 export const MIHOYO_GAME_PRESET_VALUES = [
   'GIMI',
@@ -107,11 +110,23 @@ export const getGamePresetOptions = (translate?: GamePresetTranslator): Readonly
     label: getGamePresetDisplayName(preset, translate),
     value: preset as string,
   })),
-  ...pluginPresets.map(preset => ({
+  ...pluginPresets.value.map(preset => ({
     label: preset.displayName?.trim() || preset.id,
     value: preset.id,
   })),
 ]
+
+/**
+ * 重新拉取插件预设。安装、启用或卸载插件后调用，使下拉框无需重启即可更新。
+ */
+export async function refreshPluginGamePresets(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  try {
+    setPluginGamePresets(await invoke<PluginGamePreset[]>('plugin_game_presets'))
+  } catch (error) {
+    console.warn('Failed to load plugin game presets:', error)
+  }
+}
 
 /** @deprecated Use getGamePresetOptions(t) in player-facing UI. */
 export const GAME_PRESET_OPTIONS = getGamePresetOptions()
@@ -209,7 +224,7 @@ export interface PluginGamePreset {
 
 export function setPluginGamePresets(presets: readonly PluginGamePreset[] | null | undefined): void {
   const seen = new Set<string>()
-  pluginPresets = (presets ?? [])
+  pluginPresets.value = (presets ?? [])
     .filter(preset => {
       const id = (preset?.id || '').trim()
       if (!id || GAME_PRESET_SET.has(id) || seen.has(id.toLowerCase())) return false
@@ -220,11 +235,11 @@ export function setPluginGamePresets(presets: readonly PluginGamePreset[] | null
 }
 
 export function getPluginGamePresets(): readonly PluginGamePreset[] {
-  return pluginPresets
+  return pluginPresets.value
 }
 
 export function findPluginPreset(gamePreset: string | null | undefined): PluginGamePreset | null {
   const normalized = (gamePreset || '').trim()
   if (!normalized) return null
-  return pluginPresets.find(preset => preset.id.toLowerCase() === normalized.toLowerCase()) ?? null
+  return pluginPresets.value.find(preset => preset.id.toLowerCase() === normalized.toLowerCase()) ?? null
 }

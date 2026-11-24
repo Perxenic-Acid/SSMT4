@@ -27,7 +27,7 @@ import { useI18n } from 'vue-i18n'
 import { clearPluginLog, readPluginLog } from '../../plugin/logs'
 import { notifyPluginRegistryChanged } from '../../plugin/pluginRegistryEvents'
 import { AppStateManager } from '../../store/AppStateManager'
-import { getGamePresetDisplayName } from '../../store/GamePreset'
+import { getGamePresetDisplayName, refreshPluginGamePresets } from '../../store/GamePreset'
 import { ResourceManager } from '../../store/ResourceManager'
 import PluginCompatibilityPanel from './PluginCompatibilityPanel.vue'
 import PluginPermissionList from './PluginPermissionList.vue'
@@ -578,6 +578,8 @@ const refreshInstalled = async (): Promise<boolean> => {
       installedGameName.value = gameName
       succeeded = true
       notifyPluginRegistryChanged()
+      // 预设随插件安装/启用变化，刷新后无需重启即可在游戏列表里看到。
+      void refreshPluginGamePresets()
     }
   } catch (error) {
     if (requestId === refreshRequestId) {
