@@ -94,10 +94,14 @@ pub fn plugin_game_presets() -> Result<Vec<PluginGamePreset>, String> {
     let Some(registry) = installed_plugin_registry()? else {
         return Ok(Vec::new());
     };
+    Ok(collect_game_presets(&registry))
+}
+
+/// 从注册表收集可用预设。带预设的插件是游戏作用域的，启用状态记在 `game_plugins`，
+/// 全局 `enabled` 对它们恒为 false，所以两个来源都要看。
+fn collect_game_presets(registry: &PluginRegistry) -> Vec<PluginGamePreset> {
     let mut presets: Vec<PluginGamePreset> = Vec::new();
     for plugin in registry.selected_plugins() {
-        // 带预设的插件是游戏作用域的：启用状态记在 game_plugins 里，
-        // 全局 `enabled` 对它们恒为 false，不能只看它。
         let enabled = plugin.enabled || registry.plugin_enabled_anywhere(plugin.id());
         if !enabled || !plugin.manifest.supports_current_plugin_api() {
             continue;
@@ -121,7 +125,7 @@ pub fn plugin_game_presets() -> Result<Vec<PluginGamePreset>, String> {
             });
         }
     }
-    Ok(presets)
+    presets
 }
 
 /// 前端查询当前游戏使用哪个插件提供类型，供类型列表展示与诊断。
@@ -1014,6 +1018,44 @@ mod tests {
         for preset in ["GIMI", "SRMI", "WWMI", "ZZMI", "EFMI"] {
             assert!(super::snapshot_for_game(&registry, preset).is_empty());
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn game_scoped_plugin_presets_are_collected_from_per_game_enablement() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-preset-collect-{}-{nonce}",
+            std::process::id()
+        ));
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join(crate::plugin::registry::MANIFEST_FILE_NAME),
+            r#"{
+              "schemaVersion": 2, "id": "example.identityv", "name": "Fixture",
+              "version": "1.0.0", "author": "Test",
+              "compatibility": {"ssmt": ">=4.0.0", "pluginApi": ">=1.1.0 <2.0.0",
+                "platforms": ["windows-x64"], "games": ["IdentityV"]},
+              "contributions": {"gamePresets": [{"id": "IdentityV", "displayName": "Fifth"}]},
+              "permissions": []
+            }"#,
+        )
+        .unwrap();
+        let mut registry = crate::plugin::registry::PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&source).unwrap();
+        // 安装后全局 enabled=false，仅按游戏启用。
+        assert!(collect_game_presets(&registry).is_empty());
+        registry
+            .set_game_enabled("IdentityV", "example.identityv", true)
+            .unwrap();
+        let presets = collect_game_presets(&registry);
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].id, "IdentityV");
+        assert_eq!(presets[0].plugin_id, "example.identityv");
         fs::remove_dir_all(root).unwrap();
     }
 
