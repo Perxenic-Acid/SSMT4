@@ -248,6 +248,7 @@ export class LaunchGame {
         migotoDir: string;
         config: GameConfig;
         targetExe: string;
+        pluginRuntime: PluginMainRuntime | null;
     } | null> {
         const config = await ResourceManager.loadGameConfig(gameName);
         const migotoCfg = config ?? ({} as GameConfig);
@@ -337,7 +338,7 @@ export class LaunchGame {
         // A pure launch must not depend on, prepare, or mutate the 3DMigoto
         // runtime. It is intentionally just the configured game executable.
         if (pureDirectLaunch) {
-            return { migotoDir: "", config: migotoCfg, targetExe };
+            return { migotoDir: "", config: migotoCfg, targetExe, pluginRuntime: null };
         }
 
         let configuredMigotoDir = (migotoCfg.installDir || "").trim();
@@ -406,7 +407,7 @@ export class LaunchGame {
         const useUpx = getEffectiveUseUpx(migotoCfg);
         let pluginRuntime: PluginMainRuntime | null = null;
         try {
-            pluginRuntime = await this.resolvePluginMainRuntime(gameName);
+            pluginRuntime = await this.resolvePluginMainRuntime(gameName, migotoCfg.gamePreset);
         } catch (err: unknown) {
             ElMessage.error(err instanceof Error ? err.message : String(err));
             return null;
@@ -428,7 +429,7 @@ export class LaunchGame {
             }
         }
 
-        return { migotoDir, config: migotoCfg, targetExe };
+        return { migotoDir, config: migotoCfg, targetExe, pluginRuntime };
     }
 
     static async launch(
@@ -456,7 +457,7 @@ export class LaunchGame {
             );
             if (!preflight) return false;
 
-            const { migotoDir, config, targetExe } = preflight;
+            const { migotoDir, config, targetExe, pluginRuntime } = preflight;
             runtimeDirectory = migotoDir;
             launchExecutable = targetExe;
             const launchTargetProgram = config.launchTargetProgram !== false;
@@ -464,6 +465,11 @@ export class LaunchGame {
             if (!pureDirectTarget) {
                 pluginBackendBridgeAvailable = await this.preparePluginBackends(gameName, migotoDir);
                 pluginBackendsStarted = pluginBackendBridgeAvailable;
+                // 插件提供的运行时要求插件后台就绪；后台准备失败时继续启动会让游戏
+                // 用着插件的 d3d11 却缺少插件初始化，因此直接取消启动。
+                if (pluginRuntime && !pluginBackendBridgeAvailable) {
+                    throw new Error(t("launchGame.messages.pluginMainRuntimeBackendFailed"));
+                }
             }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
@@ -854,13 +860,19 @@ export class LaunchGame {
     }
 
     /**
-     * 插件主运行时归属。只有清单声明 providesMainRuntime 的插件会返回 owned=true。
-     * 一旦归插件所有，任何失败都必须阻断启动，不能回退到 SSMT Runtime。
+     * 插件主运行时归属。只要该预设的插件声明了 providesMainRuntime，运行时就必须由插件提供；
+     * 插件未启用或后台失败时返回错误，由调用方取消启动，不回退 SSMT Runtime。
      */
-    private static async resolvePluginMainRuntime(gameName: string): Promise<PluginMainRuntime | null> {
+    private static async resolvePluginMainRuntime(
+        gameName: string,
+        gamePreset: string | undefined,
+    ): Promise<PluginMainRuntime | null> {
         let resolution: PluginMainRuntime | null = null;
         try {
-            resolution = await invoke<PluginMainRuntime | null>("resolve_plugin_main_runtime", { gameName });
+            resolution = await invoke<PluginMainRuntime | null>("resolve_plugin_main_runtime", {
+                gameName,
+                gamePreset: gamePreset ?? null,
+            });
         } catch (error) {
             throw new Error(
                 t("launchGame.messages.pluginMainRuntimeFailed", { error: String(error) }),
@@ -884,8 +896,12 @@ export class LaunchGame {
             throw new Error(t("launchGame.messages.pluginMainRuntimeDx11Only"));
         }
         const dllTarget = await join(migotoPath, "d3d11.dll");
-        if (config.lockRuntimeUpdates === true && (await exists(dllTarget))) {
-            // 用户锁定运行时时不能用插件文件覆盖，也不能悄悄回退到 SSMT Runtime。
+        const compilerTarget = await join(migotoPath, "d3dcompiler_47.dll");
+        if (
+            config.lockRuntimeUpdates === true &&
+            ((await exists(dllTarget)) || (await exists(compilerTarget)))
+        ) {
+            // 锁定表示不覆盖已有运行时；成对部署不能只覆盖其中一个，因此整对拒绝。
             throw new Error(t("launchGame.messages.pluginMainRuntimeLocked"));
         }
         const pairs: Array<[string | undefined, string | undefined, string]> = [

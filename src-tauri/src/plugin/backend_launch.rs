@@ -452,33 +452,62 @@ pub struct MainRuntimeResolution {
     pub compiler_sha256: Option<String>,
 }
 
-/// 启动前解析主运行时归属。归属由清单静态声明决定，因此插件后台失败时
-/// 调用方仍能知道“运行时应由插件提供”，从而阻断启动而不是回退。
+/// 启动前解析主运行时归属。
+///
+/// 归属由清单静态声明决定：只要该预设的某个已安装插件声明了 `providesMainRuntime`，
+/// 运行时就必须由插件提供。插件被禁用、卸载或后台失败时直接报错，绝不回退宿主 Runtime。
 #[tauri::command]
-pub async fn resolve_plugin_main_runtime(game_name: String) -> Result<MainRuntimeResolution, String> {
+pub async fn resolve_plugin_main_runtime(
+    game_name: String,
+    game_preset: Option<String>,
+) -> Result<MainRuntimeResolution, String> {
     let Some(registry) = super::commands::installed_plugin_registry()? else {
         return Ok(MainRuntimeResolution::default());
     };
-    let scoped = registry.for_game(&game_name);
-    let providers: Vec<_> = scoped
+    let preset = game_preset
+        .as_deref()
+        .map(str::trim)
+        .filter(|preset| !preset.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| super::registry::game_scope_preset(&game_name));
+    let declares_runtime = |plugin: &InstalledPlugin| {
+        plugin
+            .manifest
+            .contributions
+            .backend
+            .as_ref()
+            .is_some_and(|backend| backend.provides_main_runtime)
+            && plugin.manifest.compatibility.supports_game(&preset)
+    };
+    // 无论启用与否：声明过就代表这个预设的运行时归插件所有。
+    let owners: Vec<_> = registry
         .selected_plugins()
-        .filter(|plugin| {
-            plugin.enabled
-                && plugin
-                    .manifest
-                    .contributions
-                    .backend
-                    .as_ref()
-                    .is_some_and(|backend| backend.provides_main_runtime)
-        })
+        .filter(|plugin| declares_runtime(plugin))
         .collect();
-    if providers.is_empty() {
+    if owners.is_empty() {
         return Ok(MainRuntimeResolution::default());
     }
-    if providers.len() > 1 {
-        return Err("multiple enabled plugins declare a main runtime provider".into());
+    let scoped = registry.for_game(&game_name);
+    let enabled: Vec<_> = scoped
+        .selected_plugins()
+        .filter(|plugin| plugin.enabled && declares_runtime(plugin))
+        .collect();
+    if enabled.is_empty() {
+        let names = owners
+            .iter()
+            .map(|plugin| plugin.manifest.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "{preset} 的运行时由插件提供，但对应插件未启用：{names}"
+        ));
     }
-    let plugin = providers[0];
+    if enabled.len() > 1 {
+        return Err(format!(
+            "{preset} 有多个已启用的主运行时提供者，无法确定使用哪一个"
+        ));
+    }
+    let plugin = enabled[0];
     if !super::commands::has_native_injection_risk_ack(plugin) {
         return Err(format!(
             "{}: native injection risk acknowledgement is required",
