@@ -192,17 +192,20 @@ pub(crate) fn has_native_injection_risk_ack(plugin: &super::registry::InstalledP
     {
         return true;
     }
-    let Ok(store) = PluginSettingsStore::from_default_location() else {
-        return false;
-    };
-    let Ok(Some(value)) = store.get(&plugin.manifest.id, NATIVE_INJECTION_RISK_ACK_KEY) else {
-        return false;
-    };
-    value.get("accepted").and_then(serde_json::Value::as_bool) == Some(true)
-        && value
-            .get("pluginVersion")
-            .and_then(serde_json::Value::as_str)
-            == Some(plugin.manifest.version.as_str())
+    // 读取注册表状态，而不是通用插件设置：后者任何渲染层代码都能写。
+    PluginRegistry::from_default_location()
+        .map(|registry| registry.native_injection_ack_for(plugin.id(), plugin.version()))
+        .unwrap_or(false)
+}
+
+/// 记录用户对某个插件版本的原生注入风险确认。
+#[tauri::command]
+pub fn plugin_ack_native_injection(id: String, version: String) -> Result<(), String> {
+    let mut registry =
+        PluginRegistry::from_default_location().map_err(|error| error.to_string())?;
+    registry
+        .set_native_injection_ack(&id, &version)
+        .map_err(|error| error.to_string())
 }
 
 fn snapshot_for_game(registry: &PluginRegistry, game_name: &str) -> Vec<InstalledPluginSnapshot> {

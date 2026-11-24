@@ -193,7 +193,6 @@ const logLoading = ref(false)
 const riskDialogOpen = ref(false)
 const riskAccepted = ref(false)
 const riskPlugin = ref<InstalledPlugin | null>(null)
-const NATIVE_INJECTION_RISK_ACK_KEY = 'native_injection_risk_ack_v1'
 const settingsSectionRef = ref<HTMLElement | null>(null)
 const settingsAttention = ref(false)
 
@@ -873,14 +872,9 @@ const confirmRiskyEnable = async () => {
   if (!riskAccepted.value || !riskPlugin.value) return
   loading.value = true
   try {
-    await invoke('set_plugin_setting', {
-      pluginId: riskPlugin.value.manifest.id,
-      key: NATIVE_INJECTION_RISK_ACK_KEY,
-      value: {
-        accepted: true,
-        pluginVersion: riskPlugin.value.manifest.version,
-        acceptedAt: new Date().toISOString(),
-      },
+    await invoke('plugin_ack_native_injection', {
+      id: riskPlugin.value.manifest.id,
+      version: riskPlugin.value.manifest.version,
     })
     const plugin = riskPlugin.value
     riskDialogOpen.value = false

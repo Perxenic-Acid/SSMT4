@@ -147,6 +147,7 @@ pub fn run() {
             plugin::commands::plugin_registry_snapshot,
             plugin::commands::plugin_game_type_provider_resolve,
             plugin::commands::plugin_game_presets,
+            plugin::commands::plugin_ack_native_injection,
             plugin::backend::plugin_backend_lifecycle,
             plugin::backend_launch::prepare_plugin_backend_launch,
             plugin::backend_launch::resolve_plugin_main_runtime,

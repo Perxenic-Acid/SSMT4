@@ -192,6 +192,9 @@ struct PluginSettings {
     external_paths: BTreeMap<String, PathBuf>,
     #[serde(default)]
     official: bool,
+    /// 用户已确认该版本的原生注入风险。存在注册表里，通用设置接口无法伪造。
+    #[serde(default)]
+    native_injection_ack: bool,
 }
 
 impl RegistryState {
@@ -368,6 +371,43 @@ impl PluginRegistry {
     /// 加载失败的包目录；其余插件不受影响。
     pub fn broken(&self) -> &[BrokenPackage] {
         &self.broken
+    }
+
+    /// 查询某个版本是否已确认原生注入风险。
+    pub fn native_injection_ack_for(&self, id: &str, version: &str) -> bool {
+        self.state
+            .plugins
+            .get(&package_key(id, version))
+            .is_some_and(|settings| settings.native_injection_ack)
+    }
+
+    /// 记录某个已安装版本的原生注入风险确认。
+    pub fn set_native_injection_ack(
+        &mut self,
+        id: &str,
+        version: &str,
+    ) -> Result<(), PluginRegistryError> {
+        let key = package_key(id, version);
+        let installed = self.installed.iter().any(|plugin| {
+            plugin.id() == id
+                && plugin.version() == version
+                && plugin
+                    .manifest
+                    .permissions
+                    .contains(&super::PluginPermission::NativeInject)
+        });
+        if !installed {
+            return Err(PluginRegistryError::State(format!(
+                "plugin {key} is not installed or does not request native injection"
+            )));
+        }
+        self.state
+            .plugins
+            .entry(key)
+            .or_default()
+            .native_injection_ack = true;
+        write_state(&self.state_path, &self.state)?;
+        self.refresh()
     }
 
     /// 仅解析指定游戏已启用的唯一类型目录；没有提供者返回 `None`（沿用宿主内置），
@@ -1465,6 +1505,7 @@ mod tests {
                     enabled: true,
                     official: true,
                     external_paths: BTreeMap::from([("tool".into(), path)]),
+                    ..PluginSettings::default()
                 },
             );
         }
