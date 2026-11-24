@@ -32,10 +32,6 @@ const GAME_PRESETS: &[&str] = &[
     "NarakaM",
     "CAMI",
 ];
-/// 宿主内置预设集合；插件预设不得与之重名。
-pub(crate) fn builtin_game_presets() -> &'static [&'static str] {
-    GAME_PRESETS
-}
 
 const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -106,7 +102,7 @@ pub fn preflight_workspace(request: &WorkspaceAccessPreflightRequest) -> Workspa
     let game_preset = request.game_preset.trim();
 
     validate_workspace_name(workspace_name, &mut errors);
-    if !GAME_PRESETS.contains(&game_preset) {
+    if !GAME_PRESETS.contains(&game_preset) && !crate::plugin::is_plugin_preset(game_preset) {
         errors.push(issue(
             "UNSUPPORTED_GAME_PRESET",
             None,

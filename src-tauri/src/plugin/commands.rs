@@ -31,7 +31,20 @@ fn installed_plugin_registry_at(plugins_root: PathBuf) -> Result<Option<PluginRe
             .any(|version| version.path().join(MANIFEST_FILE_NAME).is_file())
         {
             return PluginRegistry::new(plugins_root)
-                .map(Some)
+                .map(|registry| {
+                    // 记录插件声明的预设，供工作区预检放行。
+                    crate::plugin::register_declared_presets(registry.selected_plugins().flat_map(
+                        |plugin| {
+                            plugin
+                                .manifest
+                                .contributions
+                                .game_presets
+                                .iter()
+                                .map(|preset| preset.id.clone())
+                        },
+                    ));
+                    Some(registry)
+                })
                 .map_err(|error| error.to_string());
         }
     }
@@ -82,6 +95,9 @@ pub struct PluginGamePreset {
     pub id: String,
     pub display_name: String,
     pub icon: Option<String>,
+    pub package_repository: Option<String>,
+    pub package_asset_prefix: Option<String>,
+    pub package_asset_suffix: Option<String>,
     pub plugin_id: String,
     pub plugin_version: String,
 }
@@ -91,9 +107,18 @@ pub fn plugin_game_presets() -> Result<Vec<PluginGamePreset>, String> {
     let Some(registry) = installed_plugin_registry()? else {
         return Ok(Vec::new());
     };
+    Ok(collect_game_presets(&registry))
+}
+
+/// 从注册表收集可用预设。
+///
+/// 预设只需要"已安装且可用"，**不要求**已经在某个游戏里启用：新建游戏时先选预设、
+/// 再为该游戏启用插件，如果这里要求已启用就会形成"没有游戏就不能启用、不能启用就没有
+/// 预设、没有预设就建不了游戏"的死循环。类型与运行时的可用性仍由各自的启用状态控制。
+fn collect_game_presets(registry: &PluginRegistry) -> Vec<PluginGamePreset> {
     let mut presets: Vec<PluginGamePreset> = Vec::new();
     for plugin in registry.selected_plugins() {
-        if !plugin.enabled || !plugin.manifest.supports_current_plugin_api() {
+        if !plugin.manifest.supports_current_plugin_api() {
             continue;
         }
         for preset in &plugin.manifest.contributions.game_presets {
@@ -107,12 +132,15 @@ pub fn plugin_game_presets() -> Result<Vec<PluginGamePreset>, String> {
                 id: preset.id.clone(),
                 display_name: preset.display_name.clone(),
                 icon: preset.icon.clone(),
+                package_repository: preset.package_repository.clone(),
+                package_asset_prefix: preset.package_asset_prefix.clone(),
+                package_asset_suffix: preset.package_asset_suffix.clone(),
                 plugin_id: plugin.id().to_owned(),
                 plugin_version: plugin.version().to_owned(),
             });
         }
     }
-    Ok(presets)
+    presets
 }
 
 /// 前端查询当前游戏使用哪个插件提供类型，供类型列表展示与诊断。
@@ -1005,6 +1033,41 @@ mod tests {
         for preset in ["GIMI", "SRMI", "WWMI", "ZZMI", "EFMI"] {
             assert!(super::snapshot_for_game(&registry, preset).is_empty());
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn game_scoped_plugin_presets_are_collected_from_per_game_enablement() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ssmt-preset-collect-{}-{nonce}",
+            std::process::id()
+        ));
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join(crate::plugin::registry::MANIFEST_FILE_NAME),
+            r#"{
+              "schemaVersion": 2, "id": "example.identityv", "name": "Fixture",
+              "version": "1.0.0", "author": "Test",
+              "compatibility": {"ssmt": ">=4.0.0", "pluginApi": ">=1.1.0 <2.0.0",
+                "platforms": ["windows-x64"], "games": ["IdentityV"]},
+              "contributions": {"gamePresets": [{"id": "IdentityV", "displayName": "Fifth"}]},
+              "permissions": []
+            }"#,
+        )
+        .unwrap();
+        let mut registry =
+            crate::plugin::registry::PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&source).unwrap();
+        // 安装后即可见：不要求先启用，否则新建游戏时无法选到该预设。
+        let presets = collect_game_presets(&registry);
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].id, "IdentityV");
+        assert_eq!(presets[0].plugin_id, "example.identityv");
         fs::remove_dir_all(root).unwrap();
     }
 

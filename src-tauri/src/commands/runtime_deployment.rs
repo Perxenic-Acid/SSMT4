@@ -1,4 +1,5 @@
 //! Runtime 只在一次注入期间占用工作目录；链接失败才复制，清理时核对文件身份。
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
@@ -69,6 +70,129 @@ fn materialize(
     fs::copy(source, target).map_err(|e| e.to_string())?;
     Ok("copy")
 }
+/// 插件运行时部署：先核对来源摘要，再交给普通部署流程。
+/// 解析阶段与部署阶段之间文件可能被替换，这里重新计算一次。
+#[tauri::command]
+pub fn deploy_verified_runtime_for_launch(
+    source_path: String,
+    target_path: String,
+    sha256: String,
+) -> Result<String, String> {
+    let source = fs::canonicalize(&source_path).map_err(|e| e.to_string())?;
+    let mut file = fs::File::open(&source).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| e.to_string())?;
+    let actual = format!("{:x}", hasher.finalize());
+    if sha256.len() != 64 || !actual.eq_ignore_ascii_case(&sha256) {
+        return Err("插件运行时文件在部署前发生变化，已拒绝部署".into());
+    }
+    deploy_runtime_for_launch(source_path, target_path)
+}
+
+fn verified_source(source: &str, sha256: &str) -> Result<PathBuf, String> {
+    let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
+    let mut file = fs::File::open(&source).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| e.to_string())?;
+    let actual = format!("{:x}", hasher.finalize());
+    if sha256.len() != 64 || !actual.eq_ignore_ascii_case(sha256) {
+        return Err("插件运行时文件在部署前发生变化，已拒绝部署".into());
+    }
+    Ok(source)
+}
+
+/// 成对部署插件提供的运行时：两个文件都校验通过才落盘，任一失败则回到部署前状态。
+/// 单文件命令无法保证成对，插件路径必须走这个入口。
+#[tauri::command]
+pub fn deploy_runtime_pair_for_launch(
+    dll_source: String,
+    dll_sha256: String,
+    compiler_source: String,
+    compiler_sha256: String,
+    dll_target: String,
+    compiler_target: String,
+) -> Result<(), String> {
+    let sources = [
+        verified_source(&dll_source, &dll_sha256)?,
+        verified_source(&compiler_source, &compiler_sha256)?,
+    ];
+    let targets = [
+        key(Path::new(&dll_target))?,
+        key(Path::new(&compiler_target))?,
+    ];
+    if targets[0] == targets[1] {
+        return Err("运行时两个文件不能指向同一目标".into());
+    }
+    let mut items = deployments().lock().map_err(|e| e.to_string())?;
+    if targets
+        .iter()
+        .any(|target| items.get(target).is_some_and(|item| item.claimed))
+    {
+        return Err("该 Runtime 正在等待注入完成".into());
+    }
+
+    let pid = std::process::id();
+    let staging: Vec<PathBuf> = targets
+        .iter()
+        .map(|target| target.with_extension(format!("ssmt-pair-{pid}")))
+        .collect();
+    let backups: Vec<PathBuf> = targets
+        .iter()
+        .map(|target| target.with_extension(format!("ssmt-backup-{pid}")))
+        .collect();
+    for path in staging.iter().chain(backups.iter()) {
+        let _ = fs::remove_file(path);
+    }
+
+    let mut published: Vec<usize> = Vec::new();
+    let mut backed_up: Vec<usize> = Vec::new();
+    let result = (|| {
+        for index in 0..2 {
+            materialize(
+                &sources[index],
+                &staging[index],
+                |from, to| fs::hard_link(from, to),
+                symlink,
+            )?;
+        }
+        for index in 0..2 {
+            if targets[index].exists() {
+                fs::rename(&targets[index], &backups[index]).map_err(|e| e.to_string())?;
+                backed_up.push(index);
+            }
+            fs::rename(&staging[index], &targets[index]).map_err(|e| e.to_string())?;
+            published.push(index);
+        }
+        for index in 0..2 {
+            items.insert(
+                targets[index].clone(),
+                Deployment {
+                    path: targets[index].clone(),
+                    identity: identity(&targets[index])?,
+                    claimed: false,
+                },
+            );
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        for index in published.iter().rev() {
+            let _ = fs::remove_file(&targets[*index]);
+        }
+        for index in backed_up.iter().rev() {
+            let _ = fs::rename(&backups[*index], &targets[*index]);
+        }
+        for index in 0..2 {
+            items.remove(&targets[index]);
+        }
+    }
+    for path in staging.iter().chain(backups.iter()) {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
 #[tauri::command]
 pub fn deploy_runtime_for_launch(
     source_path: String,
@@ -242,6 +366,57 @@ mod tests {
         fs::write(&target, b"user replacement").unwrap();
         cleanup(&leases);
         assert_eq!(fs::read(target).unwrap(), b"user replacement");
+    }
+
+    #[test]
+    fn pair_deployment_rejects_mismatched_hash_and_restores_on_failure() {
+        let fixture = Fixture::new();
+        let dll = fixture.0.join("src-d3d11.dll");
+        let compiler = fixture.0.join("src-d3dcompiler_47.dll");
+        fs::write(&dll, b"dll-bytes").unwrap();
+        fs::write(&compiler, b"compiler-bytes").unwrap();
+        let dll_target = fixture.0.join("d3d11.dll");
+        let compiler_target = fixture.0.join("d3dcompiler_47.dll");
+        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+
+        // 哈希不符：两个文件都不应落盘。
+        let result = deploy_runtime_pair_for_launch(
+            dll.to_string_lossy().into(),
+            "0".repeat(64),
+            compiler.to_string_lossy().into(),
+            hash(b"compiler-bytes"),
+            dll_target.to_string_lossy().into(),
+            compiler_target.to_string_lossy().into(),
+        );
+        assert!(result.is_err());
+        assert!(!dll_target.exists() && !compiler_target.exists());
+
+        // 正常成对部署。
+        deploy_runtime_pair_for_launch(
+            dll.to_string_lossy().into(),
+            hash(b"dll-bytes"),
+            compiler.to_string_lossy().into(),
+            hash(b"compiler-bytes"),
+            dll_target.to_string_lossy().into(),
+            compiler_target.to_string_lossy().into(),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&dll_target).unwrap(), b"dll-bytes");
+        assert_eq!(fs::read(&compiler_target).unwrap(), b"compiler-bytes");
+
+        // 第二个目标被目录占用时整体回滚：第一个文件恢复成原来的内容。
+        fs::remove_file(&compiler_target).unwrap();
+        fs::create_dir(&compiler_target).unwrap();
+        let result = deploy_runtime_pair_for_launch(
+            dll.to_string_lossy().into(),
+            hash(b"new-dll"),
+            compiler.to_string_lossy().into(),
+            hash(b"compiler-bytes"),
+            dll_target.to_string_lossy().into(),
+            compiler_target.to_string_lossy().into(),
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&dll_target).unwrap(), b"dll-bytes");
     }
 
     #[cfg(windows)]

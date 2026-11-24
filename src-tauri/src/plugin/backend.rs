@@ -43,6 +43,10 @@ pub struct BackendContribution {
     pub methods: Vec<String>,
     #[serde(default)]
     pub events: Vec<String>,
+    /// 声明自己提供注入器主运行时（d3d11.dll + 配套编译器）。
+    /// 启动前据此判定“主运行时归插件所有”，失败必须阻断启动而不是回退。
+    #[serde(default)]
+    pub provides_main_runtime: bool,
 }
 
 impl BackendContribution {
@@ -72,6 +76,7 @@ impl BackendContribution {
                     | "launch.prepare"
                     | "launch.commit"
                     | "launch.cancel"
+                    | "launch.runtime.resolve"
             ) {
                 return Err(super::PluginManifestError::InvalidContribution(
                     "unsupported backend lifecycle event".into(),
@@ -371,6 +376,7 @@ mod tests {
             sha256: "a".repeat(64),
             methods: vec!["settings.read".into()],
             events: vec!["prepare".into(), "disabled".into()],
+            provides_main_runtime: false,
         };
         assert!(backend.validate().is_ok());
         let mut invalid = backend.clone();

@@ -39,7 +39,8 @@ struct SelectedGameTypeProvider {
     path: PathBuf,
 }
 
-pub(crate) fn game_scope_preset(game_name: &str) -> String {    game_preset(game_name).unwrap_or_else(|| game_name.trim().to_owned())
+pub(crate) fn game_scope_preset(game_name: &str) -> String {
+    game_preset(game_name).unwrap_or_else(|| game_name.trim().to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -382,12 +383,27 @@ impl PluginRegistry {
         } else {
             self.for_game_preset(game_name, preset)
         };
-        let candidates: Vec<_> = scoped.selected_plugins()
-            .filter(|plugin| plugin.enabled && plugin.manifest.compatibility.supports(
-                ssmt_version, super::SUPPORTED_PLATFORM, Some(preset)))
-            .flat_map(|plugin| plugin.manifest.contributions.game_type_providers.iter()
-                .filter(move |provider| provider.game_preset.eq_ignore_ascii_case(preset.trim()))
-                .map(move |provider| (plugin, provider)))
+        let candidates: Vec<_> = scoped
+            .selected_plugins()
+            .filter(|plugin| {
+                plugin.enabled
+                    && plugin.manifest.compatibility.supports(
+                        ssmt_version,
+                        super::SUPPORTED_PLATFORM,
+                        Some(preset),
+                    )
+            })
+            .flat_map(|plugin| {
+                plugin
+                    .manifest
+                    .contributions
+                    .game_type_providers
+                    .iter()
+                    .filter(move |provider| {
+                        provider.game_preset.eq_ignore_ascii_case(preset.trim())
+                    })
+                    .map(move |provider| (plugin, provider))
+            })
             .collect();
         if candidates.is_empty() {
             return Ok(None);
@@ -400,15 +416,24 @@ impl PluginRegistry {
         }
         let (plugin, provider) = candidates[0];
         super::validate_package_relative_path(&provider.path)?;
-        let relative_root = plugin.package_root.strip_prefix(&self.plugins_root).map_err(|_| {
-            PluginRegistryError::InvalidPackage("provider package is outside plugins root".into())
-        })?;
+        let relative_root = plugin
+            .package_root
+            .strip_prefix(&self.plugins_root)
+            .map_err(|_| {
+                PluginRegistryError::InvalidPackage(
+                    "provider package is outside plugins root".into(),
+                )
+            })?;
         let mut current = self.plugins_root.clone();
         check_provider_directory(&current)?;
         for component in relative_root.components() {
             match component {
                 std::path::Component::Normal(part) => current.push(part),
-                _ => return Err(PluginRegistryError::InvalidPackage("invalid package root".into())),
+                _ => {
+                    return Err(PluginRegistryError::InvalidPackage(
+                        "invalid package root".into(),
+                    ))
+                }
             }
             check_provider_directory(&current)?;
         }
@@ -419,7 +444,9 @@ impl PluginRegistry {
         }
         let resolved = fs::canonicalize(&current)?;
         if !resolved.starts_with(&canonical_root) || resolved == canonical_root {
-            return Err(PluginRegistryError::InvalidPackage("provider directory escapes package".into()));
+            return Err(PluginRegistryError::InvalidPackage(
+                "provider directory escapes package".into(),
+            ));
         }
         Ok(Some(SelectedGameTypeProvider {
             plugin_id: plugin.id().to_owned(),
@@ -844,7 +871,8 @@ fn check_provider_directory(path: &Path) -> Result<(), PluginRegistryError> {
     let reparse = metadata.file_type().is_symlink();
     if reparse || !metadata.is_dir() {
         return Err(PluginRegistryError::InvalidPackage(format!(
-            "provider path is not a normal directory: {}", path.display()
+            "provider path is not a normal directory: {}",
+            path.display()
         )));
     }
     Ok(())
@@ -972,45 +1000,141 @@ mod tests {
     }
 
     #[test]
+    fn installed_plugin_supplies_types_for_its_own_preset() {
+        let root = temp_root("identityv-e2e");
+        let package = root.join("source");
+        fs::create_dir_all(package.join("resources/GameType/IdentityV")).unwrap();
+        fs::write(
+            package.join("resources/GameType/IdentityV/GPU_Test.json"),
+            r#"{"GameTypeName":"GPU_Test","D3D11ElementList":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            package.join(MANIFEST_FILE_NAME),
+            r#"{
+              "schemaVersion": 2,
+              "id": "example.identityv",
+              "name": "IdentityV fixture",
+              "version": "1.0.0",
+              "author": "Test",
+              "compatibility": {"ssmt": ">=4.0.0", "pluginApi": ">=1.1.0 <2.0.0",
+                "platforms": ["windows-x64"], "games": ["IdentityV"]},
+              "contributions": {
+                "gamePresets": [{"id": "IdentityV", "displayName": "Fifth Personality"}],
+                "gameTypeProviders": [
+                  {"gamePreset": "IdentityV", "path": "resources/GameType/IdentityV", "formatVersion": 1}
+                ]
+              },
+              "permissions": []
+            }"#,
+        )
+        .unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&package).unwrap();
+        registry
+            .write_game_enabled("IdentityV", "example.identityv", true)
+            .unwrap();
+        let resolved = registry
+            .resolve_game_type_provider("", "IdentityV", "4.2.2")
+            .unwrap()
+            .expect("plugin must own the preset types");
+        let types = crate::gametype::provider::load_provider_types(&resolved).unwrap();
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0].game_type_name, "GPU_Test");
+        assert!(registry
+            .describe_game_type_provider("", "IdentityV", "4.2.2")
+            .unwrap()
+            .is_some_and(|info| info.plugin_id == "example.identityv"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn game_type_provider_resolution_checks_selection_and_paths() {
         let root = temp_root("provider-resolution");
         let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
-        for (id, version) in [("example.alpha", "1.0.0"), ("example.alpha", "2.0.0"), ("example.beta", "1.0.0")] {
+        for (id, version) in [
+            ("example.alpha", "1.0.0"),
+            ("example.alpha", "2.0.0"),
+            ("example.beta", "1.0.0"),
+        ] {
             let package = registry.plugins_root.join(id).join(version);
             fs::create_dir_all(package.join("types/data")).unwrap();
-            let manifest = format!(r#"{{
+            let manifest = format!(
+                r#"{{
                 "schemaVersion":2,"id":"{id}","name":"Fixture","version":"{version}","author":"Test",
                 "compatibility":{{"ssmt":">=4.0.0","pluginApi":">=1.0.0 <2.0.0","platforms":["windows-x64"],"games":["GIMI"]}},
                 "contributions":{{"gameTypeProviders":[{{"gamePreset":"GIMI","path":"types/data","formatVersion":1}}]}},"permissions":[]
-            }}"#);
+            }}"#
+            );
             fs::write(package.join(MANIFEST_FILE_NAME), manifest).unwrap();
         }
         registry.refresh().unwrap();
-        let resolve = |r: &PluginRegistry, game, preset, version| r.resolve_game_type_provider(game, preset, version);
-        assert_eq!(resolve(&registry, "Custom", "GIMI", "4.1.89").unwrap(), None);
-        registry.write_game_enabled("custom", "example.alpha", true).unwrap();
-        let expected = fs::canonicalize(registry.plugins_root.join("example.alpha/2.0.0/types/data")).unwrap();
-        assert_eq!(resolve(&registry, "Custom", "gimi", "4.1.89").unwrap(), Some(expected));
+        let resolve = |r: &PluginRegistry, game, preset, version| {
+            r.resolve_game_type_provider(game, preset, version)
+        };
+        assert_eq!(
+            resolve(&registry, "Custom", "GIMI", "4.1.89").unwrap(),
+            None
+        );
+        registry
+            .write_game_enabled("custom", "example.alpha", true)
+            .unwrap();
+        let expected =
+            fs::canonicalize(registry.plugins_root.join("example.alpha/2.0.0/types/data")).unwrap();
+        assert_eq!(
+            resolve(&registry, "Custom", "gimi", "4.1.89").unwrap(),
+            Some(expected)
+        );
         assert_eq!(resolve(&registry, "Other", "GIMI", "4.1.89").unwrap(), None);
-        assert_eq!(resolve(&registry, "Custom", "SRMI", "4.1.89").unwrap(), None);
+        assert_eq!(
+            resolve(&registry, "Custom", "SRMI", "4.1.89").unwrap(),
+            None
+        );
         assert_eq!(resolve(&registry, "Custom", "GIMI", "1.0.0").unwrap(), None);
-        registry.write_game_enabled("custom", "example.beta", true).unwrap();
+        registry
+            .write_game_enabled("custom", "example.beta", true)
+            .unwrap();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
-        registry.write_game_enabled("custom", "example.beta", false).unwrap();
-        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        registry
+            .write_game_enabled("custom", "example.beta", false)
+            .unwrap();
+        let alpha = registry
+            .installed
+            .iter_mut()
+            .find(|p| p.id() == "example.alpha" && p.version() == "2.0.0")
+            .unwrap();
         alpha.manifest.contributions.game_type_providers[0].path = "../outside".into();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
-        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        let alpha = registry
+            .installed
+            .iter_mut()
+            .find(|p| p.id() == "example.alpha" && p.version() == "2.0.0")
+            .unwrap();
         alpha.manifest.contributions.game_type_providers[0].path = "types/missing".into();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
         let outside = root.join("outside");
         fs::create_dir_all(&outside).unwrap();
-        let link = registry.plugins_root.join("example.alpha").join("2.0.0").join("types").join("link");
+        let link = registry
+            .plugins_root
+            .join("example.alpha")
+            .join("2.0.0")
+            .join("types")
+            .join("link");
         #[cfg(windows)]
-        assert!(std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).status().unwrap().success());
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .status()
+            .unwrap()
+            .success());
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, &link).unwrap();
-        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        let alpha = registry
+            .installed
+            .iter_mut()
+            .find(|p| p.id() == "example.alpha" && p.version() == "2.0.0")
+            .unwrap();
         alpha.manifest.contributions.game_type_providers[0].path = "types/link".into();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
     }
