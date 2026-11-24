@@ -96,7 +96,10 @@ pub fn plugin_game_presets() -> Result<Vec<PluginGamePreset>, String> {
     };
     let mut presets: Vec<PluginGamePreset> = Vec::new();
     for plugin in registry.selected_plugins() {
-        if !plugin.enabled || !plugin.manifest.supports_current_plugin_api() {
+        // 带预设的插件是游戏作用域的：启用状态记在 game_plugins 里，
+        // 全局 `enabled` 对它们恒为 false，不能只看它。
+        let enabled = plugin.enabled || registry.plugin_enabled_anywhere(plugin.id());
+        if !enabled || !plugin.manifest.supports_current_plugin_api() {
             continue;
         }
         for preset in &plugin.manifest.contributions.game_presets {

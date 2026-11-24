@@ -888,15 +888,15 @@ export class LaunchGame {
             // 用户锁定运行时时不能用插件文件覆盖，也不能悄悄回退到 SSMT Runtime。
             throw new Error(t("launchGame.messages.pluginMainRuntimeLocked"));
         }
-        const pairs: Array<[string | undefined, string]> = [
-            [runtime.dllPath, "d3d11.dll"],
-            [runtime.compilerPath, "d3dcompiler_47.dll"],
+        const pairs: Array<[string | undefined, string | undefined, string]> = [
+            [runtime.dllPath, runtime.dllSha256, "d3d11.dll"],
+            [runtime.compilerPath, runtime.compilerSha256, "d3dcompiler_47.dll"],
         ];
-        for (const [sourcePath, fileName] of pairs) {
-            if (!sourcePath) throw new Error(t("launchGame.messages.pluginMainRuntimeIncomplete"));
+        for (const [sourcePath, sha256, fileName] of pairs) {
+            if (!sourcePath || !sha256) throw new Error(t("launchGame.messages.pluginMainRuntimeIncomplete"));
             const targetPath = await join(migotoPath, fileName);
             try {
-                await invoke<string>("deploy_runtime_for_launch", { sourcePath, targetPath });
+                await invoke<string>("deploy_verified_runtime_for_launch", { sourcePath, targetPath, sha256 });
             } catch (error) {
                 throw new Error(
                     t("launchGame.messages.pluginMainRuntimeFailed", { error: String(error) }),

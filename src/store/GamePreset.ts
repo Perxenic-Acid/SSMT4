@@ -89,6 +89,9 @@ export function getGamePresetDisplayName(value: string | null | undefined, trans
 const GAME_PRESET_ALL_SET: ReadonlySet<string> = new Set(GAME_PRESET_ALL_VALUES)
 const GAME_PRESET_SET: ReadonlySet<string> = new Set(GAME_PRESET_VALUES)
 
+// 必须在任何模块级求值（如 GAME_PRESET_OPTIONS）之前初始化，否则会触发 TDZ。
+let pluginPresets: readonly PluginGamePreset[] = []
+
 export const MIHOYO_GAME_PRESET_VALUES = [
   'GIMI',
   'HIMI',
@@ -203,8 +206,6 @@ export interface PluginGamePreset {
   pluginId?: string
   pluginVersion?: string
 }
-
-let pluginPresets: readonly PluginGamePreset[] = []
 
 export function setPluginGamePresets(presets: readonly PluginGamePreset[] | null | undefined): void {
   const seen = new Set<string>()

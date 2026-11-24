@@ -695,10 +695,15 @@ impl PluginManifest {
                         "providesMainRuntime requires the launch.runtime.resolve event".into(),
                     ));
                 }
-                for permission in [PluginPermission::GameLaunch, PluginPermission::FilesystemRead] {
+                for permission in [
+                    PluginPermission::GameLaunch,
+                    PluginPermission::FilesystemRead,
+                    PluginPermission::NativeInject,
+                ] {
                     if !self.permissions.contains(&permission) {
                         return Err(PluginManifestError::InvalidContribution(
-                            "providesMainRuntime requires game.launch and filesystem.read".into(),
+                            "providesMainRuntime requires game.launch, filesystem.read and native.inject"
+                                .into(),
                         ));
                     }
                 }
@@ -1768,6 +1773,7 @@ mod tests {
             PluginPermission::ProcessSpawn,
             PluginPermission::GameLaunch,
             PluginPermission::FilesystemRead,
+            PluginPermission::NativeInject,
         ];
         assert!(manifest.validate().is_ok());
         manifest.contributions.backend.as_mut().unwrap().events.clear();

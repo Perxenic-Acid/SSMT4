@@ -293,12 +293,18 @@ fn validate_plan(plugin: &InstalledPlugin, plan: &RuntimeLaunchPlan) -> Result<(
         checked_owned_path(&log.path, &roots, false)?;
     }
     if let Some(runtime) = &plan.main_runtime {
+        // 主运行时同样会被加载进游戏进程，权限要求与 plan.dlls 一致。
+        // 风险确认属于运行时状态，在 resolve 命令里检查，这里只做静态校验。
         if !plugin
             .manifest
             .permissions
-            .contains(&PluginPermission::FilesystemRead)
+            .contains(&PluginPermission::NativeInject)
+            || !plugin
+                .manifest
+                .permissions
+                .contains(&PluginPermission::FilesystemRead)
         {
-            return Err("main runtime requires filesystem.read".into());
+            return Err("main runtime requires native.inject and filesystem.read".into());
         }
         if !runtime
             .dll
@@ -473,6 +479,12 @@ pub async fn resolve_plugin_main_runtime(game_name: String) -> Result<MainRuntim
         return Err("multiple enabled plugins declare a main runtime provider".into());
     }
     let plugin = providers[0];
+    if !super::commands::has_native_injection_risk_ack(plugin) {
+        return Err(format!(
+            "{}: native injection risk acknowledgement is required",
+            plugin.manifest.name
+        ));
+    }
     let value = backend::request(plugin, &game_name, "launch.runtime.resolve", json!({}), true).await?;
     let plan: RuntimeLaunchPlan = serde_json::from_value(value).map_err(|error| error.to_string())?;
     validate_plan(plugin, &plan).map_err(|error| format!("{}: {error}", plugin.manifest.name))?;
@@ -939,7 +951,7 @@ mod tests {
                 "compatibility":{"ssmt":">=4.2.2","pluginApi":">=1.1.0 <2.0.0","platforms":["windows-x64"]},
                 "contributions":{"backend":{"executable":"backend.exe","sha256":"a".repeat(64),
                     "events":["launch.runtime.resolve"],"providesMainRuntime":true}},
-                "permissions":["process.spawn","game.launch","filesystem.read"]
+                "permissions":["process.spawn","game.launch","filesystem.read","native.inject"]
             }).to_string()).unwrap(),
             package_root: root.clone(),
             enabled: true,

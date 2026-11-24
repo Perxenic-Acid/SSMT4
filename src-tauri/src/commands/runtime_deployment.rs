@@ -1,4 +1,5 @@
 //! Runtime 只在一次注入期间占用工作目录；链接失败才复制，清理时核对文件身份。
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
@@ -69,6 +70,25 @@ fn materialize(
     fs::copy(source, target).map_err(|e| e.to_string())?;
     Ok("copy")
 }
+/// 插件运行时部署：先核对来源摘要，再交给普通部署流程。
+/// 解析阶段与部署阶段之间文件可能被替换，这里重新计算一次。
+#[tauri::command]
+pub fn deploy_verified_runtime_for_launch(
+    source_path: String,
+    target_path: String,
+    sha256: String,
+) -> Result<String, String> {
+    let source = fs::canonicalize(&source_path).map_err(|e| e.to_string())?;
+    let mut file = fs::File::open(&source).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| e.to_string())?;
+    let actual = format!("{:x}", hasher.finalize());
+    if sha256.len() != 64 || !actual.eq_ignore_ascii_case(&sha256) {
+        return Err("插件运行时文件在部署前发生变化，已拒绝部署".into());
+    }
+    deploy_runtime_for_launch(source_path, target_path)
+}
+
 #[tauri::command]
 pub fn deploy_runtime_for_launch(
     source_path: String,

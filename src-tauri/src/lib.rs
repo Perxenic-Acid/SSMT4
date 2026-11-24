@@ -198,6 +198,7 @@ pub fn run() {
             commands::game_launcher::file_md5,
             commands::ssmt_runtime::resolve_ssmt_runtime_source,
             commands::runtime_deployment::deploy_runtime_for_launch,
+            commands::runtime_deployment::deploy_verified_runtime_for_launch,
             commands::runtime_deployment::cancel_runtime_deployment,
             commands::file_locks::query_file_locks,
             commands::file_locks::terminate_file_lock_owners,
