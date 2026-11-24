@@ -182,8 +182,6 @@ pub struct InstalledPluginSnapshot {
     pub features: Vec<String>,
 }
 
-pub(crate) const NATIVE_INJECTION_RISK_ACK_KEY: &str = "native_injection_risk_ack_v1";
-
 pub(crate) fn has_native_injection_risk_ack(plugin: &super::registry::InstalledPlugin) -> bool {
     if !plugin
         .manifest
