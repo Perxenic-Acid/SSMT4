@@ -12,6 +12,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { bindI18nLocaleToSettings, i18n } from "./i18n";
 import { triggerSilentStartupAppUpdateCheck } from "./common/AppSelfUpdate";
 import { announceStartupVisible } from "./common/StartupExperience";
+import { invoke } from "@tauri-apps/api/core";
+import { setPluginGamePresets, type PluginGamePreset } from "./store/GamePreset";
 
 const app = createApp(App);
 
@@ -61,7 +63,14 @@ const revealStartupExperience = () => {
   announceStartupVisible();
 };
 
-AppStateManager.initAppState().then(() => {
+AppStateManager.initAppState().then(async () => {
+  // 插件预设是运行时数据；拉取失败只影响插件预设，不阻塞启动。
+  try {
+    setPluginGamePresets(await invoke<PluginGamePreset[]>("plugin_game_presets"));
+  } catch (err) {
+    console.warn('Failed to load plugin game presets:', err);
+  }
+
   // Warm sub-page chunks in the background so first-time page switches are fast
   prefetchRouteComponents();
 

@@ -972,6 +972,53 @@ mod tests {
     }
 
     #[test]
+    fn installed_plugin_supplies_types_for_its_own_preset() {
+        let root = temp_root("identityv-e2e");
+        let package = root.join("source");
+        fs::create_dir_all(package.join("resources/GameType/IdentityV")).unwrap();
+        fs::write(
+            package.join("resources/GameType/IdentityV/GPU_Test.json"),
+            r#"{"GameTypeName":"GPU_Test","D3D11ElementList":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            package.join(MANIFEST_FILE_NAME),
+            r#"{
+              "schemaVersion": 2,
+              "id": "example.identityv",
+              "name": "IdentityV fixture",
+              "version": "1.0.0",
+              "author": "Test",
+              "compatibility": {"ssmt": ">=4.0.0", "pluginApi": ">=1.1.0 <2.0.0",
+                "platforms": ["windows-x64"], "games": ["IdentityV"]},
+              "contributions": {
+                "gamePresets": [{"id": "IdentityV", "displayName": "Fifth Personality"}],
+                "gameTypeProviders": [
+                  {"gamePreset": "IdentityV", "path": "resources/GameType/IdentityV", "formatVersion": 1}
+                ]
+              },
+              "permissions": []
+            }"#,
+        )
+        .unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&package).unwrap();
+        registry.write_game_enabled("IdentityV", "example.identityv", true).unwrap();
+        let resolved = registry
+            .resolve_game_type_provider("", "IdentityV", "4.2.2")
+            .unwrap()
+            .expect("plugin must own the preset types");
+        let types = crate::gametype::provider::load_provider_types(&resolved).unwrap();
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0].game_type_name, "GPU_Test");
+        assert!(registry
+            .describe_game_type_provider("", "IdentityV", "4.2.2")
+            .unwrap()
+            .is_some_and(|info| info.plugin_id == "example.identityv"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn game_type_provider_resolution_checks_selection_and_paths() {
         let root = temp_root("provider-resolution");
         let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();

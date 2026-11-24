@@ -82,6 +82,9 @@ pub struct PluginGamePreset {
     pub id: String,
     pub display_name: String,
     pub icon: Option<String>,
+    pub package_repository: Option<String>,
+    pub package_asset_prefix: Option<String>,
+    pub package_asset_suffix: Option<String>,
     pub plugin_id: String,
     pub plugin_version: String,
 }
@@ -107,6 +110,9 @@ pub fn plugin_game_presets() -> Result<Vec<PluginGamePreset>, String> {
                 id: preset.id.clone(),
                 display_name: preset.display_name.clone(),
                 icon: preset.icon.clone(),
+                package_repository: preset.package_repository.clone(),
+                package_asset_prefix: preset.package_asset_prefix.clone(),
+                package_asset_suffix: preset.package_asset_suffix.clone(),
                 plugin_id: plugin.id().to_owned(),
                 plugin_version: plugin.version().to_owned(),
             });
