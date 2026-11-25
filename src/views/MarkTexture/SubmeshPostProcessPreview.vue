@@ -1265,6 +1265,9 @@ const applyPreviewPosition = (values: number[], gamePreset?: string): [number, n
 // vertex against the spread of the same mesh instead of assuming metres, so a
 // model authored in decimetres is not misread as corrupt.
 const PREVIEW_COORDINATE_OUTLIER_FACTOR = 10;
+// A stray bad vertex should not repaint the whole model, so a mesh is only marked
+// when outliers are more than a rounding error of its vertex count.
+const PREVIEW_COORDINATE_OUTLIER_IGNORE_RATIO = 0.001;
 
 const findPreviewCoordinateOutlier = (positions: readonly number[]): boolean => {
 	const vertexCount = Math.floor(positions.length / 3);
@@ -1279,6 +1282,8 @@ const findPreviewCoordinateOutlier = (positions: readonly number[]): boolean => 
 			Math.abs(positions[offset + 1]!),
 			Math.abs(positions[offset + 2]!),
 		);
+		// A non-finite coordinate corrupts every derived value, so it is never
+		// treated as tolerable noise.
 		if (!Number.isFinite(magnitude)) {
 			return true;
 		}
@@ -1292,7 +1297,12 @@ const findPreviewCoordinateOutlier = (positions: readonly number[]): boolean => 
 		(typical > 0 ? typical : MAX_REASONABLE_PREVIEW_COORDINATE_METERS) * PREVIEW_COORDINATE_OUTLIER_FACTOR,
 		MAX_REASONABLE_PREVIEW_COORDINATE_METERS,
 	);
-	return magnitudes[vertexCount - 1]! > limit;
+	let outlierCount = 0;
+	for (let vertex = vertexCount - 1; vertex >= 0 && magnitudes[vertex]! > limit; vertex -= 1) {
+		outlierCount += 1;
+	}
+	const toleratedCount = Math.max(2, Math.ceil(vertexCount * PREVIEW_COORDINATE_OUTLIER_IGNORE_RATIO));
+	return outlierCount > toleratedCount;
 };
 
 const getBufferData = async (
