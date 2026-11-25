@@ -1261,6 +1261,40 @@ const applyPreviewPosition = (values: number[], gamePreset?: string): [number, n
 		: [position[0] * scale, position[1] * scale, position[2] * scale];
 };
 
+// Validity must not depend on the unit a game happens to author in: compare each
+// vertex against the spread of the same mesh instead of assuming metres, so a
+// model authored in decimetres is not misread as corrupt.
+const PREVIEW_COORDINATE_OUTLIER_FACTOR = 10;
+
+const findPreviewCoordinateOutlier = (positions: readonly number[]): boolean => {
+	const vertexCount = Math.floor(positions.length / 3);
+	if (vertexCount === 0) {
+		return false;
+	}
+	const magnitudes = new Array<number>(vertexCount);
+	for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+		const offset = vertex * 3;
+		const magnitude = Math.max(
+			Math.abs(positions[offset]!),
+			Math.abs(positions[offset + 1]!),
+			Math.abs(positions[offset + 2]!),
+		);
+		if (!Number.isFinite(magnitude)) {
+			return true;
+		}
+		magnitudes[vertex] = magnitude;
+	}
+	magnitudes.sort((left, right) => left - right);
+	// The 95th percentile ignores a handful of corrupt vertices, so the limit is
+	// not inflated by the very data it has to catch.
+	const typical = magnitudes[Math.min(vertexCount - 1, Math.floor(vertexCount * 0.95))]!;
+	const limit = Math.max(
+		(typical > 0 ? typical : MAX_REASONABLE_PREVIEW_COORDINATE_METERS) * PREVIEW_COORDINATE_OUTLIER_FACTOR,
+		MAX_REASONABLE_PREVIEW_COORDINATE_METERS,
+	);
+	return magnitudes[vertexCount - 1]! > limit;
+};
+
 const getBufferData = async (
 	dataType: DataTypeItem,
 	source: ElementSource,
@@ -2746,7 +2780,6 @@ const createPreviewGeometry = async (
 	const remap = new Map<number, number>();
 	let useSourceNormals = !!normalSource;
 	let skippedTriangleCount = 0;
-	let hasImplausibleCoordinates = false;
 	const shouldReverseWinding = REVERSED_WINDING_GAME_PRESETS.has(normalizeSemantic(dataType.json.GamePreset));
 
 	for (let indexOffset = 0; indexOffset < maxIndexCount; indexOffset += 3) {
@@ -2783,9 +2816,6 @@ const createPreviewGeometry = async (
 				targetIndex = remap.size;
 				remap.set(sourceIndex, targetIndex);
 				const position = applyPreviewPosition(trianglePositions[vertexOffset]!, dataType.json.GamePreset);
-				if (position.some(value => !Number.isFinite(value) || Math.abs(value) > MAX_REASONABLE_PREVIEW_COORDINATE_METERS)) {
-					hasImplausibleCoordinates = true;
-				}
 				const normalValues = readElementValues(normalData, normalSource, bufferIndex);
 				const tangentValues = readElementValues(tangentData, tangentSource, bufferIndex);
 				const colorValues = readElementValues(colorData, colorSource, bufferIndex);
@@ -2851,7 +2881,7 @@ const createPreviewGeometry = async (
 		geometry,
 		status: formatPreviewGeometryStatus(statusInfo),
 		statusInfo,
-		needsReview: hasImplausibleCoordinates,
+		needsReview: findPreviewCoordinateOutlier(positions),
 	};
 };
 
