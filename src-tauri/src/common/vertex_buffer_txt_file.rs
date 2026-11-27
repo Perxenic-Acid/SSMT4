@@ -8,6 +8,8 @@ use crate::common::d3d11_element::D3D11Element;
 pub struct VertexBufferTxtFile {
     pub d3d11_element_list: Vec<D3D11Element>,
     pub element_name_d3d11_element_dict: HashMap<String, D3D11Element>,
+    pub input_slot_by_element_name: HashMap<String, u64>,
+    pub aligned_byte_offset_by_element_name: HashMap<String, u64>,
     pub stride: String,
     pub first_vertex: String,
 
@@ -63,6 +65,8 @@ impl VertexBufferTxtFile {
         tmp_semantic_name: &str,
         tmp_semantic_index: u64,
         tmp_format: &str,
+        tmp_input_slot: Option<u64>,
+        tmp_aligned_byte_offset: Option<u64>,
     ) {
         if tmp_semantic_name.trim().is_empty() || tmp_format.trim().is_empty() {
             return;
@@ -81,17 +85,29 @@ impl VertexBufferTxtFile {
 
         self.element_name_d3d11_element_dict
             .insert(element.element_name.clone(), element.clone());
+        if let Some(input_slot) = tmp_input_slot {
+            self.input_slot_by_element_name
+                .insert(element.element_name.clone(), input_slot);
+        }
+        if let Some(aligned_byte_offset) = tmp_aligned_byte_offset {
+            self.aligned_byte_offset_by_element_name
+                .insert(element.element_name.clone(), aligned_byte_offset);
+        }
         self.d3d11_element_list.push(element);
     }
 
     fn parse_element_list(&mut self) {
         self.d3d11_element_list.clear();
         self.element_name_d3d11_element_dict.clear();
+        self.input_slot_by_element_name.clear();
+        self.aligned_byte_offset_by_element_name.clear();
 
         let mut meet_element = false;
         let mut tmp_semantic_name = String::new();
         let mut tmp_semantic_index: u64 = 0;
         let mut tmp_format = String::new();
+        let mut tmp_input_slot: Option<u64> = None;
+        let mut tmp_aligned_byte_offset: Option<u64> = None;
 
         let lines = self.vb_txt_file_lines.clone();
         for line in &lines {
@@ -116,20 +132,53 @@ impl VertexBufferTxtFile {
                     if let Some((_, rhs)) = trim_line.split_once(':') {
                         tmp_format = rhs.trim().to_string();
                     }
+                } else if trim_lower.starts_with("inputslot:") {
+                    if let Some((_, rhs)) = trim_line.split_once(':') {
+                        tmp_input_slot = rhs.trim().parse::<u64>().ok();
+                    }
+                } else if trim_lower.starts_with("alignedbyteoffset:") {
+                    if let Some((_, rhs)) = trim_line.split_once(':') {
+                        tmp_aligned_byte_offset = rhs.trim().parse::<u64>().ok();
+                    }
                 } else if line.starts_with("element[") {
-                    self.finalize_element(&tmp_semantic_name, tmp_semantic_index, &tmp_format);
+                    self.finalize_element(
+                        &tmp_semantic_name,
+                        tmp_semantic_index,
+                        &tmp_format,
+                        tmp_input_slot,
+                        tmp_aligned_byte_offset,
+                    );
                     tmp_semantic_name.clear();
                     tmp_semantic_index = 0;
                     tmp_format.clear();
+                    tmp_input_slot = None;
+                    tmp_aligned_byte_offset = None;
                 } else if line.starts_with("vertex-data:") {
-                    self.finalize_element(&tmp_semantic_name, tmp_semantic_index, &tmp_format);
+                    self.finalize_element(
+                        &tmp_semantic_name,
+                        tmp_semantic_index,
+                        &tmp_format,
+                        tmp_input_slot,
+                        tmp_aligned_byte_offset,
+                    );
+                    tmp_semantic_name.clear();
+                    tmp_semantic_index = 0;
+                    tmp_format.clear();
+                    tmp_input_slot = None;
+                    tmp_aligned_byte_offset = None;
                     break;
                 }
             }
         }
 
         if !tmp_semantic_name.is_empty() && !tmp_format.is_empty() {
-            self.finalize_element(&tmp_semantic_name, tmp_semantic_index, &tmp_format);
+            self.finalize_element(
+                &tmp_semantic_name,
+                tmp_semantic_index,
+                &tmp_format,
+                tmp_input_slot,
+                tmp_aligned_byte_offset,
+            );
         }
     }
 
@@ -188,5 +237,73 @@ fn get_byte_width_from_format(format: &str) -> u64 {
         bytes
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn parses_aligned_offsets_and_aliases_without_duplicating_last_element() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ssmt-vb-layout-{}-{suffix}.txt",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            [
+                "stride: 20",
+                "first vertex: 0",
+                "vertex count: 1",
+                "topology: trianglelist",
+                "element[0]:",
+                "  SemanticName: COLOR",
+                "  SemanticIndex: 0",
+                "  Format: R8G8B8A8_UNORM",
+                "  InputSlot: 1",
+                "  AlignedByteOffset: 0",
+                "  InputSlotClass: per-vertex",
+                "element[1]:",
+                "  SemanticName: TEXCOORD",
+                "  SemanticIndex: 0",
+                "  Format: R32G32_FLOAT",
+                "  InputSlot: 1",
+                "  AlignedByteOffset: 4",
+                "  InputSlotClass: per-vertex",
+                "element[2]:",
+                "  SemanticName: TEXCOORD",
+                "  SemanticIndex: 1",
+                "  Format: R32G32_FLOAT",
+                "  InputSlot: 1",
+                "  AlignedByteOffset: 12",
+                "  InputSlotClass: per-vertex",
+                "element[3]:",
+                "  SemanticName: TEXCOORD",
+                "  SemanticIndex: 2",
+                "  Format: R32G32_FLOAT",
+                "  InputSlot: 1",
+                "  AlignedByteOffset: 12",
+                "  InputSlotClass: per-vertex",
+                "vertex-data:",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let parsed = VertexBufferTxtFile::new(&path).unwrap();
+        let _ = fs::remove_file(path);
+
+        assert_eq!(parsed.stride, "20");
+        assert_eq!(parsed.d3d11_element_list.len(), 4);
+        assert_eq!(parsed.aligned_byte_offset_by_element_name["TEXCOORD"], 4);
+        assert_eq!(parsed.aligned_byte_offset_by_element_name["TEXCOORD1"], 12);
+        assert_eq!(parsed.aligned_byte_offset_by_element_name["TEXCOORD2"], 12);
+        assert_eq!(parsed.input_slot_by_element_name["TEXCOORD"], 1);
     }
 }

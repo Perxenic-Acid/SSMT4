@@ -73,6 +73,7 @@ type SubMeshElement = {
 	SemanticIndex?: string | number;
 	Format?: string;
 	ByteWidth?: string | number;
+	AlignedByteOffset?: string | number;
 };
 
 type SubMeshCategoryBuffer = {
@@ -936,10 +937,21 @@ const getElementSources = (dataType: DataTypeItem, semantic: string): ElementSou
 			continue;
 		}
 		const elements = Array.isArray(buffer.D3D11ElementList) ? buffer.D3D11ElementList : [];
-		let offset = 0;
-		const stride = elements.reduce((total, element) => total + getByteWidth(element), 0);
+		let sequentialOffset = 0;
+		let stride = 0;
+		for (const element of elements) {
+			const parsedOffset = Number.parseInt(String(element.AlignedByteOffset ?? ''), 10);
+			const offset = Number.isFinite(parsedOffset) ? parsedOffset : sequentialOffset;
+			sequentialOffset = Math.max(sequentialOffset, offset + getByteWidth(element));
+			stride = Math.max(stride, offset + getByteWidth(element));
+		}
 
+		sequentialOffset = 0;
 		for (const [elementIndex, element] of elements.entries()) {
+			const parsedOffset = Number.parseInt(String(element.AlignedByteOffset ?? ''), 10);
+			const offset = Number.isFinite(parsedOffset)
+				? parsedOffset
+				: sequentialOffset;
 			if (semanticMatches(element.SemanticName, targetSemantic)) {
 				result.push({
 					buffer,
@@ -950,7 +962,10 @@ const getElementSources = (dataType: DataTypeItem, semantic: string): ElementSou
 					elementIndex,
 				});
 			}
-			offset += getByteWidth(element);
+			sequentialOffset = Math.max(
+				sequentialOffset,
+				offset + getByteWidth(element),
+			);
 		}
 	}
 
