@@ -1,3 +1,5 @@
+import { ref } from 'vue'
+
 // ─────────────────────────────────────────────────────────────
 // 游戏预设定义
 // ─────────────────────────────────────────────────────────────
@@ -77,13 +79,21 @@ export type GamePresetTranslator = (key: string) => string
 
 export function getGamePresetDisplayName(value: string | null | undefined, translate?: GamePresetTranslator): string {
   const normalized = (value || '').trim()
-  if (!GAME_PRESET_ALL_SET.has(normalized)) return normalized
+  if (!GAME_PRESET_ALL_SET.has(normalized)) {
+    const pluginPreset = findPluginPreset(normalized)
+    const pluginLabel = pluginPreset?.displayName?.trim()
+    return pluginLabel ? `${pluginLabel}(${normalized})` : normalized
+  }
   const displayName = translate?.(`gameNames.${normalized}`) || GAME_PRESET_DISPLAY_NAME_EN[normalized as GamePresetAll]
   return `${displayName}(${normalized})`
 }
 
 const GAME_PRESET_ALL_SET: ReadonlySet<string> = new Set(GAME_PRESET_ALL_VALUES)
 const GAME_PRESET_SET: ReadonlySet<string> = new Set(GAME_PRESET_VALUES)
+
+// 必须在任何模块级求值（如 GAME_PRESET_OPTIONS）之前初始化，否则会触发 TDZ。
+// 用 ref 保存，安装/启用插件后刷新能触发依赖它的 computed 重新计算。
+const pluginPresets = ref<readonly PluginGamePreset[]>([])
 
 export const MIHOYO_GAME_PRESET_VALUES = [
   'GIMI',
@@ -95,11 +105,28 @@ export const MIHOYO_GAME_PRESET_VALUES = [
 
 const MIHOYO_GAME_PRESET_SET: ReadonlySet<string> = new Set(MIHOYO_GAME_PRESET_VALUES)
 
-export const getGamePresetOptions = (translate?: GamePresetTranslator): ReadonlyArray<{ label: string; value: GamePreset }> =>
-  GAME_PRESET_VALUES.map(preset => ({
+export const getGamePresetOptions = (translate?: GamePresetTranslator): ReadonlyArray<{ label: string; value: string }> => [
+  ...GAME_PRESET_VALUES.map(preset => ({
     label: getGamePresetDisplayName(preset, translate),
-    value: preset,
-  }))
+    value: preset as string,
+  })),
+  ...pluginPresets.value.map(preset => ({
+    label: preset.displayName?.trim() || preset.id,
+    value: preset.id,
+  })),
+]
+
+/**
+ * 重新拉取插件预设。安装、启用或卸载插件后调用，使下拉框无需重启即可更新。
+ */
+export async function refreshPluginGamePresets(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  try {
+    setPluginGamePresets(await invoke<PluginGamePreset[]>('plugin_game_presets'))
+  } catch (error) {
+    console.warn('Failed to load plugin game presets:', error)
+  }
+}
 
 /** @deprecated Use getGamePresetOptions(t) in player-facing UI. */
 export const GAME_PRESET_OPTIONS = getGamePresetOptions()
@@ -161,7 +188,8 @@ export function getGithubRepoByGamePreset(gamePreset: string): string | null {
   if (Object.prototype.hasOwnProperty.call(GAME_PRESET_GITHUB_REPO_MAP, gamePreset)) {
     return GAME_PRESET_GITHUB_REPO_MAP[gamePreset as GamePresetAll]
   }
-  return null
+  const pluginPreset = findPluginPreset(gamePreset)
+  return pluginPreset?.packageRepository?.trim() || null
 }
 
 export function resolveGamePresetByGameName(gameName: string): GamePreset | null {
@@ -176,5 +204,42 @@ export function isValidGamePreset(gamePreset: string | null | undefined): boolea
   if (!normalizedPreset) {
     return false
   }
-  return GAME_PRESET_SET.has(normalizedPreset)
+  return GAME_PRESET_SET.has(normalizedPreset) || findPluginPreset(normalizedPreset) !== null
+}
+
+/* ── 插件预设 ─────────────────────────────────────────────────────────────
+ * 插件通过清单 contributions.gamePresets 声明预设，宿主命令 plugin_game_presets
+ * 返回已启用条目。内置预设仍是编译期常量，插件预设只是追加，不修改常量表。
+ */
+export interface PluginGamePreset {
+  id: string
+  displayName: string
+  icon?: string | null
+  packageRepository?: string | null
+  packageAssetPrefix?: string | null
+  packageAssetSuffix?: string | null
+  pluginId?: string
+  pluginVersion?: string
+}
+
+export function setPluginGamePresets(presets: readonly PluginGamePreset[] | null | undefined): void {
+  const seen = new Set<string>()
+  pluginPresets.value = (presets ?? [])
+    .filter(preset => {
+      const id = (preset?.id || '').trim()
+      if (!id || GAME_PRESET_SET.has(id) || seen.has(id.toLowerCase())) return false
+      seen.add(id.toLowerCase())
+      return true
+    })
+    .map(preset => ({ ...preset, id: preset.id.trim() }))
+}
+
+export function getPluginGamePresets(): readonly PluginGamePreset[] {
+  return pluginPresets.value
+}
+
+export function findPluginPreset(gamePreset: string | null | undefined): PluginGamePreset | null {
+  const normalized = (gamePreset || '').trim()
+  if (!normalized) return null
+  return pluginPresets.value.find(preset => preset.id.toLowerCase() === normalized.toLowerCase()) ?? null
 }

@@ -51,6 +51,15 @@ interface BackendRuntimePlan {
     logSources?: Array<{ name: string; path: string }>;
 }
 
+interface PluginMainRuntime {
+    owned: boolean;
+    pluginId?: string;
+    dllPath?: string;
+    dllSha256?: string;
+    compilerPath?: string;
+    compilerSha256?: string;
+}
+
 type LaunchProgramPhase = "preLaunchPrograms" | "postLaunchPrograms";
 
 export class LaunchGame {
@@ -239,6 +248,7 @@ export class LaunchGame {
         migotoDir: string;
         config: GameConfig;
         targetExe: string;
+        pluginRuntime: PluginMainRuntime | null;
     } | null> {
         const config = await ResourceManager.loadGameConfig(gameName);
         const migotoCfg = config ?? ({} as GameConfig);
@@ -328,7 +338,7 @@ export class LaunchGame {
         // A pure launch must not depend on, prepare, or mutate the 3DMigoto
         // runtime. It is intentionally just the configured game executable.
         if (pureDirectLaunch) {
-            return { migotoDir: "", config: migotoCfg, targetExe };
+            return { migotoDir: "", config: migotoCfg, targetExe, pluginRuntime: null };
         }
 
         let configuredMigotoDir = (migotoCfg.installDir || "").trim();
@@ -395,11 +405,19 @@ export class LaunchGame {
         // 静默发现 Runtime 发布并临时部署；锁定时保留用户 DLL，未锁定时不回退旧目标。
         // UPX: respect per-game config, but default GIMI to UPX until the user chooses otherwise.
         const useUpx = getEffectiveUseUpx(migotoCfg);
+        let pluginRuntime: PluginMainRuntime | null = null;
+        try {
+            pluginRuntime = await this.resolvePluginMainRuntime(gameName, migotoCfg.gamePreset);
+        } catch (err: unknown) {
+            ElMessage.error(err instanceof Error ? err.message : String(err));
+            return null;
+        }
         const environmentReady = await this.prepareGameEnvironment(
             gameName,
             migotoDir,
             migotoCfg,
             useUpx,
+            pluginRuntime,
         );
         if (!environmentReady) return null;
 
@@ -411,7 +429,7 @@ export class LaunchGame {
             }
         }
 
-        return { migotoDir, config: migotoCfg, targetExe };
+        return { migotoDir, config: migotoCfg, targetExe, pluginRuntime };
     }
 
     static async launch(
@@ -439,7 +457,7 @@ export class LaunchGame {
             );
             if (!preflight) return false;
 
-            const { migotoDir, config, targetExe } = preflight;
+            const { migotoDir, config, targetExe, pluginRuntime } = preflight;
             runtimeDirectory = migotoDir;
             launchExecutable = targetExe;
             const launchTargetProgram = config.launchTargetProgram !== false;
@@ -447,6 +465,11 @@ export class LaunchGame {
             if (!pureDirectTarget) {
                 pluginBackendBridgeAvailable = await this.preparePluginBackends(gameName, migotoDir);
                 pluginBackendsStarted = pluginBackendBridgeAvailable;
+                // 插件提供的运行时要求插件后台就绪；后台准备失败时继续启动会让游戏
+                // 用着插件的 d3d11 却缺少插件初始化，因此直接取消启动。
+                if (pluginRuntime && !pluginBackendBridgeAvailable) {
+                    throw new Error(t("launchGame.messages.pluginMainRuntimeBackendFailed"));
+                }
             }
             const launcherExePath = (config.launcherExePath || "").trim();
             const targetProcessName = this.getProcessNameFromPath(targetExe);
@@ -836,11 +859,81 @@ export class LaunchGame {
         }
     }
 
+    /**
+     * 插件主运行时归属。只要该预设的插件声明了 providesMainRuntime，运行时就必须由插件提供；
+     * 插件未启用或后台失败时返回错误，由调用方取消启动，不回退 SSMT Runtime。
+     */
+    private static async resolvePluginMainRuntime(
+        gameName: string,
+        gamePreset: string | undefined,
+    ): Promise<PluginMainRuntime | null> {
+        let resolution: PluginMainRuntime | null = null;
+        try {
+            resolution = await invoke<PluginMainRuntime | null>("resolve_plugin_main_runtime", {
+                gameName,
+                gamePreset: gamePreset ?? null,
+            });
+        } catch (error) {
+            throw new Error(
+                t("launchGame.messages.pluginMainRuntimeFailed", { error: String(error) }),
+            );
+        }
+        if (!resolution?.owned) return null;
+        if (!resolution.dllPath || !resolution.compilerPath) {
+            throw new Error(t("launchGame.messages.pluginMainRuntimeIncomplete"));
+        }
+        return resolution;
+    }
+
+    private static async deployPluginMainRuntime(
+        migotoPath: string,
+        runtime: PluginMainRuntime,
+        config: GameConfig,
+    ): Promise<void> {
+        // 插件运行时固定是 DX11 的 d3d11.dll；DX12 预设的 Loader/module 指向 d3d12.dll，
+        // 部署插件运行时会与 d3dx.ini 的模块名不一致，直接拒绝而不是留下半套文件。
+        if ((config.gamePreset || "").trim().toUpperCase() === "ZZMIDX12") {
+            throw new Error(t("launchGame.messages.pluginMainRuntimeDx11Only"));
+        }
+        const dllTarget = await join(migotoPath, "d3d11.dll");
+        const compilerTarget = await join(migotoPath, "d3dcompiler_47.dll");
+        if (
+            config.lockRuntimeUpdates === true &&
+            ((await exists(dllTarget)) || (await exists(compilerTarget)))
+        ) {
+            // 锁定表示不覆盖已有运行时；成对部署不能只覆盖其中一个，因此整对拒绝。
+            throw new Error(t("launchGame.messages.pluginMainRuntimeLocked"));
+        }
+        const dllPath = runtime.dllPath;
+        const compilerPath = runtime.compilerPath;
+        const dllSha = runtime.dllSha256;
+        const compilerSha = runtime.compilerSha256;
+        if (!dllPath || !compilerPath || !dllSha || !compilerSha) {
+            throw new Error(t("launchGame.messages.pluginMainRuntimeIncomplete"));
+        }
+        try {
+            // 两个文件必须作为一对落盘：失败的组合会由后端回滚到部署前状态。
+            await invoke("deploy_runtime_pair_for_launch", {
+                dllSource: dllPath,
+                dllSha256: dllSha,
+                compilerSource: compilerPath,
+                compilerSha256: compilerSha,
+                dllTarget: await join(migotoPath, "d3d11.dll"),
+                compilerTarget: await join(migotoPath, "d3dcompiler_47.dll"),
+            });
+        } catch (error) {
+            throw new Error(
+                t("launchGame.messages.pluginMainRuntimeFailed", { error: String(error) }),
+            );
+        }
+    }
+
     private static async prepareGameEnvironment(
         gameName: string,
         migotoPath: string,
         config: GameConfig,
         useUpx: boolean,
+        pluginRuntime: PluginMainRuntime | null = null,
     ): Promise<boolean> {
         try {
             if (!(await exists(migotoPath))) {
@@ -848,6 +941,17 @@ export class LaunchGame {
             }
 
             const resourceDir = await GlobalConfig.SSMTResourcesFolder();
+            if (pluginRuntime) {
+                // 插件提供的运行时成对部署；Run.exe 仍由宿主提供。
+                const runSourcePath = await join(resourceDir, "Run.exe");
+                const runDestPath = await join(migotoPath, "Run.exe");
+                const runResult = await MigotoManager.syncRuntimeFile(runSourcePath, runDestPath);
+                if (!this.runtimeSyncReady(runResult, "Run.exe")) {
+                    throw new Error(t("launchGame.messages.runExeMissing"));
+                }
+                await this.deployPluginMainRuntime(migotoPath, pluginRuntime, config);
+                return true;
+            }
             const filesToCopy = ["d3dcompiler_47.dll"];
 
             for (const file of filesToCopy) {

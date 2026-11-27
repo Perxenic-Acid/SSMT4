@@ -39,7 +39,8 @@ struct SelectedGameTypeProvider {
     path: PathBuf,
 }
 
-pub(crate) fn game_scope_preset(game_name: &str) -> String {    game_preset(game_name).unwrap_or_else(|| game_name.trim().to_owned())
+pub(crate) fn game_scope_preset(game_name: &str) -> String {
+    game_preset(game_name).unwrap_or_else(|| game_name.trim().to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +192,9 @@ struct PluginSettings {
     external_paths: BTreeMap<String, PathBuf>,
     #[serde(default)]
     official: bool,
+    /// 用户已确认该版本的原生注入风险。存在注册表里，通用设置接口无法伪造。
+    #[serde(default)]
+    native_injection_ack: bool,
 }
 
 impl RegistryState {
@@ -230,6 +234,15 @@ pub struct PluginRegistry {
     state_path: PathBuf,
     state: RegistryState,
     installed: Vec<InstalledPlugin>,
+    /// 加载失败的包目录；只跳过它们，不影响其余插件。
+    broken: Vec<BrokenPackage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrokenPackage {
+    pub path: PathBuf,
+    pub reason: String,
 }
 
 impl PluginRegistry {
@@ -247,6 +260,7 @@ impl PluginRegistry {
             state_path,
             state,
             installed: Vec::new(),
+            broken: Vec::new(),
         };
         registry.refresh()?;
         Ok(registry)
@@ -258,6 +272,7 @@ impl PluginRegistry {
 
     pub fn refresh(&mut self) -> Result<(), PluginRegistryError> {
         self.installed.clear();
+        self.broken.clear();
         let mut packages = Vec::new();
         for id_entry in fs::read_dir(&self.plugins_root)? {
             let id_entry = id_entry?;
@@ -279,32 +294,48 @@ impl PluginRegistry {
         for (id_path, package_root) in packages {
             let manifest_path = package_root.join(MANIFEST_FILE_NAME);
             if !manifest_path.is_file() {
-                return Err(PluginRegistryError::InvalidPackage(format!(
-                    "missing manifest: {}",
-                    manifest_path.display()
-                )));
+                // 单个坏包不能拖垮整个插件子系统：跳过并继续加载其余插件。
+                self.broken.push(BrokenPackage {
+                    path: package_root.clone(),
+                    reason: format!("missing manifest: {}", manifest_path.display()),
+                });
+                continue;
             }
-            let raw = fs::read_to_string(&manifest_path)?;
-            let manifest = PluginManifest::from_json_str(&raw)?;
-            let directory_id = id_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    PluginRegistryError::InvalidPackage("invalid plugin directory name".to_string())
-                })?;
-            let directory_version = package_root
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    PluginRegistryError::InvalidPackage(
-                        "invalid plugin version directory name".to_string(),
-                    )
-                })?;
-            if directory_id != manifest.id || directory_version != manifest.version {
-                return Err(PluginRegistryError::InvalidPackage(format!(
-                    "directory does not match manifest: {}",
-                    package_root.display()
-                )));
+            let raw = match fs::read_to_string(&manifest_path) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    self.broken.push(BrokenPackage {
+                        path: package_root.clone(),
+                        reason: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let manifest = match PluginManifest::from_json_str(&raw) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    self.broken.push(BrokenPackage {
+                        path: package_root.clone(),
+                        reason: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let directory_id = id_path.file_name().and_then(|name| name.to_str());
+            let directory_version = package_root.file_name().and_then(|name| name.to_str());
+            let matches = matches!(
+                (directory_id, directory_version),
+                (Some(id), Some(version)) if id == manifest.id && version == manifest.version
+            );
+            if !matches {
+                self.broken.push(BrokenPackage {
+                    path: package_root.clone(),
+                    reason: format!(
+                        "directory does not match manifest: {}",
+                        package_root.display()
+                    ),
+                });
+                continue;
             }
 
             let key = package_key(&manifest.id, &manifest.version);
@@ -335,6 +366,48 @@ impl PluginRegistry {
 
     pub fn installed(&self) -> &[InstalledPlugin] {
         &self.installed
+    }
+
+    /// 加载失败的包目录；其余插件不受影响。
+    pub fn broken(&self) -> &[BrokenPackage] {
+        &self.broken
+    }
+
+    /// 查询某个版本是否已确认原生注入风险。
+    pub fn native_injection_ack_for(&self, id: &str, version: &str) -> bool {
+        self.state
+            .plugins
+            .get(&package_key(id, version))
+            .is_some_and(|settings| settings.native_injection_ack)
+    }
+
+    /// 记录某个已安装版本的原生注入风险确认。
+    pub fn set_native_injection_ack(
+        &mut self,
+        id: &str,
+        version: &str,
+    ) -> Result<(), PluginRegistryError> {
+        let key = package_key(id, version);
+        let installed = self.installed.iter().any(|plugin| {
+            plugin.id() == id
+                && plugin.version() == version
+                && plugin
+                    .manifest
+                    .permissions
+                    .contains(&super::PluginPermission::NativeInject)
+        });
+        if !installed {
+            return Err(PluginRegistryError::State(format!(
+                "plugin {key} is not installed or does not request native injection"
+            )));
+        }
+        self.state
+            .plugins
+            .entry(key)
+            .or_default()
+            .native_injection_ack = true;
+        write_state(&self.state_path, &self.state)?;
+        self.refresh()
     }
 
     /// 仅解析指定游戏已启用的唯一类型目录；没有提供者返回 `None`（沿用宿主内置），
@@ -382,12 +455,27 @@ impl PluginRegistry {
         } else {
             self.for_game_preset(game_name, preset)
         };
-        let candidates: Vec<_> = scoped.selected_plugins()
-            .filter(|plugin| plugin.enabled && plugin.manifest.compatibility.supports(
-                ssmt_version, super::SUPPORTED_PLATFORM, Some(preset)))
-            .flat_map(|plugin| plugin.manifest.contributions.game_type_providers.iter()
-                .filter(move |provider| provider.game_preset.eq_ignore_ascii_case(preset.trim()))
-                .map(move |provider| (plugin, provider)))
+        let candidates: Vec<_> = scoped
+            .selected_plugins()
+            .filter(|plugin| {
+                plugin.enabled
+                    && plugin.manifest.compatibility.supports(
+                        ssmt_version,
+                        super::SUPPORTED_PLATFORM,
+                        Some(preset),
+                    )
+            })
+            .flat_map(|plugin| {
+                plugin
+                    .manifest
+                    .contributions
+                    .game_type_providers
+                    .iter()
+                    .filter(move |provider| {
+                        provider.game_preset.eq_ignore_ascii_case(preset.trim())
+                    })
+                    .map(move |provider| (plugin, provider))
+            })
             .collect();
         if candidates.is_empty() {
             return Ok(None);
@@ -400,15 +488,24 @@ impl PluginRegistry {
         }
         let (plugin, provider) = candidates[0];
         super::validate_package_relative_path(&provider.path)?;
-        let relative_root = plugin.package_root.strip_prefix(&self.plugins_root).map_err(|_| {
-            PluginRegistryError::InvalidPackage("provider package is outside plugins root".into())
-        })?;
+        let relative_root = plugin
+            .package_root
+            .strip_prefix(&self.plugins_root)
+            .map_err(|_| {
+                PluginRegistryError::InvalidPackage(
+                    "provider package is outside plugins root".into(),
+                )
+            })?;
         let mut current = self.plugins_root.clone();
         check_provider_directory(&current)?;
         for component in relative_root.components() {
             match component {
                 std::path::Component::Normal(part) => current.push(part),
-                _ => return Err(PluginRegistryError::InvalidPackage("invalid package root".into())),
+                _ => {
+                    return Err(PluginRegistryError::InvalidPackage(
+                        "invalid package root".into(),
+                    ))
+                }
             }
             check_provider_directory(&current)?;
         }
@@ -419,7 +516,9 @@ impl PluginRegistry {
         }
         let resolved = fs::canonicalize(&current)?;
         if !resolved.starts_with(&canonical_root) || resolved == canonical_root {
-            return Err(PluginRegistryError::InvalidPackage("provider directory escapes package".into()));
+            return Err(PluginRegistryError::InvalidPackage(
+                "provider directory escapes package".into(),
+            ));
         }
         Ok(Some(SelectedGameTypeProvider {
             plugin_id: plugin.id().to_owned(),
@@ -844,7 +943,8 @@ fn check_provider_directory(path: &Path) -> Result<(), PluginRegistryError> {
     let reparse = metadata.file_type().is_symlink();
     if reparse || !metadata.is_dir() {
         return Err(PluginRegistryError::InvalidPackage(format!(
-            "provider path is not a normal directory: {}", path.display()
+            "provider path is not a normal directory: {}",
+            path.display()
         )));
     }
     Ok(())
@@ -972,45 +1072,158 @@ mod tests {
     }
 
     #[test]
+    fn installed_plugin_supplies_types_for_its_own_preset() {
+        let root = temp_root("identityv-e2e");
+        let package = root.join("source");
+        fs::create_dir_all(package.join("resources/GameType/IdentityV")).unwrap();
+        fs::write(
+            package.join("resources/GameType/IdentityV/GPU_Test.json"),
+            r#"{"GameTypeName":"GPU_Test","D3D11ElementList":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            package.join(MANIFEST_FILE_NAME),
+            r#"{
+              "schemaVersion": 2,
+              "id": "example.identityv",
+              "name": "IdentityV fixture",
+              "version": "1.0.0",
+              "author": "Test",
+              "compatibility": {"ssmt": ">=4.0.0", "pluginApi": ">=1.1.0 <2.0.0",
+                "platforms": ["windows-x64"], "games": ["IdentityV"]},
+              "contributions": {
+                "gamePresets": [{"id": "IdentityV", "displayName": "Fifth Personality"}],
+                "gameTypeProviders": [
+                  {"gamePreset": "IdentityV", "path": "resources/GameType/IdentityV", "formatVersion": 1}
+                ]
+              },
+              "permissions": []
+            }"#,
+        )
+        .unwrap();
+        let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
+        registry.install_directory_package(&package).unwrap();
+        registry
+            .write_game_enabled("IdentityV", "example.identityv", true)
+            .unwrap();
+        let resolved = registry
+            .resolve_game_type_provider("", "IdentityV", "4.2.2")
+            .unwrap()
+            .expect("plugin must own the preset types");
+        let types = crate::gametype::provider::load_provider_types(&resolved).unwrap();
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0].game_type_name, "GPU_Test");
+        assert!(registry
+            .describe_game_type_provider("", "IdentityV", "4.2.2")
+            .unwrap()
+            .is_some_and(|info| info.plugin_id == "example.identityv"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_package_is_skipped_instead_of_breaking_the_registry() {
+        let root = temp_root("broken-package");
+        let plugins_root = root.join("Plugins");
+        let broken = plugins_root.join("bad.plugin").join("1.0.0");
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(broken.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
+        let good = fixture_package(&root, "example.good", "1.0.0");
+        let mut registry = PluginRegistry::new(&plugins_root).unwrap();
+        registry.install_directory_package(&good).unwrap();
+        registry.refresh().unwrap();
+        assert!(registry.find("example.good").is_some());
+        assert_eq!(registry.broken().len(), 1);
+        assert!(registry.broken()[0].path.ends_with("bad.plugin/1.0.0"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn game_type_provider_resolution_checks_selection_and_paths() {
         let root = temp_root("provider-resolution");
         let mut registry = PluginRegistry::new(root.join("Plugins")).unwrap();
-        for (id, version) in [("example.alpha", "1.0.0"), ("example.alpha", "2.0.0"), ("example.beta", "1.0.0")] {
+        for (id, version) in [
+            ("example.alpha", "1.0.0"),
+            ("example.alpha", "2.0.0"),
+            ("example.beta", "1.0.0"),
+        ] {
             let package = registry.plugins_root.join(id).join(version);
             fs::create_dir_all(package.join("types/data")).unwrap();
-            let manifest = format!(r#"{{
+            let manifest = format!(
+                r#"{{
                 "schemaVersion":2,"id":"{id}","name":"Fixture","version":"{version}","author":"Test",
                 "compatibility":{{"ssmt":">=4.0.0","pluginApi":">=1.0.0 <2.0.0","platforms":["windows-x64"],"games":["GIMI"]}},
                 "contributions":{{"gameTypeProviders":[{{"gamePreset":"GIMI","path":"types/data","formatVersion":1}}]}},"permissions":[]
-            }}"#);
+            }}"#
+            );
             fs::write(package.join(MANIFEST_FILE_NAME), manifest).unwrap();
         }
         registry.refresh().unwrap();
-        let resolve = |r: &PluginRegistry, game, preset, version| r.resolve_game_type_provider(game, preset, version);
-        assert_eq!(resolve(&registry, "Custom", "GIMI", "4.1.89").unwrap(), None);
-        registry.write_game_enabled("custom", "example.alpha", true).unwrap();
-        let expected = fs::canonicalize(registry.plugins_root.join("example.alpha/2.0.0/types/data")).unwrap();
-        assert_eq!(resolve(&registry, "Custom", "gimi", "4.1.89").unwrap(), Some(expected));
+        let resolve = |r: &PluginRegistry, game, preset, version| {
+            r.resolve_game_type_provider(game, preset, version)
+        };
+        assert_eq!(
+            resolve(&registry, "Custom", "GIMI", "4.1.89").unwrap(),
+            None
+        );
+        registry
+            .write_game_enabled("custom", "example.alpha", true)
+            .unwrap();
+        let expected =
+            fs::canonicalize(registry.plugins_root.join("example.alpha/2.0.0/types/data")).unwrap();
+        assert_eq!(
+            resolve(&registry, "Custom", "gimi", "4.1.89").unwrap(),
+            Some(expected)
+        );
         assert_eq!(resolve(&registry, "Other", "GIMI", "4.1.89").unwrap(), None);
-        assert_eq!(resolve(&registry, "Custom", "SRMI", "4.1.89").unwrap(), None);
+        assert_eq!(
+            resolve(&registry, "Custom", "SRMI", "4.1.89").unwrap(),
+            None
+        );
         assert_eq!(resolve(&registry, "Custom", "GIMI", "1.0.0").unwrap(), None);
-        registry.write_game_enabled("custom", "example.beta", true).unwrap();
+        registry
+            .write_game_enabled("custom", "example.beta", true)
+            .unwrap();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
-        registry.write_game_enabled("custom", "example.beta", false).unwrap();
-        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        registry
+            .write_game_enabled("custom", "example.beta", false)
+            .unwrap();
+        let alpha = registry
+            .installed
+            .iter_mut()
+            .find(|p| p.id() == "example.alpha" && p.version() == "2.0.0")
+            .unwrap();
         alpha.manifest.contributions.game_type_providers[0].path = "../outside".into();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
-        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        let alpha = registry
+            .installed
+            .iter_mut()
+            .find(|p| p.id() == "example.alpha" && p.version() == "2.0.0")
+            .unwrap();
         alpha.manifest.contributions.game_type_providers[0].path = "types/missing".into();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
         let outside = root.join("outside");
         fs::create_dir_all(&outside).unwrap();
-        let link = registry.plugins_root.join("example.alpha").join("2.0.0").join("types").join("link");
+        let link = registry
+            .plugins_root
+            .join("example.alpha")
+            .join("2.0.0")
+            .join("types")
+            .join("link");
         #[cfg(windows)]
-        assert!(std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).status().unwrap().success());
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .status()
+            .unwrap()
+            .success());
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, &link).unwrap();
-        let alpha = registry.installed.iter_mut().find(|p| p.id() == "example.alpha" && p.version() == "2.0.0").unwrap();
+        let alpha = registry
+            .installed
+            .iter_mut()
+            .find(|p| p.id() == "example.alpha" && p.version() == "2.0.0")
+            .unwrap();
         alpha.manifest.contributions.game_type_providers[0].path = "types/link".into();
         assert!(resolve(&registry, "Custom", "GIMI", "4.1.89").is_err());
     }
@@ -1292,6 +1505,7 @@ mod tests {
                     enabled: true,
                     official: true,
                     external_paths: BTreeMap::from([("tool".into(), path)]),
+                    ..PluginSettings::default()
                 },
             );
         }

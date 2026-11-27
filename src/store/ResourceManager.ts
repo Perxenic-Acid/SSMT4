@@ -12,7 +12,7 @@ import { i18n } from '../i18n';
 import { debugLog } from '../utils/debugLog';
 
 import { GameConfig, GameConfigManager } from "./GameConfig";
-import { getGithubRepoByGamePreset, isMihoyoGamePreset } from './GamePreset';
+import { findPluginPreset, getGithubRepoByGamePreset, isMihoyoGamePreset } from './GamePreset';
 
 const t = i18n.global.t;
 
@@ -938,6 +938,25 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
         return missingFiles;
     }
 
+    /**
+     * 插件预设用清单里的前缀/后缀挑包，避免 Release 里多个 zip 时装错包。
+     * 内置预设没有前缀/后缀声明，保持“取第一个可用资产”的原有行为。
+     */
+    function pluginPresetAssetMatcher(
+        gamePreset: string,
+    ): ((assetName: string) => boolean) | undefined {
+        const preset = findPluginPreset(gamePreset)
+        const prefix = preset?.packageAssetPrefix?.trim()
+        const suffix = preset?.packageAssetSuffix?.trim()
+        if (!prefix && !suffix) return undefined
+        return (assetName: string) => {
+            const name = assetName.toLowerCase()
+            if (prefix && !name.startsWith(prefix.toLowerCase())) return false
+            if (suffix && !name.endsWith(suffix.toLowerCase())) return false
+            return true
+        }
+    }
+
     async function get3DMigotoLatestRelease(
         gamePreset: string,
         githubToken?: string,
@@ -947,7 +966,12 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
 
         if (!repo) return null;
 
-        return getLatestGithubRelease(repo, githubToken, includePrerelease);
+        return getLatestGithubRelease(
+            repo,
+            githubToken,
+            includePrerelease,
+            pluginPresetAssetMatcher(gamePreset),
+        );
     }
 
     async function get3DMigotoReleaseList(
@@ -959,7 +983,10 @@ export const useResourceManagerStore = defineStore('resourceManager', () => {
 
         if (!repo) return null;
 
-        return getGithubReleaseList(repo, githubToken, { includePrerelease });
+        return getGithubReleaseList(repo, githubToken, {
+            includePrerelease,
+            assetMatcher: pluginPresetAssetMatcher(gamePreset),
+        });
     }
 
     async function getAppLatestRelease(
