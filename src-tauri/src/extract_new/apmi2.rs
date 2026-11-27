@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::common::d3d11_gametype::D3D11GameType;
@@ -6,6 +6,7 @@ use crate::common::d3d11_gametype_lv2::D3D11GameTypeLv2;
 use crate::common::frame_analysis::frameanalysis::FrameAnalysis;
 use crate::common::index_buffer_buf_file::IndexBufferBufFile;
 use crate::common::index_buffer_txt_file::IndexBufferTxtFile;
+use crate::common::vertex_buffer_txt_file::VertexBufferTxtFile;
 use crate::config::drawib_config::{DrawIBConfig, DrawIBEntry};
 use crate::config::path_manager::PathManager;
 use crate::extract_new::extract_services::FullExtractDataTypeFilter;
@@ -26,6 +27,129 @@ pub struct APMI2NewExtractor {
 }
 
 impl APMI2NewExtractor {
+    fn copy_dump_to_apmi_snapshot(
+        &self,
+        logical_filename: &str,
+        snapshot_dir: &Path,
+    ) -> Result<bool, String> {
+        if logical_filename.trim().is_empty() {
+            return Ok(false);
+        }
+        let source_path = self.fa.log.get_deduped_filepath(logical_filename);
+        if source_path.is_empty() || !Path::new(&source_path).is_file() {
+            return Ok(false);
+        }
+        fs::copy(&source_path, snapshot_dir.join(logical_filename)).map_err(|error| {
+            format!(
+                "Failed to copy APMI capture resource {}: {}",
+                logical_filename, error
+            )
+        })?;
+        Ok(true)
+    }
+
+    fn copy_apmi_ordinal_resources(
+        &self,
+        ordinal: &str,
+        slots: &[&str],
+        txt_slots: &[&str],
+        snapshot_dir: &Path,
+    ) -> Result<(), String> {
+        for slot in slots {
+            let search = format!("{}-{}=", ordinal, slot);
+            let buf_filename = self
+                .fa
+                .data
+                .filter_first_file(&search, ".buf")
+                .unwrap_or_default();
+            self.copy_dump_to_apmi_snapshot(&buf_filename, snapshot_dir)?;
+            if txt_slots.contains(slot) {
+                let txt_filename = self
+                    .fa
+                    .data
+                    .filter_first_file(&search, ".txt")
+                    .unwrap_or_default();
+                self.copy_dump_to_apmi_snapshot(&txt_filename, snapshot_dir)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_workspace_apmi_capture_snapshot(
+        &self,
+        extracted_draw_ib_list: &BTreeSet<String>,
+    ) -> Result<(), String> {
+        if extracted_draw_ib_list.is_empty() {
+            return Ok(());
+        }
+
+        let snapshot_dir = PathBuf::from(&self.workspace_path).join("APMICapture");
+        SSMTFileUtils::create_folder_if_not_exists(&snapshot_dir)?;
+
+        let mut pointlist_indices = BTreeSet::new();
+        let mut trianglelist_indices = BTreeSet::new();
+        for draw_ib in extracted_draw_ib_list {
+            if let Some(pointlist_index) = self.fa.log.get_last_pointlist_index_by_hash(draw_ib) {
+                if !pointlist_index.is_empty() {
+                    pointlist_indices.insert(pointlist_index);
+                }
+            }
+            for trianglelist_index in self.fa.data.get_trianglelist_index_list(draw_ib) {
+                if !trianglelist_index.is_empty() {
+                    trianglelist_indices.insert(trianglelist_index);
+                }
+            }
+        }
+
+        for ordinal in &pointlist_indices {
+            self.copy_apmi_ordinal_resources(
+                ordinal,
+                &["cs-t0", "cs-t1", "cs-cb0", "cs-cb1", "cs-t2", "u0"],
+                &[],
+                &snapshot_dir,
+            )?;
+        }
+        for ordinal in &trianglelist_indices {
+            self.copy_apmi_ordinal_resources(
+                ordinal,
+                &["ib", "vb0", "vb1", "vb2", "vb3"],
+                &["vb1"],
+                &snapshot_dir,
+            )?;
+        }
+
+        let log_path = snapshot_dir.join("log.txt");
+        let mut log_lines = if log_path.is_file() {
+            fs::read_to_string(&log_path)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
+        let ordinals = pointlist_indices
+            .iter()
+            .chain(trianglelist_indices.iter())
+            .collect::<BTreeSet<_>>();
+        for ordinal in ordinals {
+            for line in self.fa.log.get_line_list_by_index(ordinal) {
+                if line.contains(" Dispatch(") || line.contains(" DrawIndexed(") {
+                    log_lines.insert(line);
+                }
+            }
+        }
+        let log_text = log_lines.into_iter().collect::<Vec<_>>().join("\n");
+        fs::write(log_path, log_text).map_err(|error| {
+            format!(
+                "Failed to write workspace APMI capture log {}: {}",
+                snapshot_dir.display(),
+                error
+            )
+        })?;
+        Ok(())
+    }
+
     fn build_vertex_limit_vb(&self, trianglelist_index: &str) -> String {
         let vb0_file_name = self
             .fa
@@ -92,6 +216,113 @@ impl APMI2NewExtractor {
         }
 
         result
+    }
+
+    fn build_source_texcoord_elements(
+        d3d11_game_type: &D3D11GameType,
+        category_name: &str,
+        vertex_buffer: &VertexBufferTxtFile,
+    ) -> Result<Vec<SubMeshD3D11Element>, String> {
+        let stride = vertex_buffer
+            .stride
+            .parse::<u64>()
+            .map_err(|_| format!("APMI: invalid vb1 stride: {}", vertex_buffer.stride))?;
+        let extract_slot = d3d11_game_type
+            .category_slot_dict
+            .get(category_name)
+            .cloned()
+            .unwrap_or_default();
+        let expected_input_slot = extract_slot
+            .strip_prefix("vb")
+            .and_then(|value| value.parse::<u64>().ok());
+        let extract_technique = if vertex_buffer.topology.is_empty() {
+            d3d11_game_type
+                .category_topology_dict
+                .get(category_name)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            vertex_buffer.topology.clone()
+        };
+        let draw_category = d3d11_game_type
+            .category_draw_category_dict
+            .get(category_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for element in &vertex_buffer.d3d11_element_list {
+            if let (Some(expected_slot), Some(actual_slot)) = (
+                expected_input_slot,
+                vertex_buffer
+                    .input_slot_by_element_name
+                    .get(&element.element_name),
+            ) {
+                if *actual_slot != expected_slot {
+                    continue;
+                }
+            }
+            if !seen.insert(element.element_name.clone()) {
+                continue;
+            }
+            let offset = vertex_buffer
+                .aligned_byte_offset_by_element_name
+                .get(&element.element_name)
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "APMI: vb1 element {} is missing AlignedByteOffset",
+                        element.element_name
+                    )
+                })?;
+            let byte_width = element.byte_width_int();
+            if byte_width == 0 || offset.saturating_add(byte_width) > stride {
+                return Err(format!(
+                    "APMI: vb1 element {} is outside stride {} (offset={}, width={})",
+                    element.element_name, stride, offset, byte_width
+                ));
+            }
+            result.push(SubMeshD3D11Element {
+                semantic_name: element.semantic_name.clone(),
+                semantic_index: element.semantic_index.to_string(),
+                format: element.format.clone(),
+                byte_width: element.byte_width.clone(),
+                aligned_byte_offset: offset.to_string(),
+                extract_slot: extract_slot.clone(),
+                extract_technique: extract_technique.clone(),
+                category: category_name.to_string(),
+                draw_category: draw_category.clone(),
+            });
+        }
+
+        if !result
+            .iter()
+            .any(|element| element.semantic_name.eq_ignore_ascii_case("TEXCOORD"))
+        {
+            return Err("APMI: vb1 layout does not contain TEXCOORD".to_string());
+        }
+        Ok(result)
+    }
+
+    fn build_workspace_elements_for_category(
+        &self,
+        d3d11_game_type: &D3D11GameType,
+        category_name: &str,
+        category_txt_filename: &str,
+    ) -> Result<Vec<SubMeshD3D11Element>, String> {
+        if category_name == "Texcoord" && !category_txt_filename.is_empty() {
+            let category_txt_path = self.fa.log.get_deduped_filepath(category_txt_filename);
+            if !category_txt_path.is_empty() && Path::new(&category_txt_path).is_file() {
+                let vertex_buffer = VertexBufferTxtFile::new(&category_txt_path)?;
+                return Self::build_source_texcoord_elements(
+                    d3d11_game_type,
+                    category_name,
+                    &vertex_buffer,
+                );
+            }
+        }
+        Ok(self.build_submesh_elements_for_category(d3d11_game_type, category_name))
     }
 
     fn export_category_buffer(
@@ -249,6 +480,7 @@ impl APMI2NewExtractor {
                 }
                 let ib_txt_file = IndexBufferTxtFile::new(&ib_txt_file_path, true)?;
                 let mut category_buf_filename_map: HashMap<String, String> = HashMap::new();
+                let mut category_txt_filename_map: HashMap<String, String> = HashMap::new();
                 for category_name in &d3d11_game_type.ordered_category_name_list {
                     let topology = d3d11_game_type
                         .category_topology_dict
@@ -268,7 +500,13 @@ impl APMI2NewExtractor {
                         &format!("{}-{}", extract_index, category_slot),
                         ".buf",
                     )?;
+                    let category_txt_file_name = self
+                        .fa
+                        .data
+                        .filter_first_file(&format!("{}-{}", extract_index, category_slot), ".txt")
+                        .unwrap_or_default();
                     category_buf_filename_map.insert(category_name.clone(), category_buf_file_name);
+                    category_txt_filename_map.insert(category_name.clone(), category_txt_file_name);
                 }
                 let unique_str_folder_name = format!(
                     "{}-{}-{}",
@@ -338,10 +576,14 @@ impl APMI2NewExtractor {
                         .push(SubMeshCategoryBuffer {
                             file_name: format!("{}-{}.buf", name_prefix, category_name),
                             buffer_type: "Normal".to_string(),
-                            d3d11_element_list: self.build_submesh_elements_for_category(
+                            d3d11_element_list: self.build_workspace_elements_for_category(
                                 d3d11_game_type,
                                 category_name,
-                            ),
+                                category_txt_filename_map
+                                    .get(category_name)
+                                    .map(String::as_str)
+                                    .unwrap_or_default(),
+                            )?,
                         });
                 }
                 submesh_json
@@ -593,6 +835,80 @@ impl APMI2NewExtractor {
                             "槽位的txt文件顶点数与Buffer统计顶点数不符，跳过此数据类型。"
                         );
                         all_match = false;
+                        break;
+                    }
+                }
+
+                if d3d11_game_type.gpu_pre_skinning && category_name == "Texcoord" {
+                    let category_slot = d3d11_game_type
+                        .category_slot_dict
+                        .get(category_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    let expected_input_slot = category_slot
+                        .strip_prefix("vb")
+                        .and_then(|value| value.parse::<u64>().ok());
+                    let category_txt_file_name = self
+                        .fa
+                        .data
+                        .filter_first_file(
+                            &format!("{}-{}", trianglelist_index, category_slot),
+                            ".txt",
+                        )
+                        .unwrap_or_default();
+                    let category_txt_file_path =
+                        self.fa.log.get_deduped_filepath(&category_txt_file_name);
+                    if category_txt_file_name.is_empty()
+                        || category_txt_file_path.is_empty()
+                        || !Path::new(&category_txt_file_path).is_file()
+                    {
+                        crate::extract_log!("GPU Texcoord 布局文件不存在，跳过此数据类型。");
+                        all_match = false;
+                        break;
+                    }
+                    let vertex_buffer = VertexBufferTxtFile::new(&category_txt_file_path)?;
+                    let source_stride = vertex_buffer.stride.parse::<u64>().unwrap_or(0);
+                    if source_stride != category_stride {
+                        crate::extract_log!(
+                            "GPU Texcoord 真实步长 {} 与模板步长 {} 不一致，跳过此数据类型。",
+                            source_stride,
+                            category_stride
+                        );
+                        all_match = false;
+                        break;
+                    }
+                    for element in &vertex_buffer.d3d11_element_list {
+                        if let (Some(expected_slot), Some(actual_slot)) = (
+                            expected_input_slot,
+                            vertex_buffer
+                                .input_slot_by_element_name
+                                .get(&element.element_name),
+                        ) {
+                            if *actual_slot != expected_slot {
+                                continue;
+                            }
+                        }
+                        let Some(offset) = vertex_buffer
+                            .aligned_byte_offset_by_element_name
+                            .get(&element.element_name)
+                        else {
+                            crate::extract_log!(
+                                "GPU Texcoord 元素 {} 缺少 AlignedByteOffset，跳过此数据类型。",
+                                element.element_name
+                            );
+                            all_match = false;
+                            break;
+                        };
+                        if offset.saturating_add(element.byte_width_int()) > source_stride {
+                            crate::extract_log!(
+                                "GPU Texcoord 元素 {} 超出真实步长，跳过此数据类型。",
+                                element.element_name
+                            );
+                            all_match = false;
+                            break;
+                        }
+                    }
+                    if !all_match {
                         break;
                     }
                 }
@@ -913,10 +1229,14 @@ impl APMI2NewExtractor {
                         .push(SubMeshCategoryBuffer {
                             file_name: format!("{}-{}.buf", name_prefix, category_name),
                             buffer_type: "Normal".to_string(),
-                            d3d11_element_list: self.build_submesh_elements_for_category(
+                            d3d11_element_list: self.build_workspace_elements_for_category(
                                 d3d11_game_type,
                                 category_name,
-                            ),
+                                category_txt_filename_map
+                                    .get(category_name)
+                                    .map(String::as_str)
+                                    .unwrap_or_default(),
+                            )?,
                         });
                 }
 
@@ -980,6 +1300,7 @@ impl APMI2NewExtractor {
         data_type_filter: FullExtractDataTypeFilter,
     ) -> Result<(), String> {
         crate::extract_log!("开始提取:");
+        let mut extracted_draw_ib_set = BTreeSet::new();
         let draw_ib_list = if self.specify_drawib_extract {
             self.drawib_config
                 .entries
@@ -1075,8 +1396,10 @@ impl APMI2NewExtractor {
                     continue;
                 }
             }
+            extracted_draw_ib_set.insert(draw_ib.clone());
         }
 
+        self.write_workspace_apmi_capture_snapshot(&extracted_draw_ib_set)?;
         crate::extract_log!("提取正常执行完成");
         if self.specify_drawib_extract {
             sync_workspace_deduped_textures_and_json(
@@ -1104,5 +1427,94 @@ impl APMI2NewExtractor {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::d3d11_element::D3D11Element;
+
+    #[test]
+    fn workspace_texcoord_layout_uses_source_offsets_and_aliases() {
+        let template = D3D11Element::new(
+            "TEXCOORD",
+            "R32G32_FLOAT",
+            "vb1",
+            "trianglelist",
+            "Texcoord",
+            "Texcoord",
+            "8",
+        );
+        let game_type = D3D11GameType::from_parts("GPU_TEST", vec![template]);
+
+        let mut vertex_buffer = VertexBufferTxtFile {
+            stride: "20".to_string(),
+            topology: "trianglelist".to_string(),
+            ..VertexBufferTxtFile::default()
+        };
+        for (name, index, format, width, offset) in [
+            ("COLOR", 0, "R8G8B8A8_UNORM", "4", 0),
+            ("TEXCOORD", 0, "R32G32_FLOAT", "8", 4),
+            ("TEXCOORD", 1, "R32G32_FLOAT", "8", 12),
+            ("TEXCOORD", 2, "R32G32_FLOAT", "8", 12),
+        ] {
+            let mut element = D3D11Element::new(
+                name,
+                format,
+                "vb1",
+                "trianglelist",
+                "Texcoord",
+                "Texcoord",
+                width,
+            );
+            element.semantic_index = index;
+            element.element_name = if index == 0 {
+                name.to_string()
+            } else {
+                format!("{name}{index}")
+            };
+            vertex_buffer
+                .aligned_byte_offset_by_element_name
+                .insert(element.element_name.clone(), offset);
+            vertex_buffer
+                .input_slot_by_element_name
+                .insert(element.element_name.clone(), 1);
+            vertex_buffer.d3d11_element_list.push(element);
+        }
+        let mut normal = D3D11Element::new(
+            "NORMAL",
+            "R32G32B32_FLOAT",
+            "vb0",
+            "trianglelist",
+            "Position",
+            "Position",
+            "12",
+        );
+        normal.element_name = "NORMAL".to_string();
+        vertex_buffer
+            .aligned_byte_offset_by_element_name
+            .insert("NORMAL".to_string(), 12);
+        vertex_buffer
+            .input_slot_by_element_name
+            .insert("NORMAL".to_string(), 0);
+        vertex_buffer.d3d11_element_list.push(normal);
+
+        let layout = APMI2NewExtractor::build_source_texcoord_elements(
+            &game_type,
+            "Texcoord",
+            &vertex_buffer,
+        )
+        .unwrap();
+
+        assert_eq!(layout.len(), 4);
+        assert_eq!(layout[1].format, "R32G32_FLOAT");
+        assert_eq!(layout[1].aligned_byte_offset, "4");
+        assert_eq!(layout[2].aligned_byte_offset, "12");
+        assert_eq!(layout[3].aligned_byte_offset, "12");
+        assert_eq!(layout[2].semantic_index, "1");
+        assert_eq!(layout[3].semantic_index, "2");
+        let serialized = serde_json::to_value(&layout[1]).unwrap();
+        assert_eq!(serialized["AlignedByteOffset"], "4");
     }
 }

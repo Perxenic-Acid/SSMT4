@@ -194,6 +194,13 @@ pub struct SubMeshD3D11Element {
     #[serde(rename = "ByteWidth")]
     pub byte_width: String,
 
+    #[serde(
+        rename = "AlignedByteOffset",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub aligned_byte_offset: String,
+
     #[serde(rename = "ExtractSlot")]
     pub extract_slot: String,
 
@@ -214,6 +221,7 @@ impl SubMeshD3D11Element {
             semantic_index: element.semantic_index.to_string(),
             format: element.format.clone(),
             byte_width: element.byte_width.clone(),
+            aligned_byte_offset: String::new(),
             extract_slot: element.extract_slot.clone(),
             extract_technique: element.extract_technique.clone(),
             category: element.category.clone(),
